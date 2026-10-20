@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+release/
+.vite/
+.vitest/
+*.tsbuildinfo
+.cwb-worktrees/
+# AI 开发脚本与输出文档不入本仓（用户指令 2026-10-20）
+scripts/
+doc/
+deploy/
+.claude/

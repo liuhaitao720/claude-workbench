@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Claude Workbench</title>
+    <script>
+      // FOUC 防护（v0.5.3）：首帧渲染前定主题——body 可见前完成，避免暗→浅闪白。
+      // 与 theme.ts 的 loadTheme/resolveTheme/applyDomTheme 同语义的 vanilla 副本
+      // （模块加载太晚，必须内联）；默认 dark，system 经 matchMedia 解析。
+      ;(function () {
+        var t = 'dark'
+        try {
+          var raw = window.localStorage.getItem('cwb-theme')
+          if (raw === 'light' || raw === 'dark' || raw === 'system') t = raw
+        } catch (e) {}
+        if (t === 'system') {
+          t =
+            window.matchMedia &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light'
+        }
+        document.documentElement.dataset.theme = t
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+icon: assets/icon.ico
+appId: com.claudeworkbench.app
+productName: Claude Workbench
+directories:
+  output: release
+# node-pty 1.1.0 为 NAPI prebuild（prebuilds/win32-x64），node/electron ABI 通用，
+# 无需 @electron/rebuild 重编（其 headers 下载在本机网络环境 hang）；asarUnpack 已覆盖
+npmRebuild: false
+files:
+  - out/**
+asarUnpack:
+  - "**/*.node"
+  - node_modules/node-pty/**
+win:
+  target:
+    - nsis
+extraResources:
+  - from: assets/icon.png
+    to: icon.png
