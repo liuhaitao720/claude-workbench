@@ -12,7 +12,8 @@
     "smoke:recovery": "node scripts/smoke/run-recovery.mjs",
     "pack": "electron-builder --dir",
     "pack:full": "npm run build && node scripts/package-verify/run-full-pack.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "pack:portable": "node scripts/package-verify/run-portable-pack.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
