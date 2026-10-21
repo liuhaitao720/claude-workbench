@@ -190,12 +190,8 @@ function ProjectNode({
       {/* 折叠用 CSS 隐藏而非条件卸载（v0.1.2 评审 F5）：保留子树本地状态——
           重命名草稿/删除确认勾选不因误点折叠丢失 */}
       <div className="project-children" style={expanded ? undefined : { display: 'none' }}>
-        {!project.isGit && (
-          <div className="banner-warn" role="status">
-            共享目录模式——建议 git init 以启用 worktree 隔离
-          </div>
-        )}
-        {/* 搜索命中平铺（分组仅常规态启用，评审 F12）；非 git 提示横幅保留 */}
+        {/* v0.9.1 用户指令：移除非 git 项目的常驻提示横幅（原"共享目录模式——建议 git init"） */}
+        {/* 搜索命中平铺（分组仅常规态启用，评审 F12） */}
         {searching ? (
           <TaskFlatList tasks={tasks} />
         ) : (

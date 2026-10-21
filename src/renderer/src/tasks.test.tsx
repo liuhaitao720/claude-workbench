@@ -95,9 +95,9 @@ describe('新建任务流程（S6-A：顶部「＋ 新建任务」按钮 + 对�
     expect(api.createTask).not.toHaveBeenCalled()
   })
 
-  it('非 git 项目：无三选直接 {isolation:"shared"}，且共享目录横幅保留在项目子节点', async () => {
+  it('非 git 项目：无三选直接 {isolation:"shared"}，且不再显示常驻提示横幅（v0.9.1 移除）', async () => {
     const api = await renderWithProject(plainProject)
-    expect(screen.getByText(BANNER_TEXT)).toBeDefined()
+    expect(screen.queryByText(BANNER_TEXT)).toBeNull()
     fireEvent.click(within(document.querySelector('li[data-project-id]') as HTMLElement).getByRole('button', { name: '项目操作' }))
     fireEvent.click(screen.getByRole('menuitem', { name: '新建任务' }))
     const dialog = screen.getByRole('dialog', { name: '新建任务' })
