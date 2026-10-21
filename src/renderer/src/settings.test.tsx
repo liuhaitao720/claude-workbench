@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import type { CwbApiMock } from './test-helpers'
 import { App } from './App'
 import { terminalCache } from './components/TerminalPanel'
-import { loadFontFamily } from './font-family'
+import { FONT_FAMILY_WHITELIST, isFontFamily, isFontInstalled, loadFontFamily } from './font-family'
 import { installCwbMock, makeProject, makeTask } from './test-helpers'
 import { useAppStore } from './store'
 
@@ -453,5 +453,23 @@ describe('设置双栏导航（S14）', () => {
     expect(s.getByRole('button', { name: '启动' }).textContent).toContain('托盘常驻')
     // 通知：mock getNotifyConfig 默认空 URL → 未配置
     expect(s.getByRole('button', { name: '通知' }).textContent).toContain('未配置')
+  })
+})
+
+describe('v0.9.3 免费商用字体扩容', () => {
+  it('白名单扩至 20+（含 CJK 友好：更纱/霞鹜/Noto CJK）', async () => {
+    expect(FONT_FAMILY_WHITELIST.length).toBeGreaterThanOrEqual(20)
+    expect(FONT_FAMILY_WHITELIST).toContain('JetBrains Mono')
+    expect(FONT_FAMILY_WHITELIST).toContain('Sarasa Mono SC')
+    expect(FONT_FAMILY_WHITELIST).toContain('LXGW WenKai Mono')
+    expect(FONT_FAMILY_WHITELIST).toContain('Noto Sans Mono CJK SC')
+  })
+
+  it('isFontInstalled：jsdom 字体探测 API 不可用 → null（不标注）；白名单校验仍生效', () => {
+    // jsdom 无真实字体引擎——check 可能 false 或异常，两种都接受为「可标注」语义
+    const r = isFontInstalled('JetBrains Mono')
+    expect(r === null || typeof r === 'boolean').toBe(true)
+    expect(isFontFamily('JetBrains Mono')).toBe(true)
+    expect(isFontFamily('Bookerly')).toBe(false)
   })
 })

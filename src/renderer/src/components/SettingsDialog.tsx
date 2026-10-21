@@ -4,7 +4,7 @@ import type { Theme } from '../theme'
 import { useEscapeClose } from '../hooks/useEscapeClose'
 import { CliOutputView } from './CliOutputView'
 import { changeFontFamily, changeFontSize } from './TerminalPanel'
-import { FONT_FAMILY_WHITELIST, loadFontFamily } from '../font-family'
+import { FONT_FAMILY_WHITELIST, isFontInstalled, loadFontFamily } from '../font-family'
 import { FONT_SIZE_MAX, FONT_SIZE_MIN, clampFontSize, loadFontSize } from '../font-size'
 
 /** 5.1 安装方式展示模板（执行走 installClaudeCli 固定契约法，不经自由命令面；
@@ -273,7 +273,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   >
                     {FONT_FAMILY_WHITELIST.map((f) => (
                       <option key={f} value={f}>
-                        {f}
+                        {isFontInstalled(f) === false ? `${f}（未安装）` : f}
                       </option>
                     ))}
                   </select>
