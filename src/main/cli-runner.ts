@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { spawn as ptySpawn, type IPty } from 'node-pty'
 import type { CliOutputEvent } from '../shared/types'
@@ -175,6 +176,20 @@ export class CliRunner {
       return
     }
     tracked.onExitOnce = cb
+  }
+
+  /**
+   * v1.0.3 退出目录锁修复：定点杀全部 CLI 命令进程树（同 PtyManager.killAllTrees——
+   * before-quit 路径同步 taskkill /T /F，按记录 pid 非枚举）。
+   */
+  killAllTrees(): void {
+    for (const tracked of this.commands.values()) {
+      try {
+        execFileSync('taskkill', ['/PID', String(tracked.pty.pid), '/T', '/F'], { stdio: 'ignore' })
+      } catch {
+        // 已死/杀失败——尽力而为
+      }
+    }
   }
 
   /** 终止命令（弹窗关闭防孤儿）；未知/已退出 no-op */

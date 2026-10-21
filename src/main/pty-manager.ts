@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { spawn as ptySpawn, type IPty } from 'node-pty'
 import type { PtyDataEvent } from '../shared/types'
@@ -174,6 +174,21 @@ export class PtyManager {
   /** PTY 宿主进程 pid（S4 recovery：app 退出前记录，驱动脚本据此定点 taskkill 残留）；未运行返回 undefined */
   pid(taskId: string): number | undefined {
     return this.ptys.get(taskId)?.pid
+  }
+
+  /**
+   * v1.0.3 退出目录锁修复：定点杀全部 PTY 进程树（taskkill /T /F——按记录的 pid，
+   * 非枚举）。ConPTY 子孙（cmd.exe→claude→node、OpenConsole.exe）持 exe 目录与项目
+   * 目录的 CWD/句柄，不杀则退出后目录无法删除（实测）。同步执行——before-quit 路径。
+   */
+  killAllTrees(): void {
+    for (const pty of this.ptys.values()) {
+      try {
+        execFileSync('taskkill', ['/PID', String(pty.pid), '/T', '/F'], { stdio: 'ignore' })
+      } catch {
+        // 进程已死/杀失败——尽力而为，不阻断退出
+      }
+    }
   }
 
   /** 活跃 PTY 当前栅格（测试/诊断用真实观测量）；未运行返回 undefined */

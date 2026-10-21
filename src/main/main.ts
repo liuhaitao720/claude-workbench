@@ -446,8 +446,25 @@ app.on('window-all-closed', () => {
 })
 
 // v0.5⑥：真退出前置标志（close 拦截放行）+ 托盘清理
-app.on('before-quit', () => {
+/** v1.0.3：真退出前已清理标记（before-quit 二段式——先杀树再放行） */
+let quitCleanupDone = false
+
+app.on('before-quit', (event) => {
   isQuitting = true
   trayHandle?.destroy()
   trayHandle = null
+  // v1.0.3 退出目录锁修复：PTY 子进程树（cmd.exe→claude→node、ConPTY OpenConsole.exe）
+  // 不随主进程退出而亡，残留句柄锁死 exe 所在目录与项目/worktree 目录（实测 win-unpacked
+  // 无法删除的根因）。二段式退出：先 taskkill /T /F 定点杀树（记录的 pid，非枚举），
+  // 再放行真退出。
+  if (quitCleanupDone) return
+  event.preventDefault()
+  quitCleanupDone = true
+  try {
+    currentCtx?.pty.killAllTrees()
+    currentCtx?.cli.killAllTrees()
+  } catch {
+    // 杀进程失败不阻断退出（残留风险低于无法退出）
+  }
+  setImmediate(() => app.quit())
 })
