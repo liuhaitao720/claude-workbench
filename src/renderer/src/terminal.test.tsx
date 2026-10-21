@@ -261,3 +261,63 @@ describe('v1.0.2 粘贴/复制（菜单移除后原生加速键不可靠——�
     expect(readText).not.toHaveBeenCalled() // 无选中不触发复制路径
   })
 })
+
+describe('v1.0.4 终端右键菜单（选择复制修复——鼠标上报下主要复制路径）', () => {
+  function openTerm(): void {
+    render(<App />)
+    act(() => {
+      useAppStore.getState().openTask('t-term')
+    })
+  }
+
+  it('右键终端 → 菜单含 粘贴/全选/清屏（无选中时无「复制」项）', async () => {
+    installCwbMock({ projects: [project], tasks: [task] })
+    openTerm()
+    await waitFor(() => expect(terminalCache.get('t-term')).toBeDefined())
+    const host = document.querySelector('.term-host-active') as HTMLElement
+    fireEvent.contextMenu(host)
+    expect(await screen.findByRole('menu')).toBeDefined()
+    expect(screen.getByRole('menuitem', { name: '粘贴' })).toBeDefined()
+    expect(screen.getByRole('menuitem', { name: '全选' })).toBeDefined()
+    expect(screen.getByRole('menuitem', { name: '清屏' })).toBeDefined()
+    expect(screen.queryByRole('menuitem', { name: '复制' })).toBeNull()
+  })
+
+  it('全选 → 有选中 → 再右键出现「复制」→ 点击写入剪贴板', async () => {
+    installCwbMock({ projects: [project], tasks: [task] })
+    const writeText = vi.fn(async () => {})
+    Object.assign(navigator, { clipboard: { writeText, readText: vi.fn(async () => '') } })
+    openTerm()
+    await waitFor(() => expect(terminalCache.get('t-term')).toBeDefined())
+    const term = terminalCache.get('t-term')!
+    await new Promise<void>((resolve) => term.write('hello-select', () => resolve()))
+    act(() => {
+      term.selectAll()
+    })
+    const host = document.querySelector('.term-host-active') as HTMLElement
+    fireEvent.contextMenu(host)
+    const copy = await screen.findByRole('menuitem', { name: '复制' })
+    fireEvent.click(copy)
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('hello-select'))
+    )
+  })
+
+  it('菜单「粘贴」读剪贴板写 PTY；「清屏」调 term.clear', async () => {
+    installCwbMock({ projects: [project], tasks: [task] })
+    Object.assign(navigator, {
+      clipboard: { readText: vi.fn(async () => 'menu-paste'), writeText: vi.fn(async () => {}) }
+    })
+    openTerm()
+    await waitFor(() => expect(terminalCache.get('t-term')).toBeDefined())
+    const term = terminalCache.get('t-term')!
+    const clearSpy = vi.spyOn(term, 'clear')
+    const host = document.querySelector('.term-host-active') as HTMLElement
+    fireEvent.contextMenu(host)
+    fireEvent.click(await screen.findByRole('menuitem', { name: '粘贴' }))
+    await waitFor(() => expect(window.cwb.ptyWrite).toHaveBeenCalledWith('t-term', 'menu-paste'))
+    fireEvent.contextMenu(host)
+    fireEvent.click(await screen.findByRole('menuitem', { name: '清屏' }))
+    await waitFor(() => expect(clearSpy).toHaveBeenCalled())
+  })
+})

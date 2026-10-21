@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
@@ -7,6 +7,7 @@ import type { TaskRecord } from '../../../shared/types'
 import { clampFontSize, loadFontSize, persistFontSize } from '../font-size'
 import { isFontFamily, isFontInstalled, loadFontFamily, persistFontFamily } from '../font-family'
 import { terminalThemeFor } from '../theme'
+import { SidebarMenu } from './SidebarMenu'
 import type { EffectiveTheme } from '../theme'
 import { subscribeTaskData, useAppStore } from '../store'
 
@@ -120,6 +121,10 @@ function disposeTaskTerminal(taskId: string, host: HTMLElement): void {
 
 function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null)
+  // v1.0.4 右键菜单：光标锚点 + 打开时刻的选中快照；nullBtnRef 永空（占位满足
+  // SidebarMenu 的 triggerRef 契约——outside-click 对任何点击都关闭，含终端区）
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; sel: string } | null>(null)
+  const nullBtnRef = useRef<HTMLButtonElement>(null)
   // v0.1.2 光标错位修复：任务恢复（stopped→running）时终端不重新挂载、host 不变，
   // v0.1.1 的尺寸去重使 observer 不再兜底——PTY 以记忆尺寸重开后必须在此强制重同步
   // 并清掉旧会话残留缓冲，否则 claude 按旧栅格/旧缓冲计算光标 → 错位错行
@@ -286,7 +291,54 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
       // v0.4.3 焦点管理②：终端区域任意 mousedown 必把键盘焦点收回终端
       //（TUI 鼠标上报模式下点击选项，焦点可能未落在 xterm 隐藏文本域）
       onMouseDown={() => terminalCache.get(task.id)?.focus()}
-    />
+      // v1.0.4 右键菜单：claude TUI 开启鼠标上报后拖拽被透传给 PTY（本地选择需按住
+      // Shift 拖拽——Windows Terminal 同款约定），键盘/菜单复制是主要复制路径。
+      // 菜单打开前快照选中内容（菜单点击会清 xterm 选中）
+      onContextMenu={(e) => {
+        e.preventDefault()
+        const term = terminalCache.get(task.id)
+        setCtxMenu({ x: e.clientX, y: e.clientY, sel: term?.getSelection() ?? '' })
+      }}
+    >
+      {ctxMenu !== null && (
+        <SidebarMenu
+          triggerRef={nullBtnRef}
+          anchor={{ x: ctxMenu.x, y: ctxMenu.y }}
+          items={[
+            ...(ctxMenu.sel !== ''
+              ? [
+                  {
+                    label: '复制',
+                    onClick: () =>
+                      void navigator.clipboard
+                        .writeText(ctxMenu.sel)
+                        .catch(() => {})
+                  }
+                ]
+              : []),
+            {
+              label: '粘贴',
+              onClick: () =>
+                void navigator.clipboard
+                  .readText()
+                  .then((text) => {
+                    if (text !== '') window.cwb.ptyWrite(task.id, text)
+                  })
+                  .catch(() => {})
+            },
+            {
+              label: '全选',
+              onClick: () => terminalCache.get(task.id)?.selectAll()
+            },
+            {
+              label: '清屏',
+              onClick: () => terminalCache.get(task.id)?.clear()
+            }
+          ]}
+          onClose={() => setCtxMenu(null)}
+        />
+      )}
+    </div>
   )
 }
 

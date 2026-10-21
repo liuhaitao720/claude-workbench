@@ -19,11 +19,14 @@ export interface MenuItemDef {
 export function SidebarMenu({
   triggerRef,
   items,
-  onClose
+  onClose,
+  anchor
 }: {
   triggerRef: RefObject<HTMLButtonElement | null>
   items: MenuItemDef[]
   onClose: () => void
+  /** v1.0.4：可选光标锚点（终端右键菜单）——提供时按此坐标定位，忽略 trigger 矩形 */
+  anchor?: { x: number; y: number }
 }) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
@@ -31,10 +34,16 @@ export function SidebarMenu({
   // 打开时按触发按钮位置算一次浮层坐标（jsdom 下 rect 全 0，退到安全原点）。
   // 评审 F3：下缘溢出翻到按钮上方；scroll/resize 期间浮层与按钮脱锚——直接关闭（重算成本高且场景少）
   useEffect(() => {
-    const rect = triggerRef.current?.getBoundingClientRect()
     const MENU_WIDTH = 176
     const EST_ITEM_H = 30
     const estHeight = Math.max(1, items.length) * EST_ITEM_H + 8
+    if (anchor) {
+      let top = anchor.y + 2
+      if (top + estHeight > window.innerHeight - 8) top = Math.max(8, anchor.y - estHeight - 2)
+      setPos({ top, left: Math.min(Math.max(4, anchor.x), window.innerWidth - MENU_WIDTH - 4) })
+      return
+    }
+    const rect = triggerRef.current?.getBoundingClientRect()
     if (rect) {
       let top = rect.bottom + 2
       if (top + estHeight > window.innerHeight - 8) {
@@ -44,7 +53,7 @@ export function SidebarMenu({
     } else {
       setPos({ top: 4, left: 4 })
     }
-  }, [triggerRef, items.length])
+  }, [triggerRef, items.length, anchor])
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
