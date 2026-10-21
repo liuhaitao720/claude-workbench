@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  AppSettings,
   CWBApi,
   CliOutputEvent,
   NotifyConfig,
@@ -87,6 +88,10 @@ const api: CWBApi = {
     >,
   installClaudeCli: (method) =>
     ipcRenderer.invoke(IpcChannels.InstallCli, method) as Promise<{ commandId: string }>,
+  // 应用设置（v0.9）
+  getAppSettings: () => ipcRenderer.invoke(IpcChannels.SettingsGet) as Promise<AppSettings>,
+  setAppSettings: (patch) =>
+    ipcRenderer.invoke(IpcChannels.SettingsSet, patch) as Promise<AppSettings>,
   // webhook 通知（v0.5④N）
   getNotifyConfig: () => ipcRenderer.invoke(IpcChannels.NotifyGet) as Promise<NotifyConfig>,
   setNotifyWebhook: (url, enabled) =>

@@ -341,6 +341,8 @@ async function runRecoveryPhaseB(ctx: AppContext, sink: PtyByteSink): Promise<vo
 // v0.5⑥ 防误关闭：关窗→托盘（isQuitting 区分真退出与隐藏）；托盘句柄供 before-quit 清理
 let isQuitting = false
 let trayHandle: TrayHandle | null = null
+/** v0.9⑧：组合根引用（createWindow 时尚未创建——close 分流惰性读取；类型 AppContext 见下方 import） */
+let currentCtx: AppContext | null = null
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -355,7 +357,8 @@ function createWindow(): BrowserWindow {
   })
 
   // v0.5⑥：close 拦截（preventDefault + hide），任务 PTY 后台续跑；activate 重建的窗口同样接上
-  attachCloseToTray(win, () => isQuitting)
+  // v0.9⑧：关闭按钮行为按设置分流（托盘常驻/直接退出）
+  attachCloseToTray(win, () => isQuitting, () => currentCtx?.appSettings.get().closeToTray !== false)
 
   // v0.5⑥ 补丁：Electron 44 页面 window.close() 无条件销毁（最小实验实证，beforeunload 也拦不住，
   // exposeInMainWorld 不能覆盖内置属性）——主世界注入重定义 window.close → 走 __cwbClose 桥 →
@@ -384,15 +387,14 @@ function createWindow(): BrowserWindow {
 const sink = new PtyByteSink()
 
 /** 运行任务数（托盘 tooltip/退出确认的真值源——以 tasks.json 为准，TaskUpdate 旁路驱动刷新） */
-const runningCountOf = (ctx: AppContext): number =>
-  ctx.tasks.list().filter((t) => t.status === 'running').length
+const runningCountOf = (ctx: AppContext | null): number =>
+  (ctx?.tasks.list() ?? []).filter((t) => t.status === 'running').length
 
 app.whenReady().then(async () => {
   // v0.5.2 用户指令：移除原生菜单栏（File/Edit/View/Window）——win 上 autoHideMenuBar 兜底
   Menu.setApplicationMenu(null)
   // v0.5⑥ 托盘 tooltip 刷新：任务记录每次变更（含状态迁移）旁路回调（同 onPtyData 注入缝先例）
   const refreshTrayCount = (): void => trayHandle?.setRunningCount(runningCountOf(currentCtx))
-  let currentCtx: AppContext
   currentCtx = registerIpcHandlers(
     isSmokeRun
       ? createAppContext({ onPtyData: sink.onPtyData, onTaskUpdate: refreshTrayCount })
@@ -411,12 +413,12 @@ app.whenReady().then(async () => {
     }, SMOKE_TIMEOUT_MS)
     setTimeout(() => {
       const flow = INPUT_PROBE_FLAG
-        ? runInputProbe(currentCtx, sink)
+        ? runInputProbe(currentCtx!, sink)
         : SMOKE_FLAG
-        ? runSmoke(currentCtx)
+        ? runSmoke(currentCtx!)
         : RECOVERY === 'a'
-          ? runRecoveryPhaseA(currentCtx, sink)
-          : runRecoveryPhaseB(currentCtx, sink)
+          ? runRecoveryPhaseA(currentCtx!, sink)
+          : runRecoveryPhaseB(currentCtx!, sink)
       flow.then(
         () => clearTimeout(guard),
         (err: unknown) => {

@@ -24,9 +24,14 @@ export function trayTooltip(running: number): string {
  * 关窗→托盘：拦截 close（preventDefault + hide）。isQuitting 为真（托盘退出/
  * app.quit 路径）时不拦截，放行真关闭。对所有窗口生效（activate 重建的窗口同样接上）。
  */
-export function attachCloseToTray(win: BrowserWindow, isQuitting: () => boolean): void {
+export function attachCloseToTray(
+  win: BrowserWindow,
+  isQuitting: () => boolean,
+  shouldTray: () => boolean = () => true
+): void {
   win.on('close', (event) => {
     if (isQuitting()) return
+    if (!shouldTray()) return // v0.9⑧：设置=直接退出 → 放行真关闭
     event.preventDefault()
     win.hide()
   })

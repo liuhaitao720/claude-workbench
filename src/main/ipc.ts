@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { IpcChannels } from '../shared/ipc-channels'
 import type {
+  AppSettings,
   CliOutputEvent,
   CreateTaskOptions,
   ProjectRecord,
@@ -14,6 +15,7 @@ import type {
 import { checkClaudeUpdate, getClaudeVersionInfo, installClaudeCli } from './claude-version'
 import { CliRunner } from './cli-runner'
 import { isGitRepo, worktreeAdd, worktreeRemove } from './isolation'
+import { AppSettingsStore } from './settings-store'
 import { NotifyService } from './notify'
 import { ProjectStore } from './project-store'
 import { PtyManager, buildNewSessionArgs, buildResumeArgs } from './pty-manager'
@@ -58,6 +60,8 @@ export interface AppContext {
   /** 切换"跳过权限确认"（v0.3.1 契约第 17 法）：仅元数据，下次 spawn 生效 */
   setTaskSkipPermissions(taskId: string, on: boolean): Promise<TaskRecord>
   pickDirectory(): Promise<string | null>
+  /** v0.9 应用设置（main settings.json：关闭行为/自启） */
+  readonly appSettings: AppSettingsStore
 }
 
 export interface AppContextOptions {
@@ -100,6 +104,7 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
    * CWB_HOOK_SETTINGS_DIR 为测试注入缝（同 main.ts 的 CWB_USER_DATA 先例），
    * 防测试污染真实用户目录。
    */
+  const settingsFile = join(app.getPath('userData'), 'settings.json')
   const settingsDir =
     process.env['CWB_HOOK_SETTINGS_DIR'] ??
     join(process.env['LOCALAPPDATA'] ?? app.getPath('userData'), 'cwb', 'cwb-settings')
@@ -110,6 +115,7 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     taskNameOf: (taskId) => tasks.get(taskId)?.name
   })
 
+  const appSettings = new AppSettingsStore(settingsFile)
   const activity = startTaskActivityServer({
     settingsDir,
     onActivity: (e) => {
@@ -312,7 +318,8 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     removeTask,
     renameTask,
     setTaskSkipPermissions,
-    pickDirectory
+    pickDirectory,
+    appSettings
   }
 }
 
@@ -360,6 +367,9 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     installClaudeCli(ctx.cli, method)
   )
   // v0.5④N webhook 通知
+  // v0.9 应用设置
+  ipcMain.handle(IpcChannels.SettingsGet, () => ctx.appSettings.get())
+  ipcMain.handle(IpcChannels.SettingsSet, (_e, patch: Partial<AppSettings>) => ctx.appSettings.set(patch))
   ipcMain.handle(IpcChannels.NotifyGet, () => ctx.notify.getConfig())
   ipcMain.handle(IpcChannels.NotifySet, (_e, url: string, enabled: boolean) =>
     ctx.notify.setWebhook(url, enabled)

@@ -90,6 +90,14 @@ export interface NotifyConfig {
   channel: 'wecom' | 'dingtalk' | 'generic'
 }
 
+/** main 侧应用设置（v0.9：关闭行为/开机自启——userData/settings.json） */
+export interface AppSettings {
+  /** 关窗=最小化到托盘（true，v0.5⑥ 默认）/ 直接退出（false，退出仍走运行任务 confirm） */
+  closeToTray: boolean
+  /** 开机自启（app.setLoginItemSettings） */
+  launchAtLogin: boolean
+}
+
 /** 任务活动状态事件（v3.2：'busy'=执行中黄转圈 | 'awaiting'=待答复红 | 'idle'=就绪绿） */
 export interface TaskActivityEvent {
   taskId: string
@@ -113,7 +121,7 @@ export interface RemoveTaskOptions {
 }
 
 /**
- * window.cwb —— preload 暴露给 renderer 的完整 API（30 法）
+ * window.cwb —— preload 暴露给 renderer 的完整 API（32 法）
  * 生产者：S2（main 侧 handler）+ S1.5（preload 桥接映射）；消费者：S3（renderer）
  */
 export interface CWBApi {
@@ -196,6 +204,12 @@ export interface CWBApi {
   checkClaudeUpdate(): Promise<{ current: string; latest: string; upToDate: boolean; degraded?: boolean }>
   /** 下载安装 claude CLI（固定模板：native=官方安装器 / npm=npm install -g；输出走 onCliOutput） */
   installClaudeCli(method: 'native' | 'npm'): Promise<{ commandId: string }>
+
+  // ── 应用设置（2，v0.9）─────────────────────
+  /** 读取 main 侧应用设置（关闭行为/自启） */
+  getAppSettings(): Promise<AppSettings>
+  /** 保存应用设置（patch 合并），返回保存后全量 */
+  setAppSettings(patch: Partial<AppSettings>): Promise<AppSettings>
 
   // ── webhook 通知（3，v0.5④N）───────────────
   /** 读取通知配置（默认 {url:'', enabled:false}） */

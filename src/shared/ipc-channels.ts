@@ -29,7 +29,10 @@ const HANDLE = {
   InstallCli: 'cwb:install:cli',
   NotifyGet: 'cwb:notify:get',
   NotifySet: 'cwb:notify:set',
-  NotifyTest: 'cwb:notify:test'
+  NotifyTest: 'cwb:notify:test',
+  // v0.9 应用设置
+  SettingsGet: 'cwb:settings:get',
+  SettingsSet: 'cwb:settings:set'
 } as const
 
 const SEND = {
