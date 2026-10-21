@@ -147,8 +147,40 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
       })
       // v0.5②：Ctrl+= / Ctrl+- 调字号——attachCustomKeyEventHandler 拦在 xterm
       // 键盘处理之前（窗口级监听会被 xterm 隐藏 textarea 先消费）；返回 false
-      // 阻止 xterm 继续处理该键
+      // 阻止 xterm 继续处理该键。
+      // v1.0.2：粘贴/复制——Electron 移除应用菜单后原生 paste 加速键不可靠（实测
+      // Ctrl+V 发送 ^V 到 PTY 而非粘贴），显式读剪贴板写 PTY；复制对齐 Windows
+      // Terminal 习惯（Ctrl+C 有选中=复制、无选中=发 ^C 中断；Ctrl+Shift+C/Ctrl+Insert 恒复制）
       t.attachCustomKeyEventHandler((ev) => {
+        if (ev.type !== 'keydown') return true
+        // 粘贴三键：Ctrl+V / Ctrl+Shift+V / Shift+Insert
+        if (
+          (ev.ctrlKey && !ev.altKey && !ev.metaKey && ev.key.toLowerCase() === 'v') ||
+          (ev.shiftKey && !ev.ctrlKey && !ev.altKey && ev.key === 'Insert')
+        ) {
+          void navigator.clipboard
+            .readText()
+            .then((text) => {
+              if (text !== '') window.cwb.ptyWrite(task.id, text)
+            })
+            .catch(() => {
+              // 剪贴板权限被拒/不可用——退回原生 paste 事件路径（xterm textarea 或可触发）
+            })
+          return false
+        }
+        // 复制：Ctrl+Shift+C / Ctrl+Insert / Ctrl+C（有选中时）
+        const isCopyKey =
+          (ev.ctrlKey && ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'c') ||
+          (ev.ctrlKey && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'c' && t.hasSelection()) ||
+          (ev.ctrlKey && !ev.shiftKey && !ev.altKey && ev.key === 'Insert')
+        if (isCopyKey) {
+          const sel = t.getSelection()
+          if (sel !== '') {
+            void navigator.clipboard.writeText(sel).catch(() => {})
+            return false
+          }
+          return true // 无选中（Ctrl+Insert 空选）放行
+        }
         if (!ev.ctrlKey || ev.metaKey || ev.altKey) return true
         if (ev.key === '=' || ev.key === '+') {
           changeFontSize(1)

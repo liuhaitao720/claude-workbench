@@ -209,3 +209,55 @@ describe('v0.4.3 焦点管理（选完对话框选项后可正常输入）', () 
     expect(activeFocus).toHaveBeenCalled()
   })
 })
+
+describe('v1.0.2 粘贴/复制（菜单移除后原生加速键不可靠——显式剪贴板路径）', () => {
+  it('粘贴键（Ctrl+V/Ctrl+Shift+V/Shift+Insert）读剪贴板写 PTY', async () => {
+    installCwbMock({ projects: [project], tasks: [task] })
+    const readText = vi.fn(async () => 'pasted-text')
+    const writeText = vi.fn(async () => {})
+    Object.assign(navigator, { clipboard: { readText, writeText } })
+    render(<App />)
+    await waitFor(() =>
+      expect(document.querySelector('li[data-task-id="t-term"]')).toBeDefined()
+    )
+    act(() => {
+      useAppStore.getState().openTask('t-term')
+    })
+    await waitFor(() => expect(terminalCache.get('t-term')).toBeDefined())
+    const term = terminalCache.get('t-term')!
+    const host = document.querySelector('.term-host-active') as HTMLElement
+    // xterm customKeyEventHandler 经 keydown 事件触发（attachCustomKeyEventHandler 注册在隐藏 textarea）
+    const ta = term.element?.querySelector('textarea') as HTMLTextAreaElement
+    expect(ta).toBeDefined()
+    ta.focus()
+    act(() => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true }))
+    })
+    await waitFor(() => expect(readText).toHaveBeenCalled())
+    await waitFor(() => expect(window.cwb.ptyWrite).toHaveBeenCalledWith('t-term', 'pasted-text'))
+    void writeText
+    void host
+  })
+
+  it('Ctrl+C 无选中 → 放行（xterm 发 ^C 中断，不读剪贴板）', async () => {
+    installCwbMock({ projects: [project], tasks: [task] })
+    const readText = vi.fn(async () => 'x')
+    Object.assign(navigator, { clipboard: { readText } })
+    render(<App />)
+    await waitFor(() =>
+      expect(document.querySelector('li[data-task-id="t-term"]')).toBeDefined()
+    )
+    act(() => {
+      useAppStore.getState().openTask('t-term')
+    })
+    await waitFor(() => expect(terminalCache.get('t-term')).toBeDefined())
+    const term = terminalCache.get('t-term')!
+    const ta = term.element?.querySelector('textarea') as HTMLTextAreaElement
+    ta.focus()
+    act(() => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true }))
+    })
+    await new Promise((r) => setTimeout(r, 100))
+    expect(readText).not.toHaveBeenCalled() // 无选中不触发复制路径
+  })
+})
