@@ -3,7 +3,7 @@
  * APP_VERSION 与 package.json version 手工同步（主控定夺：不做构建期注入，
  * 改版本时两处同改；package.json 已 bump 至 0.8.0）。
  */
-export const APP_VERSION = '1.0.2'
+export const APP_VERSION = '1.0.3'
 
 /**
  * 构建日期：electron.vite.config.ts renderer define 注入（ISO 字符串）。

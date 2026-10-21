@@ -64,7 +64,7 @@ async function renderApp() {
 
 /** 打开 About（点侧栏版本按钮，对齐 about.test 先例） */
 async function openAbout(): Promise<ReturnType<typeof within>> {
-  fireEvent.click(screen.getByRole('button', { name: 'v1.0.2' }))
+  fireEvent.click(screen.getByRole('button', { name: 'v1.0.3' }))
   const dialog = await screen.findByRole('dialog', { name: '关于' })
   return within(dialog)
 }
