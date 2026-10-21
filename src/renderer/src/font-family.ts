@@ -61,19 +61,24 @@ export function isFontInstalled(family: string): boolean | null {
   }
 }
 
-/** 读取持久化字体族；缺失/白名单外 → 默认值（localStorage 不可用也回默认） */
-export function loadFontFamily(): FontFamily {
+/** 有效字体判定（v0.9.4）：白名单成员 或 本机已安装（document.fonts.check 实测） */
+export function isValidFontFamily(v: string): boolean {
+  return isFontFamily(v) || isFontInstalled(v) === true
+}
+
+/** 读取持久化字体族；缺失/无效（白名单外且未安装）→ 默认值 */
+export function loadFontFamily(): string {
   let raw: string | null = null
   try {
     raw = window.localStorage.getItem(STORAGE_KEY)
   } catch {
     return FONT_FAMILY_DEFAULT
   }
-  if (raw === null || !isFontFamily(raw)) return FONT_FAMILY_DEFAULT
+  if (raw === null || !isValidFontFamily(raw)) return FONT_FAMILY_DEFAULT
   return raw
 }
 
-export function persistFontFamily(family: FontFamily): void {
+export function persistFontFamily(family: string): void {
   try {
     window.localStorage.setItem(STORAGE_KEY, family)
   } catch {

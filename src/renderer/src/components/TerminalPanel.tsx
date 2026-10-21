@@ -5,8 +5,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import type { TaskRecord } from '../../../shared/types'
 import { clampFontSize, loadFontSize, persistFontSize } from '../font-size'
-import { isFontFamily, loadFontFamily, persistFontFamily } from '../font-family'
-import type { FontFamily } from '../font-family'
+import { isFontFamily, isFontInstalled, loadFontFamily, persistFontFamily } from '../font-family'
 import { terminalThemeFor } from '../theme'
 import type { EffectiveTheme } from '../theme'
 import { subscribeTaskData, useAppStore } from '../store'
@@ -64,9 +63,11 @@ export function changeFontSize(delta: number): number {
  * 与字号同路：活动实例 fit+ptyResize，隐藏实例标 dirty 激活补偿）。
  * 返回实际落地字体族（非白名单/同值时短路，不动缓存不发 ptyResize）。
  */
-export function changeFontFamily(family: string): FontFamily {
+export function changeFontFamily(family: string): string {
   const current = loadFontFamily()
-  if (!isFontFamily(family) || family === current) return current
+  if (family === current) return current
+  // v0.9.4：白名单成员 或 本机已安装字体（fonts.check）均放行
+  if (!isFontFamily(family) && isFontInstalled(family) !== true) return current
   persistFontFamily(family)
   const activeId = useAppStore.getState().activeTaskId
   for (const [taskId, term] of terminalCache) {

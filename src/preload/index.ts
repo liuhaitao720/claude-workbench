@@ -90,6 +90,8 @@ const api: CWBApi = {
     ipcRenderer.invoke(IpcChannels.InstallCli, method) as Promise<{ commandId: string }>,
   // 应用设置（v0.9）
   getAppSettings: () => ipcRenderer.invoke(IpcChannels.SettingsGet) as Promise<AppSettings>,
+  getInstalledMonoFonts: () =>
+    ipcRenderer.invoke(IpcChannels.FontsInstalled) as Promise<string[]>,
   importTasksFromSessions: (projectId) =>
     ipcRenderer.invoke(IpcChannels.TasksImportFromSessions, projectId) as Promise<TaskRecord[]>,
   setAppSettings: (patch) =>

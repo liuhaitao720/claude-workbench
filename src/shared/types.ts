@@ -121,7 +121,7 @@ export interface RemoveTaskOptions {
 }
 
 /**
- * window.cwb —— preload 暴露给 renderer 的完整 API（33 法）
+ * window.cwb —— preload 暴露给 renderer 的完整 API（34 法）
  * 生产者：S2（main 侧 handler）+ S1.5（preload 桥接映射）；消费者：S3（renderer）
  */
 export interface CWBApi {
@@ -214,6 +214,10 @@ export interface CWBApi {
   // ── 会话导入（1，v0.9 追加）───────────────
   /** 扫描该目录的 claude CLI 历史会话→生成可恢复任务（幂等，跳过已导入）；返回新增列表 */
   importTasksFromSessions(projectId: string): Promise<TaskRecord[]>
+
+  // ── 字体扫描（1，v0.9.4）──────────────────
+  /** 本机已安装等宽字体（字形宽度实测判定，图标字体过滤，结果缓存）；失败返回 [] */
+  getInstalledMonoFonts(): Promise<string[]>
 
   // ── webhook 通知（3，v0.5④N）───────────────
   /** 读取通知配置（默认 {url:'', enabled:false}） */

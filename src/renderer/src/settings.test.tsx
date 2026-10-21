@@ -473,3 +473,20 @@ describe('v0.9.3 免费商用字体扩容', () => {
     expect(isFontFamily('Bookerly')).toBe(false)
   })
 })
+
+describe('v0.9.4 字体下拉只显示本机已装（用户指令）', () => {
+  it('mock 本机 Cascadia/Consolas/SimSun → 下拉恰含三者，不含未装的 JetBrains Mono', async () => {
+    installCwbMock({ projects: [] })
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+    const dialog = await screen.findByRole('dialog', { name: '设置' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '终端' }))
+    const select = await screen.findByLabelText('终端字体')
+    const values = within(select)
+      .getAllByRole('option')
+      .map((o) => (o as HTMLOptionElement).value)
+    expect(values).toContain('Cascadia Mono')
+    expect(values).toContain('SimSun-ExtB') // 不在白名单——本机检测追加
+    expect(values).not.toContain('JetBrains Mono') // 白名单但未装——不显示
+  })
+})

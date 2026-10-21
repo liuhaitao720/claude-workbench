@@ -16,6 +16,7 @@ import { checkClaudeUpdate, getClaudeVersionInfo, installClaudeCli } from './cla
 import { CliRunner } from './cli-runner'
 import { isGitRepo, worktreeAdd, worktreeRemove } from './isolation'
 import { AppSettingsStore } from './settings-store'
+import { FontScanner } from './font-scan'
 import { NotifyService } from './notify'
 import { ProjectStore } from './project-store'
 import { PtyManager, buildNewSessionArgs, buildResumeArgs } from './pty-manager'
@@ -68,6 +69,8 @@ export interface AppContext {
   importTasksFromSessions(projectId: string): Promise<TaskRecord[]>
   /** v0.9 应用设置（main settings.json：关闭行为/自启） */
   readonly appSettings: AppSettingsStore
+  /** v0.9.4 本机等宽字体扫描（缓存） */
+  readonly fontScanner: FontScanner
 }
 
 export interface AppContextOptions {
@@ -122,6 +125,7 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   })
 
   const appSettings = new AppSettingsStore(settingsFile)
+  const fontScanner = new FontScanner()
   const activity = startTaskActivityServer({
     settingsDir,
     onActivity: (e) => {
@@ -345,7 +349,8 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     setTaskSkipPermissions,
     pickDirectory,
     importTasksFromSessions,
-    appSettings
+    appSettings,
+    fontScanner
   }
 }
 
@@ -398,6 +403,7 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   )
   // v0.5④N webhook 通知
   // v0.9 应用设置
+  ipcMain.handle(IpcChannels.FontsInstalled, () => ctx.fontScanner.getInstalledMonoFonts())
   ipcMain.handle(IpcChannels.SettingsGet, () => ctx.appSettings.get())
   ipcMain.handle(IpcChannels.SettingsSet, (_e, patch: Partial<AppSettings>) => ctx.appSettings.set(patch))
   ipcMain.handle(IpcChannels.NotifyGet, () => ctx.notify.getConfig())

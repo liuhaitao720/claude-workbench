@@ -4,7 +4,7 @@ import type { Theme } from '../theme'
 import { useEscapeClose } from '../hooks/useEscapeClose'
 import { CliOutputView } from './CliOutputView'
 import { changeFontFamily, changeFontSize } from './TerminalPanel'
-import { FONT_FAMILY_WHITELIST, isFontInstalled, loadFontFamily } from '../font-family'
+import { FONT_FAMILY_WHITELIST, loadFontFamily } from '../font-family'
 import { FONT_SIZE_MAX, FONT_SIZE_MIN, clampFontSize, loadFontSize } from '../font-size'
 
 /** 5.1 安装方式展示模板（执行走 installClaudeCli 固定契约法，不经自由命令面；
@@ -50,6 +50,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   const [fontFamily, setFontFamily] = useState<string>(() => loadFontFamily())
   const [fontSizeInput, setFontSizeInput] = useState<string>(() => String(loadFontSize()))
+  /** v0.9.4：本机已装等宽字体（main 扫描契约）——与白名单合并为下拉全集 */
+  const [installedFonts, setInstalledFonts] = useState<string[]>([])
 
   const [cliInfo, setCliInfo] = useState<{ version: string; path: string } | null>(null)
   const [cliError, setCliError] = useState('')
@@ -89,9 +91,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
-  // 打开即实测版本信息 + 读通知配置 + 读应用设置（读取失败保持默认值，不阻塞弹窗）
+  // 打开即实测版本信息 + 读通知配置 + 读应用设置 + 扫描本机字体（读取失败保持默认值，不阻塞弹窗）
   useEffect(() => {
     void refreshCliInfo()
+    window.cwb
+      .getInstalledMonoFonts()
+      .then((list) => setInstalledFonts(list))
+      .catch(() => {})
     window.cwb
       .getNotifyConfig()
       .then((c) => {
@@ -271,11 +277,19 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                       setFontFamily(applied)
                     }}
                   >
-                    {FONT_FAMILY_WHITELIST.map((f) => (
-                      <option key={f} value={f}>
-                        {isFontInstalled(f) === false ? `${f}（未安装）` : f}
-                      </option>
-                    ))}
+                    {/* v0.9.4（用户指令：不显示本机不支持的字体）：仅显示已装——
+                        白名单∩已装 + 本机检测到的其余等宽字体；扫描失败（空列表）回退白名单全集 */}
+                    {(() => {
+                      const fontOptions =
+                        installedFonts.length > 0
+                          ? installedFonts
+                          : (FONT_FAMILY_WHITELIST as readonly string[])
+                      return fontOptions.map((f) => (
+                        <option key={f} value={f}>
+                          {f}
+                        </option>
+                      ))
+                    })()}
                   </select>
                 </div>
                 <div className="notify-row">

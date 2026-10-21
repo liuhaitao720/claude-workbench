@@ -133,6 +133,7 @@ export function installCwbMock(opts: { projects?: ProjectRecord[]; tasks?: TaskR
     }),
     pickDirectory: vi.fn(async () => null),
     importTasksFromSessions: vi.fn(async () => [] as TaskRecord[]),
+    getInstalledMonoFonts: vi.fn(async () => ['Cascadia Mono', 'Consolas', 'SimSun-ExtB'] as string[]),
     getAppSettings: vi.fn(async () => ({ closeToTray: true, launchAtLogin: false } as AppSettings)),
     setAppSettings: vi.fn(async (patch: Partial<AppSettings>) => ({ closeToTray: true, launchAtLogin: false, ...patch } as AppSettings)),
     // v0.5 契约第 19-30 法 mock（骨架默认；具体用例可 vi.mocked 覆写返回值）

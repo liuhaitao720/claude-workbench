@@ -34,7 +34,9 @@ const HANDLE = {
   SettingsGet: 'cwb:settings:get',
   SettingsSet: 'cwb:settings:set',
   // v0.9 追加：会话导入
-  TasksImportFromSessions: 'cwb:tasks:import-from-sessions'
+  TasksImportFromSessions: 'cwb:tasks:import-from-sessions',
+  // v0.9.4 字体扫描
+  FontsInstalled: 'cwb:fonts:installed'
 } as const
 
 const SEND = {
