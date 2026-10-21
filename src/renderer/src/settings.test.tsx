@@ -14,6 +14,8 @@ import { useAppStore } from './store'
  * About）· claude CLI（版本/更新/安装——迁自 About）· 默认隔离（NewTaskDialog
  * 预选）· 启动与窗口（getAppSettings/setAppSettings 第 31-32 法）。
  * About 瘦身断言在 about.test（身份页 + 「打开设置」入口）。
+ * S14 双栏重设计：右栏按 activeSection 条件渲染（非当前 section 不在 DOM）——
+ * 非外观用例先点左栏导航（gotoSection）再交互；双栏专项断言见文末 describe。
  */
 
 const project = makeProject({ id: 'ps2', name: 'SettingsProj' })
@@ -65,6 +67,12 @@ async function openSettings(): Promise<ReturnType<typeof within>> {
   fireEvent.click(screen.getByRole('button', { name: '设置' }))
   const dialog = await screen.findByRole('dialog', { name: '设置' })
   return within(dialog)
+}
+
+/** S14 双栏：点左栏导航切到指定分类（右栏条件渲染——非当前 section 不在 DOM，
+ * 非外观用例先切再交互；label 即导航按钮 aria-label，精确名可达） */
+function gotoSection(s: ReturnType<typeof within>, label: string): void {
+  fireEvent.click(s.getByRole('button', { name: label }))
 }
 
 /** 向所有已注册 onCliOutput 回调注入事件（CliOutputView 订阅） */
@@ -139,6 +147,7 @@ describe('终端：字号 stepper 与字体族 select', () => {
   it('字号 stepper：输入 18 → changeFontSize 通路（persist + options + 活动 ptyResize）', async () => {
     const api = await renderApp()
     const s = await openSettings()
+    gotoSection(s, '终端')
     openTab('t-s1')
     const term = await waitFor(() => {
       const t = terminalCache.get('t-s1')
@@ -157,6 +166,7 @@ describe('终端：字号 stepper 与字体族 select', () => {
   it('字体族 select：Consolas → options.fontFamily + persist + 活动 ptyResize', async () => {
     const api = await renderApp()
     const s = await openSettings()
+    gotoSection(s, '终端')
     openTab('t-s1')
     const term = await waitFor(() => {
       const t = terminalCache.get('t-s1')
@@ -196,6 +206,7 @@ describe('通知设置（v0.5④N，迁自 About）', () => {
       channel: 'wecom'
     })
     const s = await openSettings()
+    gotoSection(s, '通知')
     const urlInput = (await s.findByLabelText('webhook URL')) as HTMLInputElement
     expect(urlInput.value).toBe('https://qyapi.weixin.qq.com/hook')
     expect((s.getByRole('checkbox', { name: '启用' }) as HTMLInputElement).checked).toBe(false)
@@ -212,6 +223,7 @@ describe('通知设置（v0.5④N，迁自 About）', () => {
   it('测试推送：成功/失败结果行内显示；URL 为空时禁用', async () => {
     const api = await renderApp()
     const s = await openSettings()
+    gotoSection(s, '通知')
     const urlInput = (await s.findByLabelText('webhook URL')) as HTMLInputElement
     expect(
       (s.getByRole('button', { name: '测试推送' }) as HTMLButtonElement).disabled
@@ -236,6 +248,7 @@ describe('claude CLI（迁自 About）', () => {
   it('版本+实际路径显示（getClaudeVersionInfo 实调）', async () => {
     const api = await renderApp()
     const s = await openSettings()
+    gotoSection(s, 'claude CLI')
     expect(api.getClaudeVersionInfo).toHaveBeenCalledTimes(1)
     expect(await s.findByText('版本 2.1.301')).toBeDefined() // mock 默认返回
     expect(s.getByText('路径 C:\\claude.cmd')).toBeDefined()
@@ -244,6 +257,7 @@ describe('claude CLI（迁自 About）', () => {
   it('检查更新 → 显示当前/最新/可更新 → 点「更新」→ runCliCommand("claude update")；输出追加+exit 提示+关闭 killCliCommand', async () => {
     const api = await renderApp()
     const s = await openSettings()
+    gotoSection(s, 'claude CLI')
     fireEvent.click(s.getByRole('button', { name: '检查更新' }))
     expect(await s.findByText(/当前 2\.1\.301 · 最新 2\.1\.304 · 可更新/)).toBeDefined()
 
@@ -274,6 +288,7 @@ describe('claude CLI（迁自 About）', () => {
       upToDate: true
     })
     const s = await openSettings()
+    gotoSection(s, 'claude CLI')
     fireEvent.click(s.getByRole('button', { name: '检查更新' }))
     expect(await s.findByText(/已是最新/)).toBeDefined()
     expect(s.queryByRole('button', { name: '更新' })).toBeNull()
@@ -293,6 +308,7 @@ describe('claude CLI（迁自 About）', () => {
     const api = await renderApp()
     vi.mocked(api.getClaudeVersionInfo).mockResolvedValue({ version: '', path: '' })
     const s = await openSettings()
+    gotoSection(s, 'claude CLI')
     expect(await s.findByText('未安装 claude CLI')).toBeDefined()
     expect(s.queryByRole('button', { name: '检查更新' })).toBeNull() // 未装不查更新
 
@@ -317,6 +333,7 @@ describe('claude CLI（迁自 About）', () => {
     const api = await renderApp()
     vi.mocked(api.getClaudeVersionInfo).mockResolvedValue({ version: '', path: '' })
     const s = await openSettings()
+    gotoSection(s, 'claude CLI')
     await s.findByText('未安装 claude CLI')
     vi.spyOn(window, 'confirm').mockReturnValue(false)
     fireEvent.click(s.getByRole('button', { name: '下载安装' }))
@@ -331,6 +348,7 @@ describe('启动与窗口', () => {
   it('getAppSettings 初始化（mock 默认托盘常驻）；选「退出应用」→ setAppSettings({closeToTray:false})', async () => {
     const api = await renderApp()
     const s = await openSettings()
+    gotoSection(s, '启动')
     await waitFor(() => expect(api.getAppSettings).toHaveBeenCalledTimes(1))
     expect(
       (s.getByRole('radio', { name: '最小化到托盘（常驻）' }) as HTMLInputElement).checked
@@ -343,6 +361,7 @@ describe('启动与窗口', () => {
   it('开机自启 checkbox：勾选 → setAppSettings({launchAtLogin:true})', async () => {
     const api = await renderApp()
     const s = await openSettings()
+    gotoSection(s, '启动')
     fireEvent.click(s.getByRole('checkbox', { name: '开机自启' }))
     await waitFor(() => expect(api.setAppSettings).toHaveBeenCalledWith({ launchAtLogin: true }))
   })
@@ -391,5 +410,48 @@ describe('设置弹窗基线', () => {
     expect(screen.getByRole('dialog', { name: '设置' })).toBeDefined()
     fireEvent.keyDown(document.body, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '设置' })).toBeNull())
+  })
+})
+
+// ── S14 双栏导航（左分类+当前值摘要；右内容条件渲染） ──────────────────────
+
+describe('设置双栏导航（S14）', () => {
+  it('默认选中「外观」：其内容可见，终端内容不可见；active 项带 aria-current', async () => {
+    await renderApp()
+    const s = await openSettings()
+    expect(s.getByRole('radio', { name: '深色' })).toBeDefined() // 外观内容在
+    expect(s.queryByLabelText('终端字号')).toBeNull() // 终端内容不在（条件渲染）
+    expect(s.getByRole('button', { name: '外观' }).getAttribute('aria-current')).toBe('true')
+    expect(s.getByRole('button', { name: '终端' }).getAttribute('aria-current')).toBeNull()
+  })
+
+  it('点「终端」导航：内容更替（外观内容消失、终端内容出现且 aria-current 转移）', async () => {
+    await renderApp()
+    const s = await openSettings()
+    gotoSection(s, '终端')
+    expect(s.getByLabelText('终端字号')).toBeDefined()
+    expect(s.queryByRole('radio', { name: '深色' })).toBeNull()
+    expect(s.getByRole('button', { name: '终端' }).getAttribute('aria-current')).toBe('true')
+    expect(s.getByRole('button', { name: '外观' }).getAttribute('aria-current')).toBeNull()
+  })
+
+  it('左栏当前值摘要：终端 "Cascadia Mono · 15"、外观随主题实时更新、cli 版本、启动托盘常驻、通知未配置', async () => {
+    const api = await renderApp()
+    const s = await openSettings()
+    // 终端：默认字体族/字号派生
+    expect(s.getByRole('button', { name: '终端' }).textContent).toContain('Cascadia Mono · 15')
+    // 外观：摘要随 radio 实时更新
+    expect(s.getByRole('button', { name: '外观' }).textContent).toContain('深色')
+    fireEvent.click(s.getByRole('radio', { name: '浅色' }))
+    expect(s.getByRole('button', { name: '外观' }).textContent).toContain('浅色')
+    // claude CLI：摘要 = 版本号（getClaudeVersionInfo 异步返回后）
+    await waitFor(() =>
+      expect(s.getByRole('button', { name: 'claude CLI' }).textContent).toContain('2.1.301')
+    )
+    // 启动：mock getAppSettings 默认 closeToTray=true
+    await waitFor(() => expect(api.getAppSettings).toHaveBeenCalledTimes(1))
+    expect(s.getByRole('button', { name: '启动' }).textContent).toContain('托盘常驻')
+    // 通知：mock getNotifyConfig 默认空 URL → 未配置
+    expect(s.getByRole('button', { name: '通知' }).textContent).toContain('未配置')
   })
 })

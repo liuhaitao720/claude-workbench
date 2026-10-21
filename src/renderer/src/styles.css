@@ -1174,3 +1174,112 @@ button {
   flex: 1;
   min-width: 0;
 }
+
+/* ── S14 设置弹窗双栏（macOS 系统设置式：左导航带当前值摘要 + 右内容） ──────
+   全部沿用 v0.5.3 令牌（双主题自动适配）；高度限高仅内容区滚动（弹窗本体不滚）。
+   声明在 .dialog/.dialog-wide 之后（同特异性按源序覆盖宽高） */
+
+.settings-dialog {
+  width: 720px;
+  max-width: calc(100vw - 32px);
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* 滚动收敛到 .settings-body */
+}
+
+.settings-layout {
+  flex: 1;
+  min-height: 0; /* flex 链：允许子级 body 内滚 */
+  display: flex;
+  gap: 16px;
+}
+
+/* 左栏：内嵌面板底（--bg-panel 与弹窗底 --bg-dialog 形成两栏层次） */
+.settings-nav {
+  width: 150px;
+  min-width: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.settings-nav-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.settings-nav-item.active {
+  background: var(--bg-sel); /* 选中面令牌 */
+  color: var(--text-max);
+}
+
+/* 当前值摘要：弱色小字，单行截断（路径/版本类长值不撑破左栏） */
+.settings-nav-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-4);
+  font-size: 11px;
+}
+
+/* 右栏：唯一滚动区（消灭长滚动——每分类内容独立收敛） */
+.settings-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 6px 6px 0;
+}
+
+/* 单节独占右栏：去掉堆叠版多节分隔线（.dialog > .dialog-section:first-of-type
+   的直系子选择器不再命中——节已嵌套一层进 body） */
+.settings-body > .dialog-section {
+  margin-bottom: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+/* 底部关闭按钮跨栏（标题 / 双栏 / 动作三段中的末段，右对齐平衡双栏） */
+.settings-dialog > .dialog-actions {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+  justify-content: flex-end;
+}
+
+/* 窄屏（<560px）退化：nav 转横向滚动条单行（简单实现） */
+@media (max-width: 559px) {
+  .settings-dialog {
+    width: auto;
+  }
+  .settings-layout {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .settings-nav {
+    width: auto;
+    min-width: 0;
+    flex-direction: row;
+    overflow-x: auto;
+  }
+  .settings-nav-item {
+    flex: 0 0 auto;
+  }
+}
