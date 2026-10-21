@@ -11,3 +11,5 @@ scripts/
 doc/
 deploy/
 .claude/
+release-v1/
+release*/
