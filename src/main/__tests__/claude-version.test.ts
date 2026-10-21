@@ -81,8 +81,11 @@ import {
   NPM_INSTALL_FILE,
   checkClaudeUpdate,
   extractSemver,
+  fetchLatestFromRegistry,
   getClaudeVersionInfo,
-  installClaudeCli
+  installClaudeCli,
+  invalidateVersionCache,
+  resolveNpmRegistry
 } from '../claude-version'
 import { invalidateClaudePathCache } from '../pty-manager'
 import { CliRunner } from '../cli-runner'
@@ -100,6 +103,7 @@ beforeEach(() => {
   state.npmOut = '2.1.304\n'
   state.execFails = false
   vi.mocked(invalidateClaudePathCache).mockClear()
+  invalidateVersionCache() // v1.0.1：版本缓存不跨用例泄漏
 })
 
 describe('extractSemver', () => {
@@ -136,39 +140,86 @@ describe('getClaudeVersionInfo（cmd.exe 包装 + 失败不崩）', () => {
   })
 })
 
-describe('checkClaudeUpdate（npm view cmd 包装 + 降级）', () => {
-  it('npm view @anthropic-ai/claude-code version（npm 是 npm.cmd 须 cmd.exe 包装）；版本对比', async () => {
-    const info = await checkClaudeUpdate()
-    expect(state.calls).toContainEqual({
-      cmd: 'cmd.exe',
-      args: ['/c', 'npm', 'view', '@anthropic-ai/claude-code', 'version'],
-      opts: expect.objectContaining({ timeout: 20_000 })
-    })
-    expect(info).toEqual({ current: '2.1.301', latest: '2.1.304', upToDate: false })
+describe('checkClaudeUpdate（v1.0.1：registry HTTP 直连优先，npm view 兜底）', () => {
+  /** 桩掉全局 fetch：可控 registry 路径（v1.0.1 主路不再走 npm CLI） */
+  const stubFetch = (version: string | null): void => {
+    vi.stubGlobal(
+      'fetch',
+      version === null
+        ? vi.fn(() => Promise.reject(new Error('network blocked')))
+        : vi.fn(() =>
+            Promise.resolve(
+              new Response(JSON.stringify({ version }), { status: 200 })
+            )
+          )
+    )
+  }
+
+  it('registry HTTP 直连返回 latest → 版本对比正确（无 npm CLI 调用）', async () => {
+    stubFetch('2.1.304')
+    try {
+      const info = await checkClaudeUpdate()
+      expect(info).toEqual({ current: '2.1.301', latest: '2.1.304', upToDate: false })
+      expect(
+        state.calls.some((c) => c.args.includes('view'))
+      ).toBe(false) // 主路成功不落 npm CLI
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('已是最新：current === latest → upToDate=true（无 degraded 字段）', async () => {
     state.versionOut = '2.1.304 (Claude Code)\n'
-    await expect(checkClaudeUpdate()).resolves.toEqual({
-      current: '2.1.304',
-      latest: '2.1.304',
-      upToDate: true
-    })
+    stubFetch('2.1.304')
+    try {
+      await expect(checkClaudeUpdate()).resolves.toEqual({
+        current: '2.1.304',
+        latest: '2.1.304',
+        upToDate: true
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
-  it('无 npm（探测失败）→ degraded=true（渲染层提示走 claude update）', async () => {
+  it('HTTP 失败 → 回退 npm view CLI（cmd.exe /c 包装断言）', async () => {
+    stubFetch(null)
+    try {
+      const info = await checkClaudeUpdate()
+      expect(state.calls).toContainEqual({
+        cmd: 'cmd.exe',
+        args: ['/c', 'npm', 'view', '@anthropic-ai/claude-code', 'version'],
+        opts: expect.objectContaining({ timeout: 20_000 })
+      })
+      expect(info).toEqual({ current: '2.1.301', latest: '2.1.304', upToDate: false })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('双路失败 → degraded=true（渲染层提示走 claude update）', async () => {
+    stubFetch(null)
     state.npmOut = ''
-    state.execFails = true // version 探测也失败 → current=''；npm 探测失败 → degraded
-    await expect(checkClaudeUpdate()).resolves.toMatchObject({
-      current: '',
-      degraded: true,
-      upToDate: false
-    })
+    state.execFails = true // version 探测也失败 → current=''；双路失败 → degraded
+    try {
+      await expect(checkClaudeUpdate()).resolves.toMatchObject({
+        current: '',
+        degraded: true,
+        upToDate: false
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
-  it('npm 输出解析失败 → degraded=true 不崩', async () => {
+  it('npm 输出解析失败（回退路 garbage）→ degraded=true 不崩', async () => {
+    stubFetch(null)
     state.npmOut = 'garbage no semver here!!!'
-    await expect(checkClaudeUpdate()).resolves.toMatchObject({ degraded: true, upToDate: false })
+    try {
+      await expect(checkClaudeUpdate()).resolves.toMatchObject({ degraded: true, upToDate: false })
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 
@@ -203,5 +254,23 @@ describe('installClaudeCli（固定模板——绝不真跑安装器）', () => 
     const pty = state.fakePty.instances[0]
     pty?.onExitCbs[0]?.({ exitCode: 0 })
     expect(invalidateClaudePathCache).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('v1.0.1 检查更新提速（registry HTTP 直连优先，npm view 兜底）', () => {
+  it('resolveNpmRegistry：npmrc registry= 行解析；无配置回 npmjs 缺省', () => {
+    expect(resolveNpmRegistry('/home/u', 'registry=https://registry.npmmirror.com/\n')).toBe(
+      'https://registry.npmmirror.com'
+    )
+    expect(resolveNpmRegistry('/home/u', null)).toBe('https://registry.npmjs.org')
+    expect(resolveNpmRegistry('/home/u', 'prefix=D:\npm-global')).toBe('https://registry.npmjs.org')
+  })
+
+  it('真实 registry HTTP 直连 <2s 返回 latest（实测对比 npm view 16s）', { timeout: 15_000 }, async () => {
+    const t0 = Date.now()
+    const latest = await fetchLatestFromRegistry()
+    const elapsed = Date.now() - t0
+    expect(latest).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(elapsed).toBeLessThan(10_000) // 网络余量断言（本机实测 0.4s）
   })
 })

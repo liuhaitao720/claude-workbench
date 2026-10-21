@@ -146,7 +146,7 @@ describe('CliRunner（假 PTY 缝）', () => {
     expect(fakePtyModule.spawns).toEqual([
       {
         file: 'cmd.exe',
-        args: ['/c', 'C:\\npm-global\\claude.cmd', 'plugin', 'install', 'someone/skill@1.0'],
+        args: ['/c', 'chcp 65001>nul&&C:\\npm-global\\claude.cmd', 'plugin', 'install', 'someone/skill@1.0'],
         options: expect.objectContaining({ env: buildClaudeEnv() })
       }
     ])
