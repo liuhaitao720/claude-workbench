@@ -1127,10 +1127,10 @@ button {
   font-size: 11px;
 }
 
-/* v0.5.2 合并：Skills 独占一行（原 .skills-btn + .sidebar-actions .skills-btn 双定义） */
+/* v0.5.2 Skills 独占一行 → v0.9 用户指令覆盖：Skills | 设置 并排（flex:1 平分一行；
+ * 原 .skills-btn + .sidebar-actions .skills-btn 双定义合并沿革自 v0.5.2） */
 .skills-btn {
-  width: 100%;
-  margin-top: 8px;
+  flex: 1;
 }
 
 /* ── v0.5③ 导入成功一次性 toast ── */

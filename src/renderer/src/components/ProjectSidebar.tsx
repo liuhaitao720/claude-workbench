@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ProjectRecord, TaskRecord } from '../../../shared/types'
 import { useAppStore } from '../store'
 import { APP_VERSION } from '../app-info'
+import { loadDefaultIsolation, persistDefaultIsolation } from '../default-isolation'
 import { useEscapeClose } from '../hooks/useEscapeClose'
 import { ProjectTree } from './ProjectTree'
 import { focusActiveTerminal } from './TerminalPanel'
@@ -31,6 +32,7 @@ export function ProjectSidebar() {
   const openTaskAutoResume = useAppStore((s) => s.openTaskAutoResume)
   const openAbout = useAppStore((s) => s.openAbout)
   const openSkills = useAppStore((s) => s.openSkills)
+  const openSettings = useAppStore((s) => s.openSettings)
 
   const [railCollapsed, setRailCollapsed] = useState(false)
   const [query, setQuery] = useState('')
@@ -147,8 +149,8 @@ export function ProjectSidebar() {
               </button>
             ))}
           </div>
-          {/* v0.5③ Skills（🧩——勿用 ⚡，与 skipPermissions 徽标撞形）；
-              v0.5① 关于（ⓘ）——均置 ☰ 上方 */}
+          {/* v0.5③ Skills（🧩——勿用 ⚡，与 skipPermissions 徽标撞形）；v0.9 设置
+              （⚙）；v0.5① 关于（ⓘ）——均置 ☰ 上方，⚙ 在 🧩 与 ⓘ 之间 */}
           <button
             type="button"
             className="rail-btn"
@@ -156,6 +158,14 @@ export function ProjectSidebar() {
             onClick={openSkills}
           >
             🧩
+          </button>
+          <button
+            type="button"
+            className="rail-btn"
+            title="设置"
+            onClick={openSettings}
+          >
+            ⚙
           </button>
           <button
             type="button"
@@ -180,8 +190,9 @@ export function ProjectSidebar() {
           aria-hidden={railCollapsed}
           style={railCollapsed ? { display: 'none' } : undefined}
         >
-          {/* v0.5.2 用户指令：标题与版本号同行（版本点击开 About）；Skills 独占一行；
-              📁 文件夹图标 + 搜索栏同行；新建任务经项目 ⋯ 菜单 / Ctrl+N */}
+          {/* v0.5.2 用户指令：标题与版本号同行（版本点击开 About）；📁 文件夹图标
+              + 搜索栏同行；新建任务经项目 ⋯ 菜单 / Ctrl+N。v0.9 用户指令覆盖：
+              Skills | 设置 并排一行（取代 v0.5.2 "Skills 独占一行"） */}
           <div className="sidebar-header">
             <div className="sidebar-title-row">
               <h1>Claude Workbench</h1>
@@ -196,9 +207,14 @@ export function ProjectSidebar() {
             </div>
           </div>
           <div className="sidebar-actions">
-            <button type="button" className="btn skills-btn" onClick={openSkills}>
-              Skills
-            </button>
+            <div className="sidebar-dir-row">
+              <button type="button" className="btn skills-btn" onClick={openSkills}>
+                Skills
+              </button>
+              <button type="button" className="btn skills-btn" onClick={openSettings}>
+                设置
+              </button>
+            </div>
             <div className="sidebar-dir-row">
               <button
                 type="button"
@@ -283,6 +299,8 @@ function SkipPermsCheck({ checked, onChange }: { checked: boolean; onChange: (v:
 // ── 新建任务对话框（A）：自旧每项目内联 NewTaskForm 迁移，流程不变 ────────
 // git：名称提交 → 三选（worktree/shared/取消——取消=返回名称输入，草稿保留）；
 // 非 git：直接 {isolation:'shared'}。成功即关对话框（createTaskFlow 自动开 tab）。
+// v0.9⑦：三选阶段高亮上次点过的选项（default-isolation.ts 持久化）——纯视觉
+// 预选，不跳过确认（用户指令：记住的是"点过的选项"，非"下次自动执行"）。
 
 function NewTaskDialog({
   project,
@@ -321,6 +339,7 @@ function NewTaskDialog({
   }
 
   const confirmCreate = (isolation: 'worktree' | 'shared') => {
+    persistDefaultIsolation(isolation) // v0.9⑦：记住用户点过的选项（下次三选高亮）
     const taskName = pending
     setPending(null)
     if (taskName !== null) {
@@ -332,6 +351,9 @@ function NewTaskDialog({
       })
     }
   }
+
+  // 三选高亮：上次选择项用 primary 主按钮样式（默认无记录回 worktree，即既有观感）
+  const lastIsolation = loadDefaultIsolation()
 
   return (
     // 评审 F11：遮罩空白点击 + Escape 关闭（对齐重命名 inline 的 Escape 基线）；
@@ -369,18 +391,22 @@ function NewTaskDialog({
         ) : (
           <>
             <p className="dialog-hint">
-              git 项目推荐使用 worktree 隔离，避免多任务互相覆盖工作区
+              git 项目推荐使用 worktree 隔离，避免多任务互相覆盖工作区（主按钮为上次选择）
             </p>
             <SkipPermsCheck checked={skipPerms} onChange={setSkipPerms} />
             <div className="dialog-actions">
               <button
                 type="button"
-                className="btn primary"
+                className={lastIsolation === 'worktree' ? 'btn primary' : 'btn'}
                 onClick={() => confirmCreate('worktree')}
               >
                 创建隔离分支（git worktree，分支 cwb/&lt;新ID&gt;）
               </button>
-              <button type="button" className="btn" onClick={() => confirmCreate('shared')}>
+              <button
+                type="button"
+                className={lastIsolation === 'shared' ? 'btn primary' : 'btn'}
+                onClick={() => confirmCreate('shared')}
+              >
                 改用共享目录
               </button>
               <button type="button" className="btn" onClick={() => setPending(null)}>

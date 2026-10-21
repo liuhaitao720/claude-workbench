@@ -29,7 +29,8 @@ beforeEach(() => {
     selectedProjectId: null,
     openTaskIds: [],
     activeTaskId: null,
-    activityMap: {}
+    activityMap: {},
+    settingsOpen: false
   })
 })
 afterEach(cleanup)
@@ -355,5 +356,41 @@ describe('快捷键（S6-F：Ctrl+N/F/B，焦点守卫）', () => {
     expect(
       (document.querySelector('.sidebar-rail') as HTMLElement).style.display
     ).toBe('none') // 展开态下 rail 隐藏而非卸载
+  })
+})
+
+// ── v0.9 设置入口：展开态 Skills | 设置 并排 + 折叠 rail ⚙ ──────────────────
+
+describe('设置入口（v0.9）', () => {
+  const pg = makeProject({ id: 'pg', name: 'GitProj' })
+  const runner = makeTask({ id: 'tr', projectId: 'pg', name: 'runner', status: 'running' })
+
+  it('展开态 Skills | 设置 并排（同一行）：点「设置」开设置弹窗', async () => {
+    await renderApp([pg], [runner])
+    const settingsBtn = screen.getByRole('button', { name: '设置' })
+    // 并排：两按钮同属一行容器（v0.9 指令覆盖 v0.5.2 “Skills 独占一行”）
+    const row = settingsBtn.closest('.sidebar-dir-row') as HTMLElement
+    expect(row).not.toBeNull()
+    expect(within(row).getByRole('button', { name: 'Skills' })).toBeDefined()
+    expect(row.querySelectorAll('button')).toHaveLength(2)
+
+    fireEvent.click(settingsBtn)
+    expect(await screen.findByRole('dialog', { name: '设置' })).toBeDefined()
+  })
+
+  it('折叠态 rail ⚙（🧩 与 ⓘ 之间）：点击开设置弹窗', async () => {
+    await renderApp([pg], [runner])
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true }) // 折叠
+    const rail = document.querySelector('.sidebar-rail') as HTMLElement
+    const gear = within(rail).getByTitle('设置')
+    // 顺序：⚙ 紧跟 🧩 之后、ⓘ 之前（rail-btn 先例）
+    const btns = Array.from(rail.querySelectorAll('.rail-btn')) as HTMLElement[]
+    const idx = btns.indexOf(gear)
+    expect(idx).toBeGreaterThan(0)
+    expect(btns[idx - 1].textContent).toBe('🧩')
+    expect(btns[idx + 1].textContent).toBe('ⓘ')
+
+    fireEvent.click(gear)
+    expect(await screen.findByRole('dialog', { name: '设置' })).toBeDefined()
   })
 })

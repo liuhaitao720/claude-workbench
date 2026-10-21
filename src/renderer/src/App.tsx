@@ -6,6 +6,7 @@ import { TerminalPanel, focusActiveTerminal } from './components/TerminalPanel'
 import { SmokeBridge } from './components/SmokeBridge'
 import { AboutDialog } from './components/AboutDialog'
 import { SkillsDialog } from './components/SkillsDialog'
+import { SettingsDialog } from './components/SettingsDialog'
 
 /** ?smoke=1：--smoke 冒烟模式下 main 注入的 URL query（模块加载时解析一次，运行期不变） */
 const isSmokeMode = new URLSearchParams(window.location.search).get('smoke') === '1'
@@ -16,6 +17,7 @@ const isSmokeMode = new URLSearchParams(window.location.search).get('smoke') ===
  * mount：loadAll + initListeners；unmount：全部退订。
  * v0.5①③：底部状态栏（仅版本号，点击开 About）；About/Skills 弹窗状态在 store
  * （StatusBar、折叠 rail、侧栏按钮多入口），onClose 统一关弹窗+焦点还终端。
+ * v0.9：Settings 设置中心弹窗同族（About 瘦身为身份页 + 「打开设置」入口）。
  */
 export function App() {
   useEffect(() => {
@@ -28,6 +30,7 @@ export function App() {
   const openTaskIds = useAppStore((s) => s.openTaskIds)
   const aboutOpen = useAppStore((s) => s.aboutOpen)
   const skillsOpen = useAppStore((s) => s.skillsOpen)
+  const settingsOpen = useAppStore((s) => s.settingsOpen)
 
   return (
     <div className="app">
@@ -55,6 +58,14 @@ export function App() {
         <SkillsDialog
           onClose={() => {
             useAppStore.getState().closeSkills()
+            focusActiveTerminal()
+          }}
+        />
+      )}
+      {settingsOpen && (
+        <SettingsDialog
+          onClose={() => {
+            useAppStore.getState().closeSettings()
             focusActiveTerminal()
           }}
         />

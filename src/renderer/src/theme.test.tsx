@@ -64,7 +64,7 @@ async function renderApp() {
 
 /** 打开 About（点侧栏版本按钮，对齐 about.test 先例） */
 async function openAbout(): Promise<ReturnType<typeof within>> {
-  fireEvent.click(screen.getByRole('button', { name: 'v0.8.0' }))
+  fireEvent.click(screen.getByRole('button', { name: 'v0.9.0' }))
   const dialog = await screen.findByRole('dialog', { name: '关于' })
   return within(dialog)
 }
@@ -114,53 +114,6 @@ describe('theme.ts 纯函数（对齐 font-size.ts 先例的持久化语义）',
     expect(loadTermFollowsTheme()).toBe(true)
     window.localStorage.setItem('cwb-term-theme-follow', '0')
     expect(loadTermFollowsTheme()).toBe(false)
-  })
-})
-
-describe('About 主题区（v0.5.3 三选 radio + 终端跟随开关）', () => {
-  it('radio 三选：dataset.theme 与 localStorage("cwb-theme") 联动；system 经 matchMedia 解析', async () => {
-    await renderApp()
-    const about = await openAbout()
-    // 默认 dark（无存储值回 dark）
-    expect((about.getByRole('radio', { name: '深色' }) as HTMLInputElement).checked).toBe(true)
-
-    fireEvent.click(about.getByRole('radio', { name: '浅色' }))
-    expect(document.documentElement.dataset.theme).toBe('light')
-    expect(window.localStorage.getItem('cwb-theme')).toBe('light')
-
-    fireEvent.click(about.getByRole('radio', { name: '深色' }))
-    expect(document.documentElement.dataset.theme).toBe('dark')
-    expect(window.localStorage.getItem('cwb-theme')).toBe('dark')
-
-    // 跟随系统：setTheme 内经 matchMedia 解析（mock matches 切换验证两分支）
-    const original = window.matchMedia
-    const mm = vi.fn().mockReturnValue({ matches: true })
-    window.matchMedia = mm as unknown as typeof window.matchMedia
-    try {
-      fireEvent.click(about.getByRole('radio', { name: '跟随系统' }))
-      expect(document.documentElement.dataset.theme).toBe('dark')
-      expect(window.localStorage.getItem('cwb-theme')).toBe('system')
-      expect(mm).toHaveBeenCalled()
-      mm.mockReturnValue({ matches: false })
-      fireEvent.click(about.getByRole('radio', { name: '深色' })) // 先离开 system 再回
-      fireEvent.click(about.getByRole('radio', { name: '跟随系统' }))
-      expect(document.documentElement.dataset.theme).toBe('light')
-    } finally {
-      window.matchMedia = original
-    }
-  })
-
-  it('「终端跟随界面主题」checkbox：默认不勾；勾选/取消写 store + 持久化', async () => {
-    await renderApp()
-    const about = await openAbout()
-    const cb = about.getByRole('checkbox', { name: '终端跟随界面主题' }) as HTMLInputElement
-    expect(cb.checked).toBe(false)
-    fireEvent.click(cb)
-    expect(useAppStore.getState().termFollowsTheme).toBe(true)
-    expect(window.localStorage.getItem('cwb-term-theme-follow')).toBe('1')
-    fireEvent.click(cb)
-    expect(useAppStore.getState().termFollowsTheme).toBe(false)
-    expect(window.localStorage.getItem('cwb-term-theme-follow')).toBe('0')
   })
 })
 

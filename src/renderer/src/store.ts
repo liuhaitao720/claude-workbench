@@ -71,9 +71,10 @@ interface AppState {
    */
   activityMap: Partial<Record<string, TaskActivityEvent['activity']>>
 
-  /** v0.5①/③：About / Skills 弹窗开合——StatusBar、折叠 rail、侧栏按钮多入口共用 */
+  /** v0.5①/③：About / Skills 弹窗开合 + v0.9 设置中心——StatusBar、折叠 rail、侧栏按钮多入口共用 */
   aboutOpen: boolean
   skillsOpen: boolean
+  settingsOpen: boolean
 
   /** v0.5.3 主题：三态偏好（持久化）+ 解析后的生效值（system 跟随时随 OS 切换刷新） */
   theme: Theme
@@ -112,6 +113,8 @@ interface AppState {
   closeAbout: () => void
   openSkills: () => void
   closeSkills: () => void
+  openSettings: () => void
+  closeSettings: () => void
 }
 
 /** openTaskAutoResume 的 2s 节流表（防连击重复 resume） */
@@ -135,6 +138,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   activityMap: {},
   aboutOpen: false,
   skillsOpen: false,
+  settingsOpen: false,
   theme: initialTheme,
   effectiveTheme: initialEffective,
   termFollowsTheme: loadTermFollowsTheme(),
@@ -328,7 +332,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   openAbout: () => set({ aboutOpen: true }),
   closeAbout: () => set({ aboutOpen: false }),
   openSkills: () => set({ skillsOpen: true }),
-  closeSkills: () => set({ skillsOpen: false })
+  closeSkills: () => set({ skillsOpen: false }),
+  openSettings: () => set({ settingsOpen: true }),
+  closeSettings: () => set({ settingsOpen: false })
 }))
 
 // v0.5.3 系统主题切换：偏好为 system 时重算 effectiveTheme 并刷 DOM；

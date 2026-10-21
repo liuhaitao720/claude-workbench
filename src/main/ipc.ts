@@ -19,6 +19,7 @@ import { AppSettingsStore } from './settings-store'
 import { NotifyService } from './notify'
 import { ProjectStore } from './project-store'
 import { PtyManager, buildNewSessionArgs, buildResumeArgs } from './pty-manager'
+import { importTasksFromSessionsImpl } from './session-import'
 import { SkillsStore } from './skills-store'
 import { startTaskActivityServer, type TaskActivityHandle } from './task-activity'
 import { TaskStore } from './task-store'
@@ -60,6 +61,11 @@ export interface AppContext {
   /** 切换"跳过权限确认"（v0.3.1 契约第 17 法）：仅元数据，下次 spawn 生效 */
   setTaskSkipPermissions(taskId: string, on: boolean): Promise<TaskRecord>
   pickDirectory(): Promise<string | null>
+  /**
+   * v0.9 S13 会话导入（第 33 法）：扫描项目目录的 claude CLI 历史会话 → 生成可恢复任务
+   * （幂等，跳过已导入 sessionId）；返回新增列表。addProject 完成后自动调用一次。
+   */
+  importTasksFromSessions(projectId: string): Promise<TaskRecord[]>
   /** v0.9 应用设置（main settings.json：关闭行为/自启） */
   readonly appSettings: AppSettingsStore
 }
@@ -147,8 +153,27 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       broadcast(IpcChannels.CliOutput, { commandId, type: 'exit', exitCode })
   })
 
+  /**
+   * v0.9 S13 会话导入：持久化经 importTasksFromSessionsImpl，广播在此（renameTask 先例）。
+   * renderer 任务列表经 onTaskUpdate 推送自动出现导入任务。
+   */
+  async function importTasksFromSessions(projectId: string): Promise<TaskRecord[]> {
+    const added = await importTasksFromSessionsImpl(projectId, projects, tasks)
+    for (const record of added) broadcastTaskUpdate(record)
+    return added
+  }
+
   async function addProject(dir: string): Promise<ProjectRecord> {
-    return projects.add(dir, isGitRepo(dir))
+    const record = projects.add(dir, isGitRepo(dir))
+    // v0.9 S13：打开目录（注册项目）即自动导入该目录的 claude 历史会话（幂等——重复
+    // addProject 同 dir 返回既有记录，再导入亦零新增）。导入是尽力而为，失败不阻断注册
+    // （可经 cwb:tasks:import-from-sessions 手动重试）。
+    try {
+      await importTasksFromSessions(record.id)
+    } catch {
+      // 扫描/读盘失败静默：项目注册是主路径，会话导入为增值功能
+    }
+    return record
   }
 
   async function removeProject(id: string): Promise<void> {
@@ -319,6 +344,7 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     renameTask,
     setTaskSkipPermissions,
     pickDirectory,
+    importTasksFromSessions,
     appSettings
   }
 }
@@ -350,6 +376,10 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     ctx.setTaskSkipPermissions(taskId, on)
   )
   ipcMain.handle(IpcChannels.DialogPickDirectory, () => ctx.pickDirectory())
+  // v0.9 S13 会话导入（addProject 已自动调用；此为项目菜单手动触发/重扫入口）
+  ipcMain.handle(IpcChannels.TasksImportFromSessions, (_e, projectId: string) =>
+    ctx.importTasksFromSessions(projectId)
+  )
   // v0.5③ skills（SkillInfo 归 renderer 弹窗消费；removeSkill 的归属校验在 main）
   ipcMain.handle(IpcChannels.SkillsList, () => ctx.skills.list())
   ipcMain.handle(

@@ -1,6 +1,6 @@
 {
   "name": "claude-workbench",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Claude Code 多项目多任务终端工作台",
   "private": true,
   "main": "out/main/index.js",

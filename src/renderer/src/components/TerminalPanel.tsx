@@ -5,6 +5,8 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import type { TaskRecord } from '../../../shared/types'
 import { clampFontSize, loadFontSize, persistFontSize } from '../font-size'
+import { isFontFamily, loadFontFamily, persistFontFamily } from '../font-family'
+import type { FontFamily } from '../font-family'
 import { terminalThemeFor } from '../theme'
 import type { EffectiveTheme } from '../theme'
 import { subscribeTaskData, useAppStore } from '../store'
@@ -16,15 +18,20 @@ import { subscribeTaskData, useAppStore } from '../store'
  * - terminal.unicode.activeVersion='11'（CJK/emoji 宽度修正）
  * - v0.5②：默认字号 15（font-size.ts）+ Ctrl+=/-（attachCustomKeyEventHandler，
  *   防隐藏 textarea 先消费）+ Ctrl+滚轮（host 捕获 preventDefault）+ 持久化
+ * - v0.9④：字体族白名单（font-family.ts）——新实例取持久化值，运行时经
+ *   changeFontFamily 换装（字号/字体族同属字模几何，共用 dirty 补偿）
  */
 export const terminalCache = new Map<string, Terminal>()
 const fitAddonCache = new Map<string, FitAddon>()
 
-/** v0.5②：字号变更时处于隐藏态的实例——激活时补 fit+ptyResize（隐藏时 fit 按 0 尺寸算错） */
-const fontSizeDirty = new Set<string>()
+/**
+ * 字模几何（v0.5② 字号 / v0.9④ 字体族）变更时处于隐藏态的实例——激活时补
+ * fit+ptyResize（隐藏时 fit 按 0 尺寸算错）
+ */
+const fontDirty = new Set<string>()
 
 /**
- * v0.5② 字号调整单一入口（Ctrl+=/-、Ctrl+滚轮共用）：
+ * v0.5② 字号调整单一入口（Ctrl+=/-、Ctrl+滚轮、设置弹窗 stepper 共用）：
  * clamp → 持久化 → 遍历 terminalCache 逐实例 set options.fontSize；
  * 活动实例 fit+ptyResize（对齐 resume 先例：fit 失败不阻断、ptyResize 无条件发，
  * jsdom 可测）；隐藏实例标 dirty 由激活 effect 补偿。返回实际落地字号。
@@ -38,7 +45,7 @@ export function changeFontSize(delta: number): number {
   for (const [taskId, term] of terminalCache) {
     term.options.fontSize = next
     if (taskId !== activeId) {
-      fontSizeDirty.add(taskId)
+      fontDirty.add(taskId)
       continue
     }
     try {
@@ -49,6 +56,33 @@ export function changeFontSize(delta: number): number {
     window.cwb.ptyResize(taskId, term.cols, term.rows)
   }
   return next
+}
+
+/**
+ * v0.9④ 字体族调整单一入口（设置弹窗 select）：白名单校验 → 持久化 →
+ * 遍历 terminalCache 逐实例 set options.fontFamily（字体变更字模尺寸必变，
+ * 与字号同路：活动实例 fit+ptyResize，隐藏实例标 dirty 激活补偿）。
+ * 返回实际落地字体族（非白名单/同值时短路，不动缓存不发 ptyResize）。
+ */
+export function changeFontFamily(family: string): FontFamily {
+  const current = loadFontFamily()
+  if (!isFontFamily(family) || family === current) return current
+  persistFontFamily(family)
+  const activeId = useAppStore.getState().activeTaskId
+  for (const [taskId, term] of terminalCache) {
+    term.options.fontFamily = family
+    if (taskId !== activeId) {
+      fontDirty.add(taskId)
+      continue
+    }
+    try {
+      fitAddonCache.get(taskId)?.fit()
+    } catch {
+      // 隐藏态 propose 失败不阻断——用 term 现值同步即可
+    }
+    window.cwb.ptyResize(taskId, term.cols, term.rows)
+  }
+  return family
 }
 
 /** 终端生效主题（v0.5.3 解耦设计）：跟随开关关 → 恒 dark（浅 UI 下终端仍深底） */
@@ -99,8 +133,9 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
       const t = new Terminal({
         allowProposedApi: true, // unicode 版本切换属 proposed API（CJK 宽度修正必需）
         // v0.4.5 字体对齐 claude CLI 真实终端观感：Cascadia Mono（Windows Terminal
-        // 默认字体，Win11 自带；制表符/块元素/盲文渲染显著优于 Consolas），逐级回退
-        fontFamily: "'Cascadia Mono', 'Cascadia Code', Consolas, 'Courier New', monospace",
+        // 默认字体，Win11 自带；制表符/块元素/盲文渲染显著优于 Consolas）；
+        // v0.9④ 改白名单可选项（font-family.ts，持久化值优先），xterm 自动落 CSS font-family
+        fontFamily: loadFontFamily(),
         fontSize: loadFontSize(), // v0.5② 默认 15（持久化值优先）
         lineHeight: 1.2, // 接近真实终端默认行距，长输出更透气
         letterSpacing: 0,
@@ -166,7 +201,7 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
       onDataDisposer.dispose()
       unsubscribePty()
       disposeTaskTerminal(task.id, host)
-      fontSizeDirty.delete(task.id)
+      fontDirty.delete(task.id)
     }
   }, [task.id])
 
@@ -192,10 +227,10 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
 
   // v0.4.3 焦点管理①：tab 激活（打开/切换）即聚焦终端——否则键入落在侧栏/按钮上，
   // 表现为"选完对话框选项后无法输入"（键盘焦点从未进入终端）。
-  // v0.5②：隐藏期间字号变更的补偿——激活即 fit+ptyResize（dirty 标记见 changeFontSize）
+  // v0.5②：隐藏期间字号/字体族变更的补偿——激活即 fit+ptyResize（dirty 标记见 changeFontSize）
   useEffect(() => {
     if (!active) return
-    if (fontSizeDirty.delete(task.id)) {
+    if (fontDirty.delete(task.id)) {
       const term = terminalCache.get(task.id)
       if (term) {
         try {
