@@ -80,17 +80,28 @@ export function applyDomTheme(effective: EffectiveTheme): void {
   document.documentElement.dataset.theme = effective
 }
 
-/** xterm 主题配色：dark 保持既有观感（含 cursor）；light 白底深字 */
+/**
+ * xterm 主题配色：dark 保持既有观感（含 cursor）；light 白底深字。
+ * v1.0.5：显式 selectionBackground——xterm 默认选中色是 ~24% 半透明灰，
+ * 白底上几乎不可见（用户报告「浅色时看不到选了什么」），且深底下也偏淡。
+ * active 取 accent 同族蓝（styles.css --accent-bg 系）保证选中区域清晰；
+ * inactive（未聚焦 tab）降一档；selectionForeground 不设——保留原字色
+ * （终端惯例，ANSI 彩字被选中后仍可辨）。
+ */
 const TERMINAL_DARK: ITheme = {
   background: '#14151a',
   foreground: '#d7d7db',
-  cursor: '#d7d7db'
+  cursor: '#d7d7db',
+  selectionBackground: '#2f5f8f',
+  selectionInactiveBackground: '#24486b'
 }
 
 const TERMINAL_LIGHT: ITheme = {
   background: '#ffffff',
   foreground: '#33363d',
-  cursor: '#33363d'
+  cursor: '#33363d',
+  selectionBackground: '#add6ff',
+  selectionInactiveBackground: '#d9e9f8'
 }
 
 /** 返回副本防共享对象被 xterm 内部改写串色 */

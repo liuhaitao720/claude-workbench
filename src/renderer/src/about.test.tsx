@@ -40,18 +40,18 @@ async function renderApp(): Promise<CwbApiMock> {
 
 /** 打开 About：点侧栏顶部版本按钮（rail ⓘ 入口在折叠态，另有专门用例） */
 async function openAbout(): Promise<ReturnType<typeof within>> {
-  fireEvent.click(screen.getByRole('button', { name: 'v1.0.4' }))
+  fireEvent.click(screen.getByRole('button', { name: 'v1.0.5' }))
   const dialog = await screen.findByRole('dialog', { name: '关于' })
   return within(dialog)
 }
 
 describe('About 渲染（v0.5.1：侧栏顶部版本按钮入口；v0.9 瘦身为身份页）', () => {
-  it('状态栏显示 v1.0.4；点击开 About：应用名/版本/作者/许可证 MIT', async () => {
+  it('状态栏显示 v1.0.5；点击开 About：应用名/版本/作者/许可证 MIT', async () => {
     await renderApp()
-    expect(screen.getByText('v1.0.4')).toBeDefined()
+    expect(screen.getByText('v1.0.5')).toBeDefined()
     const about = await openAbout()
     expect(about.getByText('Claude Workbench')).toBeDefined()
-    expect(about.getByText(/版本 v1.0.4/)).toBeDefined()
+    expect(about.getByText(/版本 v1.0.5/)).toBeDefined()
     expect(about.getByText('作者 Liu Haitao')).toBeDefined()
     expect(about.getByText('MIT')).toBeDefined() // 许可证链接锚点
   })
