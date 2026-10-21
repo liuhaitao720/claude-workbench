@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { createAppContext, registerIpcHandlers, type AppContext } from './ipc'
 import { resolveClaudeCommand } from './pty-manager'
+import { initSingleInstance } from './single-instance'
 import { attachCloseToTray, setupTray, type TrayHandle } from './tray'
 
 const execFileAsync = promisify(execFile)
@@ -40,6 +41,13 @@ const injectedUserData = process.env['CWB_USER_DATA']
 if (injectedUserData) {
   app.setPath('userData', injectedUserData)
 }
+
+// ── 单实例锁（v1.0.7；锁键=userData，故在 userData 注入之后） ──────────
+
+/** 主窗口引用（second-instance 唤起用；whenReady/activate 两处创建均回填） */
+let mainWindow: BrowserWindow | null = null
+
+const gotSingleLock = initSingleInstance(app, () => mainWindow)
 
 // ── 通用小工具 ────────────────────────────────────────────────────────
 
@@ -391,6 +399,7 @@ const runningCountOf = (ctx: AppContext | null): number =>
   (ctx?.tasks.list() ?? []).filter((t) => t.status === 'running').length
 
 app.whenReady().then(async () => {
+  if (!gotSingleLock) return // v1.0.7 第二实例：不建窗口/托盘，等 initSingleInstance 的 exit(0) 生效
   // v0.5.2 用户指令：移除原生菜单栏（File/Edit/View/Window）——win 上 autoHideMenuBar 兜底
   Menu.setApplicationMenu(null)
   // v0.5⑥ 托盘 tooltip 刷新：任务记录每次变更（含状态迁移）旁路回调（同 onPtyData 注入缝先例）
@@ -401,6 +410,7 @@ app.whenReady().then(async () => {
       : createAppContext({ onTaskUpdate: refreshTrayCount })
   )
   const win = createWindow()
+  mainWindow = win // v1.0.7 second-instance 唤起锚点
 
   // v0.5.2 顺序修正：did-finish-load 编排注册前置（不再被托盘 await 阻塞——
   // dev getFileIcon 挂起曾导致 smoke 编排永不注册）；托盘后台初始化
@@ -437,7 +447,7 @@ app.whenReady().then(async () => {
   })()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow()
   })
 })
 
