@@ -121,7 +121,7 @@ export interface RemoveTaskOptions {
 }
 
 /**
- * window.cwb —— preload 暴露给 renderer 的完整 API（32 法）
+ * window.cwb —— preload 暴露给 renderer 的完整 API（33 法）
  * 生产者：S2（main 侧 handler）+ S1.5（preload 桥接映射）；消费者：S3（renderer）
  */
 export interface CWBApi {
@@ -210,6 +210,10 @@ export interface CWBApi {
   getAppSettings(): Promise<AppSettings>
   /** 保存应用设置（patch 合并），返回保存后全量 */
   setAppSettings(patch: Partial<AppSettings>): Promise<AppSettings>
+
+  // ── 会话导入（1，v0.9 追加）───────────────
+  /** 扫描该目录的 claude CLI 历史会话→生成可恢复任务（幂等，跳过已导入）；返回新增列表 */
+  importTasksFromSessions(projectId: string): Promise<TaskRecord[]>
 
   // ── webhook 通知（3，v0.5④N）───────────────
   /** 读取通知配置（默认 {url:'', enabled:false}） */

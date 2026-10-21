@@ -32,7 +32,9 @@ const HANDLE = {
   NotifyTest: 'cwb:notify:test',
   // v0.9 应用设置
   SettingsGet: 'cwb:settings:get',
-  SettingsSet: 'cwb:settings:set'
+  SettingsSet: 'cwb:settings:set',
+  // v0.9 追加：会话导入
+  TasksImportFromSessions: 'cwb:tasks:import-from-sessions'
 } as const
 
 const SEND = {

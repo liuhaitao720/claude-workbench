@@ -90,6 +90,8 @@ const api: CWBApi = {
     ipcRenderer.invoke(IpcChannels.InstallCli, method) as Promise<{ commandId: string }>,
   // 应用设置（v0.9）
   getAppSettings: () => ipcRenderer.invoke(IpcChannels.SettingsGet) as Promise<AppSettings>,
+  importTasksFromSessions: (projectId) =>
+    ipcRenderer.invoke(IpcChannels.TasksImportFromSessions, projectId) as Promise<TaskRecord[]>,
   setAppSettings: (patch) =>
     ipcRenderer.invoke(IpcChannels.SettingsSet, patch) as Promise<AppSettings>,
   // webhook 通知（v0.5④N）
