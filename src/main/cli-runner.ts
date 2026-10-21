@@ -128,7 +128,8 @@ export class CliRunner {
     const tokens = validateClaudeCommand(userCommand)
     const claudeCmd = await resolveClaudeCommand()
     // 受控 args：白名单校验后的 token 数组（无元字符），claude 路径取 main 解析结果——不回拼原文
-    return this.spawnFixed('cmd.exe', ['/c', claudeCmd, ...tokens.slice(1)])
+    // v1.0 乱码修复：npm 子进程在中文 Windows 输出 GBK——chcp 65001 切 UTF-8（输出串行生效）
+    return this.spawnFixed('cmd.exe', ['/c', 'chcp 65001>nul&&' + claudeCmd, ...tokens.slice(1)])
   }
 
   /**

@@ -426,7 +426,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                         disabled={checking}
                         onClick={() => void checkUpdate()}
                       >
-                        检查更新
+                        {checking ? '检测中…' : '检查更新'}
                       </button>
                       {updateInfo !== null && !updateInfo.upToDate && (
                         <button

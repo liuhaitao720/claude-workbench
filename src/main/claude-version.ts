@@ -54,6 +54,17 @@ export function extractSemver(text: string): string {
   return /\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/.exec(text)?.[0] ?? ''
 }
 
+/** 数字 semver 比较（v1.0：字符串相等对尾随空白/预发布号脆弱——逐段数值比） */
+export function compareSemver(a: string, b: string): number {
+  const pa = a.split('.').map((x) => parseInt(x, 10) || 0)
+  const pb = b.split('.').map((x) => parseInt(x, 10) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d !== 0) return d > 0 ? 1 : -1
+  }
+  return 0
+}
+
 /** 当前 claude CLI 版本+实际解析路径；探测失败 version=''（=未安装） */
 export async function getClaudeVersionInfo(): Promise<ClaudeVersionInfo> {
   const claudeCmd = await resolveClaudeCommand()
@@ -77,7 +88,7 @@ export async function checkClaudeUpdate(): Promise<ClaudeUpdateInfo> {
   let degraded = false
   try {
     const { stdout } = await execFileAsync('cmd.exe', [...NPM_VIEW_ARGS], { timeout: PROBE_TIMEOUT_MS })
-    latest = extractSemver(stdout.trim())
+    latest = extractSemver(stdout.replace(/^﻿/, '').trim()) // 去 BOM（中文 Windows npm 输出偶带）
     if (latest === '') degraded = true // 解析失败不崩：降级提示
   } catch {
     degraded = true // 无 npm（探测失败）→ 走 claude update 提示
@@ -85,7 +96,7 @@ export async function checkClaudeUpdate(): Promise<ClaudeUpdateInfo> {
   return {
     current,
     latest,
-    upToDate: current !== '' && latest !== '' && current === latest,
+    upToDate: current !== '' && latest !== '' && compareSemver(current, latest) >= 0,
     ...(degraded ? { degraded: true } : {})
   }
 }
