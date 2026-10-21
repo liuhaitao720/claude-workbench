@@ -27,7 +27,7 @@ describe('App（布局与侧栏）', () => {
   it('renders the version button（v0.5.1：顶部菜单移除，版本入口取代标题）', () => {
     installCwbMock()
     render(<App />)
-    expect(screen.getByRole('button', { name: 'v1.0.0' })).toBeDefined()
+    expect(screen.getByRole('button', { name: 'v1.0.1' })).toBeDefined()
   })
 
   it('mount 时并行加载 projects 与 tasks（均调用一次）', async () => {
