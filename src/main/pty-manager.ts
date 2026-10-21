@@ -73,11 +73,18 @@ export function buildClaudeEnv(): Record<string, string> {
   return env
 }
 
-export function pickClaudePath(candidates: string[]): string | null {
+/**
+ * v1.0.6 where 多命中 → cmd 可执行候选列表（npm claude.cmd 优先，其余
+ * .cmd/.exe/.bat 按 where 顺序，去重）：本机 where 实测会同时命中 npm 垫片、
+ * WinGet Links 的 claude.exe 等；探测/回退需要整个有序列表而非单个。
+ * 无扩展名的 npm\claude（sh 垫片）与 .ps1 不入列——cmd.exe 跑不了。
+ */
+export function pickClaudePaths(candidates: string[]): string[] {
   const lines = candidates.map((l) => l.trim()).filter((l) => l.length > 0)
-  const npmCmd = lines.find((l) => /npm[/\\]claude\.cmd$/i.test(l))
-  if (npmCmd) return npmCmd
-  return lines.find((l) => /claude\.(cmd|exe)$/i.test(l)) ?? null
+  const runnables = lines.filter((l) => /claude\.(cmd|exe|bat)$/i.test(l))
+  const npmCmd = runnables.find((l) => /npm[/\\]claude\.cmd$/i.test(l))
+  const ordered = [...(npmCmd !== undefined ? [npmCmd] : []), ...runnables.filter((l) => l !== npmCmd)]
+  return [...new Set(ordered)]
 }
 
 let claudePathCache: string | null = null
@@ -88,12 +95,28 @@ export async function resolveClaudeCommand(): Promise<string> {
   let resolved = 'claude'
   try {
     const { stdout } = await execFileAsync('where', ['claude'])
-    resolved = pickClaudePath(stdout.split(/\r?\n/)) ?? 'claude'
+    resolved = pickClaudePaths(stdout.split(/\r?\n/))[0] ?? 'claude'
   } catch {
     resolved = 'claude'
   }
   claudePathCache = resolved
   return resolved
+}
+
+/**
+ * v1.0.6 候选列表解析（不走 claudePathCache——版本探测每次要新鲜列表以便回退）：
+ * where 命中的可执行候选 + 末尾 'claude' PATH 兜底（where 被过滤空/垫片瞬时
+ * 失效时 cmd.exe 仍可按 PATH 解析）。
+ */
+export async function resolveClaudeCandidates(): Promise<string[]> {
+  let list: string[] = []
+  try {
+    const { stdout } = await execFileAsync('where', ['claude'])
+    list = pickClaudePaths(stdout.split(/\r?\n/))
+  } catch {
+    list = []
+  }
+  return [...new Set([...list, 'claude'])]
 }
 
 /**

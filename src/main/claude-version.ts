@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { CliRunner } from './cli-runner'
-import { invalidateClaudePathCache, resolveClaudeCommand } from './pty-manager'
+import { invalidateClaudePathCache, resolveClaudeCandidates } from './pty-manager'
 
 const execFileAsync = promisify(execFile)
 
@@ -9,9 +9,14 @@ const execFileAsync = promisify(execFile)
  * v0.5⑤+5.1 claude CLI 版本信息 / 检查更新 / 未安装下载安装（main 侧）。
  *
  * 版本探测复刻 main.ts 冒烟先例：execFileAsync cmd.exe /c <claudeCmd> --version，
- * 20s 超时、失败不崩（version=''——契约语义「未安装」）。
- * resolveClaudeCommand 失败回退 'claude' 字符串：无 where 命中且 version 探测
- * 也失败 = 未安装（渲染层据 version==='' 显示「未安装」+下载安装入口）。
+ * 失败不崩（version=''——契约语义「未安装」）。
+ * v1.0.6 两项加固（用户报告「明明装了却显示未安装」）：
+ * 1) 多候选回退：resolveClaudeCandidates 返回 where 全命中（npm 垫片、WinGet
+ *    claude.exe…）+ 'claude' PATH 兜底，逐个探测取第一个能跑通 --version 的；
+ * 2) 失败不缓存：冷启动 --version 超 20s（Defender 扫新解压 exe 等）曾被
+ *    永久缓存为「未安装」钉死整个会话——现在只有成功才进 versionInfoCache，
+ *    重开弹窗即重试。
+ * 每候选 8s 超时（实测热跑 ~0.7s；原 20s 单候选在多候选下总时长失控）。
  *
  * 安装为固定模板（编译期常量，不经 runCliCommand 白名单面——评审 R4/T9）：
  * - native：官方安装器（PowerShell 内存执行，不写盘；不加 -ExecutionPolicy Bypass）
@@ -48,6 +53,8 @@ export const NPM_INSTALL_ARGS: readonly string[] = ['/c', 'npm', 'install', '-g'
 const NPM_VIEW_ARGS: readonly string[] = ['/c', 'npm', 'view', '@anthropic-ai/claude-code', 'version']
 
 const PROBE_TIMEOUT_MS = 20_000
+/** v1.0.6 每候选 --version 超时（热跑 ~0.7s；多候选循环下 20s 单值总时长失控） */
+const VERSION_TIMEOUT_MS = 8_000
 
 /** 从版本输出提取 semver（如 "2.1.301 (Claude Code)" → "2.1.301"） */
 export function extractSemver(text: string): string {
@@ -76,17 +83,29 @@ export function invalidateVersionCache(): void {
 /** 当前 claude CLI 版本+实际解析路径；探测失败 version=''（=未安装） */
 export async function getClaudeVersionInfo(): Promise<ClaudeVersionInfo> {
   if (versionInfoCache !== null) return { ...versionInfoCache }
-  const claudeCmd = await resolveClaudeCommand()
+  const candidates = await resolveClaudeCandidates()
   let version = ''
-  try {
-    const { stdout } = await execFileAsync('cmd.exe', ['/c', claudeCmd, '--version'], {
-      timeout: PROBE_TIMEOUT_MS
-    })
-    version = extractSemver(stdout.trim()) // 修剪为纯 semver（与 checkClaudeUpdate 一致；实测修正：原返回 '2.1.301 (Claude Code)' 原文）
-  } catch {
-    version = '' // 失败不崩（未安装/超时/崩溃输出均归一为空）
+  let okPath = candidates[0] ?? 'claude'
+  for (const cand of candidates) {
+    try {
+      const { stdout } = await execFileAsync('cmd.exe', ['/c', cand, '--version'], {
+        timeout: VERSION_TIMEOUT_MS
+      })
+      const v = extractSemver(stdout.trim())
+      if (v !== '') {
+        version = v
+        okPath = cand
+        break
+      }
+    } catch {
+      // 该候选失败（冷启动慢/垫片瞬时失效/超时）→ 试下一个；无 semver 输出同理
+    }
   }
-  versionInfoCache = { version, path: claudeCmd }
+  if (version === '') {
+    // v1.0.6：失败不缓存——重开弹窗即重试（原实现把「未安装」钉死整个会话）
+    return { version, path: okPath }
+  }
+  versionInfoCache = { version, path: okPath }
   return { ...versionInfoCache }
 }
 

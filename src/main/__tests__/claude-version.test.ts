@@ -38,6 +38,10 @@ const state = vi.hoisted(() => {
     FakePty,
     /** execFile 桩响应（每用例重置） */
     claudeCmd: 'C:\\npm-global\\claude.cmd',
+    /** v1.0.6：候选列表覆盖（null → [claudeCmd]） */
+    candidates: null as string[] | null,
+    /** v1.0.6：候选子串命中即让 --version 失败（多候选回退用例） */
+    failVersionFor: '',
     versionOut: '2.1.301 (Claude Code)\n',
     npmOut: '2.1.304\n',
     execFails: false,
@@ -56,7 +60,14 @@ vi.mock('node:child_process', () => ({
       callback(new Error('spawn ENOENT'), undefined)
       return
     }
-    if (args.includes('--version')) callback(null, { stdout: state.versionOut })
+    if (args.includes('--version')) {
+      const cand = String(args[1] ?? '')
+      if (state.failVersionFor !== '' && cand.includes(state.failVersionFor)) {
+        callback(new Error('broken shim'), undefined)
+        return
+      }
+      callback(null, { stdout: state.versionOut })
+    }
     else if (args.join(' ').includes('npm view')) callback(null, { stdout: state.npmOut })
     else callback(null, { stdout: '' })
   })
@@ -70,6 +81,7 @@ vi.mock('../pty-manager', async (importOriginal) => {
   return {
     ...actual,
     resolveClaudeCommand: vi.fn(async () => state.claudeCmd),
+    resolveClaudeCandidates: vi.fn(async () => state.candidates ?? [state.claudeCmd]),
     invalidateClaudePathCache: vi.fn()
   }
 })
@@ -99,6 +111,8 @@ beforeEach(() => {
   state.fakePty.spawns.length = 0
   state.fakePty.instances.length = 0
   state.claudeCmd = 'C:\\npm-global\\claude.cmd'
+  state.candidates = null
+  state.failVersionFor = ''
   state.versionOut = '2.1.301 (Claude Code)\n'
   state.npmOut = '2.1.304\n'
   state.execFails = false
@@ -114,8 +128,8 @@ describe('extractSemver', () => {
   })
 })
 
-describe('getClaudeVersionInfo（cmd.exe 包装 + 失败不崩）', () => {
-  it('cmd.exe /c <claudeCmd> --version（20s 超时）；返回版本与解析路径', async () => {
+describe('getClaudeVersionInfo（cmd.exe 包装 + 失败不崩 + v1.0.6 加固）', () => {
+  it('cmd.exe /c <claudeCmd> --version（每候选 8s 超时）；返回版本与解析路径', async () => {
     const info = await getClaudeVersionInfo()
     expect(
       state.calls.some(
@@ -125,7 +139,7 @@ describe('getClaudeVersionInfo（cmd.exe 包装 + 失败不崩）', () => {
           c.args[0] === '/c' &&
           c.args[1] === 'C:\\npm-global\\claude.cmd' &&
           c.args[2] === '--version' &&
-          (c.opts as { timeout?: number } | undefined)?.timeout === 20_000
+          (c.opts as { timeout?: number } | undefined)?.timeout === 8_000
       )
     ).toBe(true)
     expect(info).toEqual({ version: '2.1.301', path: 'C:\\npm-global\\claude.cmd' })
@@ -137,6 +151,32 @@ describe('getClaudeVersionInfo（cmd.exe 包装 + 失败不崩）', () => {
       version: '',
       path: 'C:\\npm-global\\claude.cmd'
     })
+  })
+
+  it('v1.0.6 失败不缓存：失败后恢复可用的环境，重调即重新探测成功（原实现把「未安装」钉死整个会话）', async () => {
+    state.execFails = true
+    await expect(getClaudeVersionInfo()).resolves.toEqual({ version: '', path: 'C:\\npm-global\\claude.cmd' })
+    state.execFails = false
+    await expect(getClaudeVersionInfo()).resolves.toEqual({
+      version: '2.1.301',
+      path: 'C:\\npm-global\\claude.cmd'
+    })
+  })
+
+  it('v1.0.6 多候选回退：npm 垫片坏 → 逐候选探测，WinGet claude.exe 接管（path=可用者）', async () => {
+    state.candidates = [
+      'C:\\npm-global\\claude.cmd',
+      'C:\\Users\\dev\\AppData\\Local\\Microsoft\\WinGet\\Links\\claude.exe'
+    ]
+    state.failVersionFor = 'npm-global'
+    const info = await getClaudeVersionInfo()
+    expect(info).toEqual({
+      version: '2.1.301',
+      path: 'C:\\Users\\dev\\AppData\\Local\\Microsoft\\WinGet\\Links\\claude.exe'
+    })
+    // 版本探测调了两个候选各一次（第一个失败、第二个成功即止）
+    const versionCalls = state.calls.filter((c) => c.args.includes('--version'))
+    expect(versionCalls).toHaveLength(2)
   })
 })
 

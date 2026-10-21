@@ -6,7 +6,7 @@ import {
   PtyManager,
   buildNewSessionArgs,
   buildResumeArgs,
-  pickClaudePath
+  pickClaudePaths
 } from '../pty-manager'
 
 describe('args builder（精确数组，结构性互斥）', () => {
@@ -41,21 +41,26 @@ describe('args builder（精确数组，结构性互斥）', () => {
   })
 })
 
-describe('pickClaudePath（where claude 多命中优先 npm 的 claude.cmd）', () => {
+describe('pickClaudePaths（v1.0.6 where 多命中 → 有序候选列表）', () => {
   const whereOutput = [
     'C:\\Users\\dev\\AppData\\Roaming\\npm\\claude',
     'C:\\Users\\dev\\AppData\\Roaming\\npm\\claude.cmd',
-    'C:\\Users\\dev\\AppData\\Roaming\\npm\\claude.ps1'
+    'C:\\Users\\dev\\AppData\\Roaming\\npm\\claude.ps1',
+    'C:\\Users\\dev\\AppData\\Local\\Microsoft\\WinGet\\Links\\claude.exe'
   ]
 
-  it('命中 npm claude.cmd', () => {
-    expect(pickClaudePath(whereOutput)).toBe('C:\\Users\\dev\\AppData\\Roaming\\npm\\claude.cmd')
+  it('npm claude.cmd 优先，其余 cmd/exe/bat 按 where 顺序；sh 垫片与 .ps1 过滤', () => {
+    expect(pickClaudePaths(whereOutput)).toEqual([
+      'C:\\Users\\dev\\AppData\\Roaming\\npm\\claude.cmd',
+      'C:\\Users\\dev\\AppData\\Local\\Microsoft\\WinGet\\Links\\claude.exe'
+    ])
   })
 
-  it('无 npm 命中时取任一 claude.cmd/.exe；空/无命中返回 null', () => {
-    expect(pickClaudePath(['D:\\tools\\claude.exe', ''])).toBe('D:\\tools\\claude.exe')
-    expect(pickClaudePath(['', '   '])).toBeNull()
-    expect(pickClaudePath(['C:\\x\\claude.ps1'])).toBeNull()
+  it('无 npm 命中时保持 where 顺序；空/全不可执行返回空数组；重复去重', () => {
+    expect(pickClaudePaths(['D:\\tools\\claude.exe', ''])).toEqual(['D:\\tools\\claude.exe'])
+    expect(pickClaudePaths(['', '   '])).toEqual([])
+    expect(pickClaudePaths(['C:\\x\\claude.ps1'])).toEqual([])
+    expect(pickClaudePaths(['D:\\a\\claude.exe', 'D:\\a\\claude.exe'])).toEqual(['D:\\a\\claude.exe'])
   })
 })
 
