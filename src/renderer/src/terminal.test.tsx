@@ -210,6 +210,88 @@ describe('v0.4.3 焦点管理（选完对话框选项后可正常输入）', () 
   })
 })
 
+describe('v1.0.8 Shift+Enter 换行 / IME 组合缓冲 / 面板搜索', () => {
+  async function openTermWithApi(): Promise<ReturnType<typeof installCwbMock>> {
+    const api = installCwbMock({ projects: [project], tasks: [task] })
+    render(<App />)
+    await waitFor(() =>
+      expect(document.querySelector('li[data-task-id="t-term"]')).toBeDefined()
+    )
+    act(() => {
+      useAppStore.getState().openTask('t-term')
+    })
+    await waitFor(() => expect(terminalCache.get('t-term')).toBeDefined())
+    return api
+  }
+
+  it('Shift+Enter → ptyWrite("\\x1b\\r")（claude /terminal-setup 同款序列）；组合中放行', async () => {
+    const api = await openTermWithApi()
+    const term = terminalCache.get('t-term')!
+    const ta = term.element?.querySelector('textarea') as HTMLTextAreaElement
+    ta.focus()
+    act(() => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }))
+    })
+    await waitFor(() => expect(api.ptyWrite).toHaveBeenCalledWith('t-term', '\x1b\r'))
+
+    // IME 组合中的 Shift+Enter 是选字确认——不得翻译成换行序列
+    const before = vi.mocked(api.ptyWrite).mock.calls.length
+    act(() => {
+      ta.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Enter',
+          shiftKey: true,
+          bubbles: true,
+          isComposing: true
+        })
+      )
+    })
+    await new Promise((r) => setTimeout(r, 80))
+    expect(vi.mocked(api.ptyWrite).mock.calls.length).toBe(before)
+  })
+
+  it('IME 组合缓冲：compositionstart 后 PTY 输出挂起，compositionend 一次 flush', async () => {
+    await openTermWithApi()
+    const term = terminalCache.get('t-term')!
+    const ta = term.element?.querySelector('textarea') as HTMLTextAreaElement
+
+    act(() => {
+      ta.dispatchEvent(new Event('compositionstart', { bubbles: true }))
+      emitTaskData({ taskId: 't-term', data: 'HOLD' })
+    })
+    await new Promise((r) => setTimeout(r, 80))
+    expect(line0(term)).not.toContain('HOLD') // 组合期不渲染——composition 锚点稳定
+
+    act(() => {
+      ta.dispatchEvent(new Event('compositionend', { bubbles: true }))
+    })
+    await waitFor(() => expect(line0(term)).toContain('HOLD')) // 结束后一次 flush，无丢失
+  })
+
+  it('Ctrl+Shift+F 打开面板搜索浮层，Esc 关闭', async () => {
+    await openTermWithApi()
+    const term = terminalCache.get('t-term')!
+    await new Promise<void>((resolve) => term.write('searchable-text', () => resolve()))
+    const ta = term.element?.querySelector('textarea') as HTMLTextAreaElement
+    ta.focus()
+    act(() => {
+      ta.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, shiftKey: true, bubbles: true })
+      )
+    })
+    const input = await screen.findByRole('textbox', { name: '终端搜索' })
+    expect(useAppStore.getState().searchOpen).toBe(true)
+    // 增量搜索：输入即高亮跳转（findNext incremental）
+    fireEvent.change(input, { target: { value: 'searchable' } })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(term.hasSelection()).toBe(true)
+    // Esc 关闭并清装饰
+    fireEvent.keyDown(input, { key: 'Escape' })
+    await waitFor(() => expect(useAppStore.getState().searchOpen).toBe(false))
+    expect(screen.queryByRole('textbox', { name: '终端搜索' })).toBeNull()
+  })
+})
+
 describe('v1.0.2 粘贴/复制（菜单移除后原生加速键不可靠——显式剪贴板路径）', () => {
   it('粘贴键（Ctrl+V/Ctrl+Shift+V/Shift+Insert）读剪贴板写 PTY', async () => {
     installCwbMock({ projects: [project], tasks: [task] })
@@ -262,7 +344,7 @@ describe('v1.0.2 粘贴/复制（菜单移除后原生加速键不可靠——�
   })
 })
 
-describe('v1.0.4 终端右键菜单（选择复制修复——鼠标上报下主要复制路径）', () => {
+describe('v1.0.9 右键智能动作（Windows Terminal 默认语义：无选中=粘贴/有选中=复制；Shift+右键=完整菜单）', () => {
   function openTerm(): void {
     render(<App />)
     act(() => {
@@ -270,40 +352,48 @@ describe('v1.0.4 终端右键菜单（选择复制修复——鼠标上报下主
     })
   }
 
-  it('右键终端 → 菜单含 粘贴/全选/清屏（无选中时无「复制」项）', async () => {
+  it('无选中右键 → 直接粘贴（readText→term.paste→ptyWrite），不弹菜单', async () => {
     installCwbMock({ projects: [project], tasks: [task] })
+    const readText = vi.fn(async () => 'right-click-paste')
+    Object.assign(navigator, { clipboard: { readText, writeText: vi.fn(async () => {}) } })
     openTerm()
     await waitFor(() => expect(terminalCache.get('t-term')).toBeDefined())
     const host = document.querySelector('.term-host-active') as HTMLElement
     fireEvent.contextMenu(host)
-    expect(await screen.findByRole('menu')).toBeDefined()
-    expect(screen.getByRole('menuitem', { name: '粘贴' })).toBeDefined()
-    expect(screen.getByRole('menuitem', { name: '全选' })).toBeDefined()
-    expect(screen.getByRole('menuitem', { name: '清屏' })).toBeDefined()
-    expect(screen.queryByRole('menuitem', { name: '复制' })).toBeNull()
+    await waitFor(() => expect(readText).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(window.cwb.ptyWrite).toHaveBeenCalledWith('t-term', 'right-click-paste')
+    )
+    expect(screen.queryByRole('menu')).toBeNull() // 智能动作直达，无菜单
   })
 
-  it('全选 → 有选中 → 再右键出现「复制」→ 点击写入剪贴板', async () => {
+  it('有选中右键 → 直接复制+清选中+聚焦；Shift+右键才出完整菜单', async () => {
     installCwbMock({ projects: [project], tasks: [task] })
     const writeText = vi.fn(async () => {})
-    Object.assign(navigator, { clipboard: { writeText, readText: vi.fn(async () => '') } })
+    Object.assign(navigator, { clipboard: { readText: vi.fn(async () => ''), writeText } })
     openTerm()
     await waitFor(() => expect(terminalCache.get('t-term')).toBeDefined())
     const term = terminalCache.get('t-term')!
-    await new Promise<void>((resolve) => term.write('hello-select', () => resolve()))
+    await new Promise<void>((resolve) => term.write('hello-sel', () => resolve()))
     act(() => {
       term.selectAll()
     })
     const host = document.querySelector('.term-host-active') as HTMLElement
     fireEvent.contextMenu(host)
-    const copy = await screen.findByRole('menuitem', { name: '复制' })
-    fireEvent.click(copy)
     await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('hello-select'))
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('hello-sel'))
     )
+    expect(term.hasSelection()).toBe(false) // 复制后清选中——下一次右键即粘贴
+    expect(screen.queryByRole('menu')).toBeNull()
+    // Shift+右键保留完整菜单（全选/清屏等低频项）
+    fireEvent.contextMenu(host, { shiftKey: true })
+    expect(await screen.findByRole('menu')).toBeDefined()
+    expect(screen.getByRole('menuitem', { name: '粘贴' })).toBeDefined()
+    expect(screen.getByRole('menuitem', { name: '全选' })).toBeDefined()
+    expect(screen.getByRole('menuitem', { name: '清屏' })).toBeDefined()
   })
 
-  it('菜单「粘贴」读剪贴板写 PTY；「清屏」调 term.clear', async () => {
+  it('Shift+右键菜单：「粘贴」读剪贴板写 PTY 并回焦终端（光标回位）；「清屏」调 term.clear', async () => {
     installCwbMock({ projects: [project], tasks: [task] })
     Object.assign(navigator, {
       clipboard: { readText: vi.fn(async () => 'menu-paste'), writeText: vi.fn(async () => {}) }
@@ -312,11 +402,13 @@ describe('v1.0.4 终端右键菜单（选择复制修复——鼠标上报下主
     await waitFor(() => expect(terminalCache.get('t-term')).toBeDefined())
     const term = terminalCache.get('t-term')!
     const clearSpy = vi.spyOn(term, 'clear')
+    const focusSpy = vi.spyOn(term, 'focus')
     const host = document.querySelector('.term-host-active') as HTMLElement
-    fireEvent.contextMenu(host)
+    fireEvent.contextMenu(host, { shiftKey: true })
     fireEvent.click(await screen.findByRole('menuitem', { name: '粘贴' }))
     await waitFor(() => expect(window.cwb.ptyWrite).toHaveBeenCalledWith('t-term', 'menu-paste'))
-    fireEvent.contextMenu(host)
+    await waitFor(() => expect(focusSpy).toHaveBeenCalled()) // 粘贴完光标自动回位
+    fireEvent.contextMenu(host, { shiftKey: true })
     fireEvent.click(await screen.findByRole('menuitem', { name: '清屏' }))
     await waitFor(() => expect(clearSpy).toHaveBeenCalled())
   })

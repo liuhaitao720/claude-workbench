@@ -4,10 +4,38 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   PtyManager,
+  buildClaudeEnv,
   buildNewSessionArgs,
   buildResumeArgs,
   pickClaudePaths
 } from '../pty-manager'
+
+describe('buildClaudeEnv（v1.0.8 终端保真环境）', () => {
+  it('TERM=xterm-256color + COLORTERM=truecolor（缺 COLORTERM 时 CLI 降级 256 色）', () => {
+    const env = buildClaudeEnv()
+    expect(env['TERM']).toBe('xterm-256color')
+    expect(env['COLORTERM']).toBe('truecolor')
+  })
+
+  it('剥离父级 claude 会话身份标记（CLAUDECODE/SESSION_ID 族），偏好类保留', () => {
+    const prev = process.env['CLAUDECODE']
+    const prevModel = process.env['ANTHROPIC_MODEL']
+    process.env['CLAUDECODE'] = '1'
+    process.env['CLAUDE_CODE_SESSION_ID'] = 'parent-session'
+    process.env['ANTHROPIC_MODEL'] = 'claude-x'
+    try {
+      const env = buildClaudeEnv()
+      expect(env['CLAUDECODE']).toBeUndefined()
+      expect(env['CLAUDE_CODE_SESSION_ID']).toBeUndefined()
+      expect(env['ANTHROPIC_MODEL']).toBe('claude-x')
+    } finally {
+      if (prev === undefined) delete process.env['CLAUDECODE']
+      else process.env['CLAUDECODE'] = prev
+      if (prevModel === undefined) delete process.env['ANTHROPIC_MODEL']
+      else process.env['ANTHROPIC_MODEL'] = prevModel
+    }
+  })
+})
 
 describe('args builder（精确数组，结构性互斥）', () => {
   it('buildNewSessionArgs → ["--session-id", uuid, "-n", name]', () => {

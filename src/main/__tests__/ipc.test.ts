@@ -18,6 +18,7 @@ const h = vi.hoisted(() => {
     onCalls: [] as Array<[string, (...args: unknown[]) => unknown]>,
     sent: [] as Array<{ channel: string; payload: unknown }>,
     dialogResult: { canceled: false, filePaths: [] as string[] },
+    openExternalCalls: [] as string[],
     ptyInstances: [] as Array<{
       spawnCalls: Array<{ taskId: string; args: string[]; cwd: string }>
       writes: Array<{ taskId: string; data: string }>
@@ -30,8 +31,18 @@ const h = vi.hoisted(() => {
 })
 
 vi.mock('electron', () => ({
-  app: { getPath: (_name: string) => h.tempDir },
+  app: {
+    getPath: (_name: string) => h.tempDir,
+    getVersion: () => '1.1.0-test',
+    isPackaged: false,
+    quit: vi.fn()
+  },
   dialog: { showOpenDialog: vi.fn(async () => h.dialogResult) },
+  shell: {
+    openExternal: vi.fn(async (url: string) => {
+      h.openExternalCalls.push(url)
+    })
+  },
   BrowserWindow: {
     getAllWindows: () => [
       { webContents: { send: (channel: string, payload: unknown) => h.sent.push({ channel, payload }) } }
@@ -85,7 +96,7 @@ vi.mock('../pty-manager', async (importOriginal) => {
   return { ...actual, PtyManager: FakePtyManager }
 })
 
-import { registerIpcHandlers } from '../ipc'
+import { isSafeExternalUrl, registerIpcHandlers } from '../ipc'
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   const entry = h.handleCalls.find(([c]) => c === channel)
@@ -190,6 +201,32 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
 
     h.dialogResult = { canceled: true, filePaths: [] }
     expect(await invoke<string | null>(IpcChannels.DialogPickDirectory)).toBeNull()
+  })
+
+  // ── v1.0.8 外部链接出口（终端链接 → 系统浏览器）──────────────────────
+  it('isSafeExternalUrl：仅 http/https 放行；javascript:/file:/盘符路径/空/超长拒绝', () => {
+    expect(isSafeExternalUrl('https://claude.ai/docs')).toBe(true)
+    expect(isSafeExternalUrl('http://127.0.0.1:8080/x')).toBe(true)
+    for (const bad of [
+      'javascript:alert(1)', // 终端输出属不可信内容——OSC 8 可拼脚本协议
+      'file:///C:/Windows/win.ini',
+      'D:\\SourceCode\\agent', // 无协议的盘符路径（new URL 抛错）
+      '',
+      'ftp://example.com',
+      'x'.repeat(3000)
+    ]) {
+      expect(isSafeExternalUrl(bad)).toBe(false)
+    }
+  })
+
+  it('ShellOpenExternal：白名单 URL 交 shell.openExternal；拒绝的只返回 false 不抛错', async () => {
+    h.openExternalCalls.length = 0
+    expect(await invoke<boolean>(IpcChannels.ShellOpenExternal, 'https://example.com/docs')).toBe(true)
+    expect(h.openExternalCalls).toEqual(['https://example.com/docs'])
+
+    expect(await invoke<boolean>(IpcChannels.ShellOpenExternal, 'javascript:alert(1)')).toBe(false)
+    expect(await invoke<boolean>(IpcChannels.ShellOpenExternal, 'not a url')).toBe(false)
+    expect(h.openExternalCalls).toHaveLength(1) // 拒绝路径不触系统浏览器
   })
 
   it('createTask(shared)：新会话参数、cwd=项目根、running 落档并广播 TaskUpdate', async () => {

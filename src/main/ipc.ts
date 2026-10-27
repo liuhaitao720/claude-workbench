@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { IpcChannels } from '../shared/ipc-channels'
@@ -12,7 +12,8 @@ import type {
   SkillInfo,
   TaskRecord
 } from '../shared/types'
-import { checkClaudeUpdate, getClaudeVersionInfo, installClaudeCli } from './claude-version'
+import { checkClaudeUpdate, fetchClaudeChangelog, getClaudeVersionInfo, installClaudeCli } from './claude-version'
+import { AppUpdater } from './app-updater'
 import { CliRunner } from './cli-runner'
 import { isGitRepo, worktreeAdd, worktreeRemove } from './isolation'
 import { AppSettingsStore } from './settings-store'
@@ -30,6 +31,22 @@ function broadcast(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel, payload)
   }
+}
+
+/**
+ * v1.0.8 外部链接协议白名单（纯函数，单测覆盖）：仅 http/https 放行。
+ * 终端输出（claude 回显、文件内容）属不可信输入——OSC 8 / WebLinks 拼出的链接
+ * 可能是 javascript:、file: 或磁盘路径，shell.openExternal 一律拒绝非白名单协议。
+ */
+export function isSafeExternalUrl(raw: string): boolean {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 2048) return false
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    return false
+  }
+  return parsed.protocol === 'http:' || parsed.protocol === 'https:'
 }
 
 /**
@@ -71,6 +88,8 @@ export interface AppContext {
   readonly appSettings: AppSettingsStore
   /** v0.9.4 本机等宽字体扫描（缓存） */
   readonly fontScanner: FontScanner
+  /** v1.1.0 应用自更新（检测/下载校验/退出替换；进度经 cwb:event:app-update-progress） */
+  readonly appUpdate: AppUpdater
 }
 
 export interface AppContextOptions {
@@ -126,6 +145,17 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
 
   const appSettings = new AppSettingsStore(settingsFile)
   const fontScanner = new FontScanner()
+  // v1.1.0 应用自更新：落点 userData/updates；进度广播全部窗口（quit 走 app.quit 正常路径
+  // ——before-quit 杀 PTY 树释放文件锁后更新器才动手，见 app-updater.ts 头注）
+  const appUpdate = new AppUpdater({
+    appVersion: app.getVersion(),
+    isPackaged: app.isPackaged,
+    execPath: process.execPath,
+    updateDir: join(baseDir, 'updates'),
+    tempDir: app.getPath('temp'),
+    onProgress: (e) => broadcast(IpcChannels.AppUpdateProgress, e),
+    quit: () => app.quit()
+  })
   const activity = startTaskActivityServer({
     settingsDir,
     onActivity: (e) => {
@@ -350,7 +380,8 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     pickDirectory,
     importTasksFromSessions,
     appSettings,
-    fontScanner
+    fontScanner,
+    appUpdate
   }
 }
 
@@ -404,6 +435,27 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   // v0.5④N webhook 通知
   // v0.9 应用设置
   ipcMain.handle(IpcChannels.FontsInstalled, () => ctx.fontScanner.getInstalledMonoFonts())
+  // v1.1.0 应用自更新（检测/下载/退出替换；进度走 EVENT AppUpdateProgress 广播）
+  ipcMain.handle(IpcChannels.AppUpdateCheck, () => ctx.appUpdate.check())
+  ipcMain.handle(IpcChannels.AppUpdateDownload, () => ctx.appUpdate.download())
+  ipcMain.handle(IpcChannels.AppUpdateInstall, () => ctx.appUpdate.install())
+  // v1.1.0 claude CLI 更新说明（官方 CHANGELOG 区间；参数非法只报错不抛）
+  ipcMain.handle(IpcChannels.ClaudeChangelogGet, (_e, current: unknown, latest: unknown) => {
+    const cur = typeof current === 'string' ? current : ''
+    const lat = typeof latest === 'string' ? latest : ''
+    if (cur === '' || lat === '') return { notes: [], error: '参数缺失' }
+    return fetchClaudeChangelog(cur, lat)
+  })
+  // v1.0.8 外部链接：白名单校验后交系统浏览器；拒绝（含 openExternal 失败）只返回 false 不抛错
+  ipcMain.handle(IpcChannels.ShellOpenExternal, async (_e, url: string) => {
+    if (!isSafeExternalUrl(url)) return false
+    try {
+      await shell.openExternal(url)
+      return true
+    } catch {
+      return false
+    }
+  })
   ipcMain.handle(IpcChannels.SettingsGet, () => ctx.appSettings.get())
   ipcMain.handle(IpcChannels.SettingsSet, (_e, patch: Partial<AppSettings>) => ctx.appSettings.set(patch))
   ipcMain.handle(IpcChannels.NotifyGet, () => ctx.notify.getConfig())

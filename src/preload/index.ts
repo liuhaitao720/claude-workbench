@@ -1,6 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  AppChangelogEntry,
   AppSettings,
+  AppUpdateInfo,
+  AppUpdateProgressEvent,
   CWBApi,
   CliOutputEvent,
   NotifyConfig,
@@ -92,6 +95,26 @@ const api: CWBApi = {
   getAppSettings: () => ipcRenderer.invoke(IpcChannels.SettingsGet) as Promise<AppSettings>,
   getInstalledMonoFonts: () =>
     ipcRenderer.invoke(IpcChannels.FontsInstalled) as Promise<string[]>,
+  // v1.0.8 外部链接（终端链接 → 系统浏览器，main 协议白名单）
+  openExternal: (url) =>
+    ipcRenderer.invoke(IpcChannels.ShellOpenExternal, url) as Promise<boolean>,
+  // v1.1.0 应用自更新
+  checkAppUpdate: () => ipcRenderer.invoke(IpcChannels.AppUpdateCheck) as Promise<AppUpdateInfo>,
+  downloadAppUpdate: () =>
+    ipcRenderer.invoke(IpcChannels.AppUpdateDownload) as Promise<{ ok: boolean; error?: string }>,
+  installAppUpdate: () =>
+    ipcRenderer.invoke(IpcChannels.AppUpdateInstall) as Promise<{ ok: boolean; error?: string }>,
+  onAppUpdateProgress: (cb) => {
+    const listener = (_e: unknown, ev: AppUpdateProgressEvent): void => cb(ev)
+    ipcRenderer.on(IpcChannels.AppUpdateProgress, listener as never)
+    return () => ipcRenderer.removeListener(IpcChannels.AppUpdateProgress, listener as never)
+  },
+  // v1.1.0 claude CLI 更新说明（检查更新结果 → 官方 CHANGELOG 区间）
+  getClaudeChangelog: (current, latest) =>
+    ipcRenderer.invoke(IpcChannels.ClaudeChangelogGet, current, latest) as Promise<{
+      notes: AppChangelogEntry[]
+      error?: string
+    }>,
   importTasksFromSessions: (projectId) =>
     ipcRenderer.invoke(IpcChannels.TasksImportFromSessions, projectId) as Promise<TaskRecord[]>,
   setAppSettings: (patch) =>

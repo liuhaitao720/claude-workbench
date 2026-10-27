@@ -905,6 +905,125 @@ button {
   -webkit-font-smoothing: auto;
 }
 
+/* ── v1.0.8 IME 组合视图主题化：xterm 自带 background:#000/color:#FFF，浅色终端下
+   组合文字是黑底白字闪现。变量由 TerminalPanel.applyTermTheme 注入（跟随终端主题，
+   与 UI 主题解耦——termFollowsTheme 关闭时终端恒深底）── */
+.terminal-panel .xterm .composition-view {
+  background: var(--cwb-term-bg, #000);
+  color: var(--cwb-term-fg, #fff);
+}
+
+/* ── v1.0.8 面板内搜索浮层（VS Code 惯例：Ctrl+Shift+F 开、Esc 关）── */
+.term-search {
+  position: absolute;
+  top: 10px;
+  right: 18px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--bg-dialog);
+  border: 1px solid var(--border-1);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  z-index: 20;
+}
+
+.term-search-input {
+  width: 190px;
+  padding: 3px 8px;
+  font-size: 12px;
+  background: var(--bg-input);
+  color: var(--text-1);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  outline: none;
+}
+
+.term-search-input:focus {
+  border-color: var(--accent);
+}
+
+.term-search-count {
+  min-width: 44px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── v1.1.0 应用更新 ── */
+
+/* 侧栏版本按钮「有新版本」角标 */
+.ver-update-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+  vertical-align: middle;
+}
+
+/* 下载进度条（原生 progress 主题化） */
+.upd-progress {
+  width: 100%;
+  height: 6px;
+  margin: 6px 0;
+  appearance: none;
+}
+
+.upd-progress::-webkit-progress-bar {
+  background: var(--bg-input);
+  border-radius: 3px;
+}
+
+.upd-progress::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+
+/* 更新说明（CHANGELOG 展示区：限高滚动防长清单撑爆弹窗） */
+.upd-notes {
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+
+.upd-notes-ver {
+  margin-bottom: 10px;
+}
+
+.upd-notes-ver:last-child {
+  margin-bottom: 0;
+}
+
+.upd-notes-title {
+  margin: 0 0 4px;
+  font-weight: 600;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.upd-notes ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-2);
+}
+
+.upd-notes li {
+  margin: 3px 0;
+  line-height: 1.5;
+  font-size: 12px;
+  word-break: break-word;
+}
+
 /* ── v0.5①③⑤ About / Skills 弹窗通用 ── */
 
 /* 内容多可滚动（About 版本+更新+通知+许可；Skills 列表+双导入通道） */

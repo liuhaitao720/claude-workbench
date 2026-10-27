@@ -373,7 +373,7 @@ const h = vi.hoisted(() => {
 })
 
 vi.mock('electron', () => ({
-  app: { getPath: (_name: string) => h.tempDir },
+  app: { getPath: (_name: string) => h.tempDir, getVersion: () => '1.1.0-test', isPackaged: false, quit: vi.fn() },
   dialog: { showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })) },
   BrowserWindow: {
     getAllWindows: () => [

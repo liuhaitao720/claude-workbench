@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type {
+  AppUpdateInfo,
   CreateTaskOptions,
   ProjectRecord,
   PtyDataEvent,
@@ -75,6 +76,12 @@ interface AppState {
   aboutOpen: boolean
   skillsOpen: boolean
   settingsOpen: boolean
+  /** v1.0.8 面板内搜索浮层（作用于 activeTaskId 终端） */
+  searchOpen: boolean
+
+  /** v1.1.0 应用更新检查结果（启动静默检查/手动检查落地；侧栏版本按钮角标消费） */
+  appUpdateInfo: AppUpdateInfo | null
+  setAppUpdateInfo: (info: AppUpdateInfo | null) => void
 
   /** v0.5.3 主题：三态偏好（持久化）+ 解析后的生效值（system 跟随时随 OS 切换刷新） */
   theme: Theme
@@ -115,6 +122,9 @@ interface AppState {
   closeSkills: () => void
   openSettings: () => void
   closeSettings: () => void
+  /** v1.0.8 面板内搜索浮层（作用于当前活跃终端；切换 tab 自动关） */
+  openSearch: () => void
+  closeSearch: () => void
 }
 
 /** openTaskAutoResume 的 2s 节流表（防连击重复 resume） */
@@ -139,6 +149,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   aboutOpen: false,
   skillsOpen: false,
   settingsOpen: false,
+  searchOpen: false,
+  appUpdateInfo: null,
   theme: initialTheme,
   effectiveTheme: initialEffective,
   termFollowsTheme: loadTermFollowsTheme(),
@@ -334,7 +346,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
   openSkills: () => set({ skillsOpen: true }),
   closeSkills: () => set({ skillsOpen: false }),
   openSettings: () => set({ settingsOpen: true }),
-  closeSettings: () => set({ settingsOpen: false })
+  closeSettings: () => set({ settingsOpen: false }),
+  openSearch: () => set({ searchOpen: true }),
+  closeSearch: () => set({ searchOpen: false }),
+  setAppUpdateInfo: (info) => set({ appUpdateInfo: info })
 }))
 
 // v0.5.3 系统主题切换：偏好为 system 时重算 effectiveTheme 并刷 DOM；

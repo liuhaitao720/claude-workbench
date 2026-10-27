@@ -45,30 +45,62 @@ const state = vi.hoisted(() => {
     versionOut: '2.1.301 (Claude Code)\n',
     npmOut: '2.1.304\n',
     execFails: false,
+    /** v1.1.0：模拟「输出已到但 cmd 壳不退出」（本机实测 1/4 概率） */
+    hangAfterOutput: false,
+    /** v1.1.0：假 spawn 调用记录 + 被定点杀树的 pid */
+    spawnCalls: [] as Array<{ cmd: string; args: readonly string[]; opts: unknown }>,
+    killedPids: [] as number[],
+    execFileCalls: [] as Array<{ cmd: string; args: readonly string[]; opts: unknown }>,
     calls: [] as Array<{ cmd: string; args: readonly string[]; opts: unknown }>
   }
 })
 
 vi.mock('node:child_process', () => ({
+  /** v1.1.0 版本探测改用 spawn 流式读（拿到输出即收尾，不等壳退出） */
+  spawn: vi.fn((cmd: string, args: readonly string[], opts: unknown) => {
+    state.spawnCalls.push({ cmd, args, opts })
+    const cand = String(args[1] ?? '')
+    const fail = state.execFails || (state.failVersionFor !== '' && cand.includes(state.failVersionFor))
+    const stdoutCbs: Array<(d: Buffer) => void> = []
+    const closeCbs: Array<() => void> = []
+    const errorCbs: Array<() => void> = []
+    const child = {
+      pid: 4242,
+      stdout: { on: (_ev: string, cb: (d: Buffer) => void) => stdoutCbs.push(cb) },
+      stderr: { on: () => {} },
+      on: (ev: string, cb: () => void) => {
+        if (ev === 'close') closeCbs.push(cb)
+        if (ev === 'error') errorCbs.push(cb)
+      }
+    }
+    setTimeout(() => {
+      if (fail) {
+        for (const cb of errorCbs) cb()
+        for (const cb of closeCbs) cb()
+        return
+      }
+      const out = Buffer.from(state.versionOut)
+      for (const cb of stdoutCbs) cb(out)
+      // hangAfterOutput=true 模拟 cmd 壳拿到输出后不退出（真实故障场景）
+      if (!state.hangAfterOutput) for (const cb of closeCbs) cb()
+    }, 0)
+    return child
+  }),
+  execFileSync: vi.fn((_cmd: string, args: readonly string[]) => {
+    state.killedPids.push(Number(args[1]))
+  }),
   execFile: vi.fn((cmd: string, args: readonly string[], opts: unknown, cb: unknown) => {
     const callback = (typeof opts === 'function' ? opts : cb) as (
       err: Error | null,
       result?: { stdout: string }
     ) => void
     state.calls.push({ cmd, args, opts })
+    state.execFileCalls.push({ cmd, args, opts })
     if (state.execFails) {
       callback(new Error('spawn ENOENT'), undefined)
       return
     }
-    if (args.includes('--version')) {
-      const cand = String(args[1] ?? '')
-      if (state.failVersionFor !== '' && cand.includes(state.failVersionFor)) {
-        callback(new Error('broken shim'), undefined)
-        return
-      }
-      callback(null, { stdout: state.versionOut })
-    }
-    else if (args.join(' ').includes('npm view')) callback(null, { stdout: state.npmOut })
+    if (args.join(' ').includes('npm view')) callback(null, { stdout: state.npmOut })
     else callback(null, { stdout: '' })
   })
 }))
@@ -91,8 +123,10 @@ import {
   NATIVE_INSTALL_FILE,
   NPM_INSTALL_ARGS,
   NPM_INSTALL_FILE,
+  atomToEntries,
   checkClaudeUpdate,
   extractSemver,
+  fetchClaudeChangelog,
   fetchLatestFromRegistry,
   getClaudeVersionInfo,
   installClaudeCli,
@@ -116,6 +150,10 @@ beforeEach(() => {
   state.versionOut = '2.1.301 (Claude Code)\n'
   state.npmOut = '2.1.304\n'
   state.execFails = false
+  state.hangAfterOutput = false
+  state.spawnCalls.length = 0
+  state.killedPids.length = 0
+  state.execFileCalls.length = 0
   vi.mocked(invalidateClaudePathCache).mockClear()
   invalidateVersionCache() // v1.0.1：版本缓存不跨用例泄漏
 })
@@ -128,26 +166,29 @@ describe('extractSemver', () => {
   })
 })
 
-describe('getClaudeVersionInfo（cmd.exe 包装 + 失败不崩 + v1.0.6 加固）', () => {
-  it('cmd.exe /c <claudeCmd> --version（每候选 8s 超时）；返回版本与解析路径', async () => {
-    const info = await getClaudeVersionInfo()
-    expect(
-      state.calls.some(
-        (c) =>
-          c.cmd === 'cmd.exe' &&
-          c.args.length === 3 &&
-          c.args[0] === '/c' &&
-          c.args[1] === 'C:\\npm-global\\claude.cmd' &&
-          c.args[2] === '--version' &&
-          (c.opts as { timeout?: number } | undefined)?.timeout === 8_000
-      )
-    ).toBe(true)
+describe('getClaudeVersionInfo（v1.1.0：spawn 流式探测，拿到输即收尾）', () => {
+  const fast = { quietMs: 5, timeoutMs: 500 }
+
+  it('cmd.exe /c <claudeCmd> --version（stdio stdin=ignore）；返回版本与解析路径', async () => {
+    const info = await getClaudeVersionInfo(fast)
+    const call = state.spawnCalls.find((c) => c.args[2] === '--version')
+    expect(call).toMatchObject({ cmd: 'cmd.exe' })
+    expect(call?.args).toEqual(['/c', 'C:\\npm-global\\claude.cmd', '--version'])
+    expect((call?.opts as { stdio?: string[] }).stdio?.[0]).toBe('ignore')
     expect(info).toEqual({ version: '2.1.301', path: 'C:\\npm-global\\claude.cmd' })
+  })
+
+  it('v1.1.0 核心回归：输出已到但 cmd 壳不退出 → 仍判定成功并定点杀树', async () => {
+    // 真实故障场景（本机实测 1/4 概率）：版本串 ~160ms 已到，cmd 壳残留不退出
+    state.hangAfterOutput = true
+    const info = await getClaudeVersionInfo(fast)
+    expect(info).toEqual({ version: '2.1.301', path: 'C:\\npm-global\\claude.cmd' })
+    expect(state.killedPids).toEqual([4242]) // 按记录的 pid 定点杀，不枚举进程
   })
 
   it("探测失败（未安装/超时/非零退出）→ version='' 不崩（契约：空=未安装）", async () => {
     state.execFails = true
-    await expect(getClaudeVersionInfo()).resolves.toEqual({
+    await expect(getClaudeVersionInfo(fast)).resolves.toEqual({
       version: '',
       path: 'C:\\npm-global\\claude.cmd'
     })
@@ -155,9 +196,9 @@ describe('getClaudeVersionInfo（cmd.exe 包装 + 失败不崩 + v1.0.6 加固�
 
   it('v1.0.6 失败不缓存：失败后恢复可用的环境，重调即重新探测成功（原实现把「未安装」钉死整个会话）', async () => {
     state.execFails = true
-    await expect(getClaudeVersionInfo()).resolves.toEqual({ version: '', path: 'C:\\npm-global\\claude.cmd' })
+    await expect(getClaudeVersionInfo(fast)).resolves.toEqual({ version: '', path: 'C:\\npm-global\\claude.cmd' })
     state.execFails = false
-    await expect(getClaudeVersionInfo()).resolves.toEqual({
+    await expect(getClaudeVersionInfo(fast)).resolves.toEqual({
       version: '2.1.301',
       path: 'C:\\npm-global\\claude.cmd'
     })
@@ -169,14 +210,13 @@ describe('getClaudeVersionInfo（cmd.exe 包装 + 失败不崩 + v1.0.6 加固�
       'C:\\Users\\dev\\AppData\\Local\\Microsoft\\WinGet\\Links\\claude.exe'
     ]
     state.failVersionFor = 'npm-global'
-    const info = await getClaudeVersionInfo()
+    const info = await getClaudeVersionInfo(fast)
     expect(info).toEqual({
       version: '2.1.301',
       path: 'C:\\Users\\dev\\AppData\\Local\\Microsoft\\WinGet\\Links\\claude.exe'
     })
     // 版本探测调了两个候选各一次（第一个失败、第二个成功即止）
-    const versionCalls = state.calls.filter((c) => c.args.includes('--version'))
-    expect(versionCalls).toHaveLength(2)
+    expect(state.spawnCalls).toHaveLength(2)
   })
 })
 
@@ -312,5 +352,86 @@ describe('v1.0.1 检查更新提速（registry HTTP 直连优先，npm view 兜�
     const elapsed = Date.now() - t0
     expect(latest).toMatch(/^\d+\.\d+\.\d+$/)
     expect(elapsed).toBeLessThan(10_000) // 网络余量断言（本机实测 0.4s）
+  })
+})
+
+describe('v1.1.0 claude CLI 更新说明（CHANGELOG 区间 + atom 兜底）', () => {
+  const MD = `# Changelog
+
+## 2.1.312
+
+- 新增功能甲
+- 修复乙
+
+## 2.1.311
+
+- 中版本条目
+
+## 2.1.310
+
+- 旧版本（区间外）
+
+## 2.1.309
+
+- 当前版本（不展示）
+`
+
+  it('fetchClaudeChangelog：raw CHANGELOG（Range 头部请求）解析出 current→latest 区间', async () => {
+    const calls: Array<{ url: string; range?: string }> = []
+    const fake = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(url),
+        range: (init?.headers as Record<string, string> | undefined)?.['Range']
+      })
+      return new Response(MD, { status: 206 })
+    })
+    const r = await fetchClaudeChangelog('2.1.309', '2.1.312', fake as unknown as typeof fetch)
+    expect(r.error).toBeUndefined()
+    expect(r.notes.map((n) => n.version)).toEqual(['2.1.312', '2.1.311', '2.1.310'])
+    // Range 头部限制传输量（全量 CHANGELOG ~1.1MB）
+    expect(calls[0].range).toBe('bytes=0-262143')
+    expect(calls[0].url).toContain('anthropics/claude-code')
+  })
+
+  it('atomToEntries：HTML 实体解转义 + <li> 提取 + 区间过滤（raw 域被拦时的兜底）', () => {
+    const xml = `<feed>
+<entry><title>v2.1.312</title><content type="html">&lt;h2&gt;What&#39;s changed&lt;/h2&gt;&lt;ul&gt;&lt;li&gt;Added &lt;code&gt;--flag&lt;/code&gt; thing&lt;/li&gt;&lt;li&gt;Fixed bug &amp;amp; crash&lt;/li&gt;&lt;/ul&gt;</content></entry>
+<entry><title>v2.1.309</title><content type="html">&lt;ul&gt;&lt;li&gt;当前版本条目不展示&lt;/li&gt;&lt;/ul&gt;</content></entry>
+</feed>`
+    const out = atomToEntries(xml, '2.1.309', '2.1.312')
+    expect(out).toEqual([
+      { version: '2.1.312', items: ['Added --flag thing', 'Fixed bug & crash'] }
+    ])
+  })
+
+  it('双路都失败 → notes 空 + error 含两段原因（不抛错）', async () => {
+    const dead = vi.fn(async () => {
+      throw new Error('ENOTFOUND')
+    })
+    const r = await fetchClaudeChangelog('2.1.309', '2.1.312', dead as unknown as typeof fetch)
+    expect(r.notes).toEqual([])
+    expect(r.error).toContain('ENOTFOUND')
+    expect(r.error).toContain('atom 兜底')
+  })
+
+  it('raw 失败但 atom 成功 → 走 atom 分支', async () => {
+    const fake = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('raw.githubusercontent')) return new Response('', { status: 403 })
+      return new Response(
+        `<feed><entry><title>v2.1.312</title><content type="html">&lt;ul&gt;&lt;li&gt;atom 条目&lt;/li&gt;&lt;/ul&gt;</content></entry></feed>`,
+        { status: 200 }
+      )
+    })
+    const r = await fetchClaudeChangelog('2.1.309', '2.1.312', fake as unknown as typeof fetch)
+    expect(r.notes).toEqual([{ version: '2.1.312', items: ['atom 条目'] }])
+  })
+
+  it('真实网络：raw CHANGELOG Range 请求可取到最新版本段（本机联网实测）', { timeout: 20_000 }, async () => {
+    // 锚定语义要求 to 版本在文件里存在——用 registry 真实 latest 作锚
+    const latest = await fetchLatestFromRegistry()
+    const r = await fetchClaudeChangelog('2.1.300', latest)
+    expect(r.notes.length).toBeGreaterThan(0)
+    expect(r.notes[0].version).toBe(latest)
+    expect(r.notes[0].items.length).toBeGreaterThan(0)
   })
 })

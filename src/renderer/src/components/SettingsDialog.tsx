@@ -6,6 +6,8 @@ import { CliOutputView } from './CliOutputView'
 import { changeFontFamily, changeFontSize } from './TerminalPanel'
 import { FONT_FAMILY_WHITELIST, loadFontFamily } from '../font-family'
 import { FONT_SIZE_MAX, FONT_SIZE_MIN, clampFontSize, loadFontSize } from '../font-size'
+import { APP_VERSION } from '../app-info'
+import type { AppChangelogEntry, AppUpdateInfo, AppUpdateProgressEvent } from '../../../shared/types'
 
 /** 5.1 安装方式展示模板（执行走 installClaudeCli 固定契约法，不经自由命令面；
  * spec R5：执行前完整展示命令 + 二次确认）——迁自 AboutDialog */
@@ -21,6 +23,7 @@ const SETTINGS_SECTIONS = [
   { id: 'terminal', label: '终端' },
   { id: 'notify', label: '通知' },
   { id: 'cli', label: 'claude CLI' },
+  { id: 'update', label: '应用更新' },
   { id: 'startup', label: '启动' }
 ] as const
 
@@ -61,20 +64,68 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     upToDate: boolean
     degraded?: boolean
   } | null>(null)
+  // v1.1.0 claude CLI 更新说明（checkUpdate 成功且非 degraded 时自动拉取）
+  const [cliNotes, setCliNotes] = useState<{ notes: AppChangelogEntry[]; error?: string } | null>(null)
   const [updateError, setUpdateError] = useState('')
   const [checking, setChecking] = useState(false)
   const [installMethod, setInstallMethod] = useState<'native' | 'npm'>('native')
   const [installError, setInstallError] = useState('')
   /** runCliCommand/installClaudeCli 的当前命令（同一时刻至多一个，共用输出区） */
   const [commandId, setCommandId] = useState<string | null>(null)
+  /** v1.1.0：点击更新/安装后立即显示「正在执行」——原实现要等首个输出帧才出现
+   *  输出区，用户以为点击没生效（claude update 冷启动 1~3s 无输出） */
+  const [starting, setStarting] = useState(false)
   const [notifyUrl, setNotifyUrl] = useState('')
   const [notifyEnabled, setNotifyEnabled] = useState(false)
   const [notifyMsg, setNotifyMsg] = useState('')
   const [notifyTest, setNotifyTest] = useState<{ ok: boolean; error?: string } | null>(null)
   const [closeToTray, setCloseToTray] = useState(true)
   const [launchAtLogin, setLaunchAtLogin] = useState(false)
+  // v1.1.0 应用自更新：检查结果（初值取启动静默检查落库值）/进度/已就绪标记
+  const [appUpd, setAppUpd] = useState<AppUpdateInfo | null>(() => useAppStore.getState().appUpdateInfo)
+  const [appUpdChecking, setAppUpdChecking] = useState(false)
+  const [appUpdError, setAppUpdError] = useState('')
+  const [appUpdProgress, setAppUpdProgress] = useState<AppUpdateProgressEvent | null>(null)
+  const [appUpdReady, setAppUpdReady] = useState(false)
   /** S14：当前展示的分类（默认首项「外观」） */
   const [activeSection, setActiveSection] = useState<SettingsSectionId>('appearance')
+
+  // v1.1.0 下载进度订阅（main 经 cwb:event:app-update-progress 推送）
+  useEffect(() => {
+    return window.cwb.onAppUpdateProgress((e) => {
+      setAppUpdProgress(e)
+      setAppUpdReady(e.phase === 'ready')
+    })
+  }, [])
+
+  const checkAppUpd = async (): Promise<void> => {
+    setAppUpdChecking(true)
+    setAppUpdError('')
+    try {
+      const info = await window.cwb.checkAppUpdate()
+      setAppUpd(info)
+      setAppUpdReady(false)
+      useAppStore.getState().setAppUpdateInfo(info) // 同步侧栏版本按钮角标
+    } catch (err) {
+      setAppUpdError(errMsg(err))
+    } finally {
+      setAppUpdChecking(false)
+    }
+  }
+
+  const downloadAppUpd = async (): Promise<void> => {
+    setAppUpdError('')
+    setAppUpdReady(false)
+    const r = await window.cwb.downloadAppUpdate()
+    if (!r.ok) setAppUpdError(r.error ?? '下载失败')
+  }
+
+  const installAppUpd = async (): Promise<void> => {
+    if (!window.confirm('将退出应用并升级到新版本（运行中的任务会被终止），完成后自动重启。\n\n确认继续？'))
+      return
+    const r = await window.cwb.installAppUpdate()
+    if (!r.ok) setAppUpdError(r.error ?? '启动升级失败')
+  }
 
   // npm 安装项禁用条件（S9 定夺）：S8 未提供 node 检测契约 → 暂用 false 默认可点；
   // 无 node 机器上安装失败经输出区回显报错（可接受的自愈路径），待后续契约补
@@ -142,14 +193,30 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     terminal: `${fontFamily} · ${fontSizeInput === '' ? String(loadFontSize()) : fontSizeInput}`,
     notify: notifyUrl.trim() === '' ? '未配置' : notifyEnabled ? '已启用' : '未启用',
     cli: installed ? cliInfo.version : cliInfo !== null || cliError !== '' ? '未安装' : '检测中…',
+    update:
+      appUpd === null
+        ? '未检测'
+        : appUpd.upToDate
+          ? `最新 v${appUpd.current}`
+          : `可更新 v${appUpd.latest}`,
     startup: closeToTray ? '托盘常驻' : '退出应用'
   }
 
   const checkUpdate = async () => {
     setChecking(true)
     setUpdateError('')
+    setCliNotes(null)
     try {
-      setUpdateInfo(await window.cwb.checkClaudeUpdate())
+      const info = await window.cwb.checkClaudeUpdate()
+      setUpdateInfo(info)
+      // v1.1.0：版本对比成功后拉更新说明（已是最新也展示当前版本段，和「应用更新」一致）
+      if (info.current !== '' && info.latest !== '' && info.degraded !== true) {
+        try {
+          setCliNotes(await window.cwb.getClaudeChangelog(info.current, info.latest))
+        } catch (err) {
+          setCliNotes({ notes: [], error: errMsg(err) })
+        }
+      }
     } catch (err) {
       setUpdateError(errMsg(err))
     } finally {
@@ -159,11 +226,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   const runUpdate = async () => {
     setUpdateError('')
+    setStarting(true) // v1.1.0：立即给反馈（spawn 有 0.5~3s 冷启动，期间界面无变化）
     try {
       const r = await window.cwb.runCliCommand('claude update')
       setCommandId(r.commandId)
     } catch (err) {
       setUpdateError(errMsg(err))
+    } finally {
+      setStarting(false)
     }
   }
 
@@ -171,11 +241,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     const cmd = installMethod === 'native' ? NATIVE_INSTALL_CMD : NPM_INSTALL_CMD
     if (!window.confirm(`即将执行安装命令：\n\n  ${cmd}\n\n确认执行？（请确认来源可信）`)) return
     setInstallError('')
+    setStarting(true)
     try {
       const r = await window.cwb.installClaudeCli(installMethod)
       setCommandId(r.commandId)
     } catch (err) {
       setInstallError(errMsg(err))
+    } finally {
+      setStarting(false)
     }
   }
 
@@ -432,10 +505,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                         <button
                           type="button"
                           className="btn primary"
-                          disabled={commandId !== null}
+                          disabled={commandId !== null || starting}
                           onClick={() => void runUpdate()}
                         >
-                          更新
+                          {starting ? '启动中…' : commandId !== null ? '更新中…' : '更新'}
                         </button>
                       )}
                     </div>
@@ -451,6 +524,27 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                         </p>
                       ))}
                     {updateError !== '' && <p className="inline-error">{updateError}</p>}
+                    {/* v1.1.0 claude CLI 更新说明（版本对比成功后自动拉取，与「应用更新」同款展示） */}
+                    {cliNotes !== null && cliNotes.notes.length > 0 && (
+                      <div className="upd-notes">
+                        {cliNotes.notes.map((n) => (
+                          <div key={n.version} className="upd-notes-ver">
+                            <p className="upd-notes-title">v{n.version}</p>
+                            <ul>
+                              {n.items.map((it, i) => (
+                                <li key={i}>{it}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {cliNotes !== null && cliNotes.notes.length === 0 && cliNotes.error === undefined && (
+                      <p className="muted">未找到该版本的更新说明</p>
+                    )}
+                    {cliNotes?.error !== undefined && (
+                      <p className="muted">更新说明获取失败：{cliNotes.error}</p>
+                    )}
                   </>
                 )}
                 {/* 更新/安装执行输出（轻量只读区，非完整 xterm） */}
@@ -461,6 +555,76 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     void refreshCliInfo()
                   }}
                 />
+              </div>
+            )}
+
+            {/* v1.1.0 应用自更新：检测 + 更新说明 + 一键升级 */}
+            {activeSection === 'update' && (
+              <div className="dialog-section">
+                <p className="section-title">应用更新</p>
+                <div className="dialog-actions">
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={appUpdChecking}
+                    onClick={() => void checkAppUpd()}
+                  >
+                    {appUpdChecking ? '检测中…' : '检查更新'}
+                  </button>
+                  {appUpd !== null && !appUpd.upToDate && !appUpdReady && (
+                    <button
+                      type="button"
+                      className="btn primary"
+                      disabled={
+                        appUpdProgress?.phase === 'downloading' || appUpdProgress?.phase === 'verifying'
+                      }
+                      onClick={() => void downloadAppUpd()}
+                    >
+                      {appUpdProgress?.phase === 'downloading'
+                        ? `下载中 ${appUpdProgress.percent}%`
+                        : appUpdProgress?.phase === 'verifying'
+                          ? '校验中…'
+                          : '下载更新'}
+                    </button>
+                  )}
+                  {appUpdReady && (
+                    <button type="button" className="btn primary" onClick={() => void installAppUpd()}>
+                      重启并升级
+                    </button>
+                  )}
+                </div>
+                {appUpd !== null && (
+                  <p className="muted">
+                    当前 v{appUpd.current} · 最新 v{appUpd.latest} ·{' '}
+                    {appUpd.upToDate ? '已是最新' : '可更新'}
+                    {appUpd.manifestError !== undefined && `（清单获取失败：${appUpd.manifestError}）`}
+                  </p>
+                )}
+                {appUpdProgress?.phase === 'downloading' && (
+                  <progress className="upd-progress" max={100} value={appUpdProgress.percent} />
+                )}
+                {appUpd !== null && appUpd.notes.length > 0 && (
+                  <div className="upd-notes">
+                    {appUpd.notes.map((n) => (
+                      <div key={n.version} className="upd-notes-ver">
+                        <p className="upd-notes-title">v{n.version}</p>
+                        <ul>
+                          {n.items.map((it, i) => (
+                            <li key={i}>{it}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {appUpd !== null && appUpd.notesError !== undefined && (
+                  <p className="muted">更新说明获取失败：{appUpd.notesError}</p>
+                )}
+                {appUpdError !== '' && <p className="inline-error">{appUpdError}</p>}
+                <p className="hint-small">
+                  当前 v{APP_VERSION}；升级包来自本仓 GitHub Releases（sha256 校验通过才安装），
+                  更新说明来自仓库 CHANGELOG.md
+                </p>
               </div>
             )}
 

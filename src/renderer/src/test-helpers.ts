@@ -1,6 +1,7 @@
 import { vi } from 'vitest'
 import type {
   AppSettings,
+  AppUpdateProgressEvent,
   CliOutputEvent,
   CreateTaskOptions,
   CWBApi,
@@ -54,6 +55,8 @@ export type CwbApiMock = CWBApi & {
   activityCallbacks: Array<(e: TaskActivityEvent) => void>
   /** 捕获的 onCliOutput 回调（v0.5③：CliOutputView 订阅；测试注入输出事件用） */
   cliOutputCallbacks: Array<(e: CliOutputEvent) => void>
+  /** 捕获的 onAppUpdateProgress 回调（v1.1.0：设置中心订阅；注入下载进度用） */
+  appUpdateProgressCallbacks: Array<(e: AppUpdateProgressEvent) => void>
   /** onPtyData 返回的退订函数（unmount 时应被调用） */
   ptyDisposer: ReturnType<typeof vi.fn>
   /** onTaskUpdate 返回的退订函数 */
@@ -73,6 +76,7 @@ export function installCwbMock(opts: { projects?: ProjectRecord[]; tasks?: TaskR
   const activityCallbacks: Array<(e: TaskActivityEvent) => void> = []
   const ptyDisposer = vi.fn()
   const cliOutputCallbacks: Array<(e: CliOutputEvent) => void> = []
+  const appUpdateProgressCallbacks: Array<(e: AppUpdateProgressEvent) => void> = []
   const cliOutputDisposer = vi.fn()
   const taskDisposer = vi.fn()
   const activityDisposer = vi.fn()
@@ -82,6 +86,7 @@ export function installCwbMock(opts: { projects?: ProjectRecord[]; tasks?: TaskR
     taskUpdateCallbacks,
     activityCallbacks,
     cliOutputCallbacks,
+    appUpdateProgressCallbacks,
     ptyDisposer,
     taskDisposer,
     activityDisposer,
@@ -134,6 +139,23 @@ export function installCwbMock(opts: { projects?: ProjectRecord[]; tasks?: TaskR
     pickDirectory: vi.fn(async () => null),
     importTasksFromSessions: vi.fn(async () => [] as TaskRecord[]),
     getInstalledMonoFonts: vi.fn(async () => ['Cascadia Mono', 'Consolas', 'SimSun-ExtB'] as string[]),
+    // v1.0.8 外部链接出口（终端链接 → 系统浏览器；具体用例可覆写断言白名单行为）
+    openExternal: vi.fn(async () => true),
+    // v1.1.0 应用自更新（默认已是最新+空说明；具体用例可覆写）
+    checkAppUpdate: vi.fn(async () => ({
+      current: '1.1.0',
+      latest: '1.1.0',
+      upToDate: true,
+      notes: []
+    })),
+    downloadAppUpdate: vi.fn(async () => ({ ok: true })),
+    installAppUpdate: vi.fn(async () => ({ ok: true })),
+    onAppUpdateProgress: vi.fn((cb: (e: AppUpdateProgressEvent) => void) => {
+      appUpdateProgressCallbacks.push(cb)
+      return () => {}
+    }),
+    // v1.1.0 claude CLI 更新说明（默认空；CLI 检查更新用例覆写）
+    getClaudeChangelog: vi.fn(async () => ({ notes: [], error: undefined })),
     getAppSettings: vi.fn(async () => ({ closeToTray: true, launchAtLogin: false } as AppSettings)),
     setAppSettings: vi.fn(async (patch: Partial<AppSettings>) => ({ closeToTray: true, launchAtLogin: false, ...patch } as AppSettings)),
     // v0.5 契约第 19-30 法 mock（骨架默认；具体用例可 vi.mocked 覆写返回值）

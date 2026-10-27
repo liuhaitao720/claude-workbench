@@ -36,7 +36,15 @@ const HANDLE = {
   // v0.9 追加：会话导入
   TasksImportFromSessions: 'cwb:tasks:import-from-sessions',
   // v0.9.4 字体扫描
-  FontsInstalled: 'cwb:fonts:installed'
+  FontsInstalled: 'cwb:fonts:installed',
+  // v1.0.8 外部链接（终端链接点击 → 系统浏览器，main 侧协议白名单）
+  ShellOpenExternal: 'cwb:shell:open-external',
+  // v1.1.0 应用自更新
+  AppUpdateCheck: 'cwb:app-update:check',
+  AppUpdateDownload: 'cwb:app-update:download',
+  AppUpdateInstall: 'cwb:app-update:install',
+  // v1.1.0 claude CLI 更新说明（检查更新后拉取 GitHub CHANGELOG 区间）
+  ClaudeChangelogGet: 'cwb:claude-changelog:get'
 } as const
 
 const SEND = {
@@ -51,7 +59,9 @@ const EVENT = {
   PtyData: 'cwb:event:pty-data',
   TaskUpdate: 'cwb:event:task-update',
   TaskActivity: 'cwb:event:task-activity',
-  CliOutput: 'cwb:event:cli-output'
+  CliOutput: 'cwb:event:cli-output',
+  /** v1.1.0 应用自更新进度（downloading/verifying/ready/installing/error） */
+  AppUpdateProgress: 'cwb:event:app-update-progress'
 } as const
 
 export const IpcChannels = { ...HANDLE, ...SEND, ...EVENT } as const

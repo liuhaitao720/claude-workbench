@@ -90,6 +90,32 @@ export interface NotifyConfig {
   channel: 'wecom' | 'dingtalk' | 'generic'
 }
 
+/** 应用更新说明条目【v1.1.0：main 解析仓库 CHANGELOG.md → 设置中心展示】 */
+export interface AppChangelogEntry {
+  version: string
+  items: string[]
+}
+
+/** 应用更新检查结果【v1.1.0】 */
+export interface AppUpdateInfo {
+  current: string
+  latest: string
+  upToDate: boolean
+  /** current→latest 更新说明（已是最新=当前版本段）；拉取失败为空数组 */
+  notes: AppChangelogEntry[]
+  /** 清单/CHANGELOG 拉取失败时的降级描述（不影响版本对比结论） */
+  manifestError?: string
+  notesError?: string
+}
+
+/** 应用自更新进度事件【v1.1.0：下载/校验/就绪/安装中/出错】 */
+export type AppUpdateProgressEvent =
+  | { phase: 'downloading'; percent: number }
+  | { phase: 'verifying' }
+  | { phase: 'ready' }
+  | { phase: 'installing' }
+  | { phase: 'error'; error: string }
+
 /** main 侧应用设置（v0.9：关闭行为/开机自启——userData/settings.json） */
 export interface AppSettings {
   /** 关窗=最小化到托盘（true，v0.5⑥ 默认）/ 直接退出（false，退出仍走运行任务 confirm） */
@@ -218,6 +244,34 @@ export interface CWBApi {
   // ── 字体扫描（1，v0.9.4）──────────────────
   /** 本机已安装等宽字体（字形宽度实测判定，图标字体过滤，结果缓存）；失败返回 [] */
   getInstalledMonoFonts(): Promise<string[]>
+
+  // ── 外部链接（1，v1.0.8）───────────────────
+  /**
+   * 用系统默认浏览器打开 URL（shell.openExternal）。
+   * main 侧协议白名单 http/https（file:、javascript: 等一律拒绝返回 false）——
+   * 终端输出属不可信内容，OSC 8/WebLinks 链接必须经此出口而非 window.open。
+   */
+  openExternal(url: string): Promise<boolean>
+
+  // ── 应用自更新（3+1 事件，v1.1.0）──────────
+  /** 检查自身更新（GitHub Releases 清单 + CHANGELOG 更新说明；网络失败逐项降级） */
+  checkAppUpdate(): Promise<AppUpdateInfo>
+  /** 下载安装包并 sha256 校验（进度走 onAppUpdateProgress）；需先 checkAppUpdate */
+  downloadAppUpdate(): Promise<{ ok: boolean; error?: string }>
+  /** 退出并替换重启（写更新器脚本 → 杀 PTY 树正常退出 → 覆盖安装 → 拉起新版） */
+  installAppUpdate(): Promise<{ ok: boolean; error?: string }>
+  /** 自更新进度订阅（disposer 模式同 onPtyData） */
+  onAppUpdateProgress(cb: (e: AppUpdateProgressEvent) => void): Unsubscribe
+
+  // ── claude CLI 更新说明（1，v1.1.0）─────────
+  /**
+   * claude CLI 新版本更新说明（官方仓库 CHANGELOG 区间解析；raw Range 请求 +
+   * releases.atom 兜底，双路失败返回 error）。参数取 checkClaudeUpdate 结果。
+   */
+  getClaudeChangelog(
+    current: string,
+    latest: string
+  ): Promise<{ notes: AppChangelogEntry[]; error?: string }>
 
   // ── webhook 通知（3，v0.5④N）───────────────
   /** 读取通知配置（默认 {url:'', enabled:false}） */

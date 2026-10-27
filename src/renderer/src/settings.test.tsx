@@ -280,6 +280,30 @@ describe('claude CLI（迁自 About）', () => {
     await waitFor(() => expect(api.killCliCommand).toHaveBeenCalledWith('cmd-test'))
   })
 
+  it('v1.1.0 检查更新同时展示 claude CLI 更新说明（区间条目 + 失败降级提示）', async () => {
+    const api = await renderApp()
+    vi.mocked(api.getClaudeChangelog).mockResolvedValue({
+      notes: [
+        { version: '2.1.304', items: ['新增 --foo 参数', '修复启动卡顿'] },
+        { version: '2.1.303', items: ['小修'] }
+      ]
+    })
+    const s = await openSettings()
+    gotoSection(s, 'claude CLI')
+    fireEvent.click(s.getByRole('button', { name: '检查更新' }))
+    await waitFor(() =>
+      expect(api.getClaudeChangelog).toHaveBeenCalledWith('2.1.301', '2.1.304')
+    )
+    expect(await s.findByText('v2.1.304')).toBeDefined()
+    expect(s.getByText('新增 --foo 参数')).toBeDefined()
+    expect(s.getByText('v2.1.303')).toBeDefined()
+
+    // 双路失败 → 明确降级提示（不静默）
+    vi.mocked(api.getClaudeChangelog).mockResolvedValue({ notes: [], error: 'HTTP 403' })
+    fireEvent.click(s.getByRole('button', { name: '检查更新' }))
+    expect(await s.findByText(/更新说明获取失败：HTTP 403/)).toBeDefined()
+  })
+
   it('已是最新：upToDate=true → 无「更新」按钮；degraded → 降级提示', async () => {
     const api = await renderApp()
     vi.mocked(api.checkClaudeUpdate).mockResolvedValue({
@@ -339,6 +363,75 @@ describe('claude CLI（迁自 About）', () => {
     fireEvent.click(s.getByRole('button', { name: '下载安装' }))
     await new Promise((r) => setTimeout(r, 0))
     expect(api.installClaudeCli).not.toHaveBeenCalled()
+  })
+})
+
+// ── 应用更新（v1.1.0：检测/changelog 展示/下载升级 + 侧栏角标） ────────────
+
+describe('应用更新', () => {
+  it('检查更新 → 可更新：版本对比 + CHANGELOG 区间展示 + 下载→就绪→重启并升级链路', async () => {
+    const api = installCwbMock({ projects: [project], tasks: [taskA] })
+    vi.mocked(api.checkAppUpdate).mockResolvedValue({
+      current: '1.1.0',
+      latest: '1.2.0',
+      upToDate: false,
+      notes: [
+        { version: '1.2.0', items: ['新功能甲', '修复乙'] },
+        { version: '1.1.9', items: ['小修'] }
+      ]
+    })
+    render(<App />)
+    const s = await openSettings()
+    gotoSection(s, '应用更新')
+    fireEvent.click(s.getByRole('button', { name: '检查更新' }))
+    expect(await s.findByText(/最新 v1.2.0 · 可更新/)).toBeDefined()
+    expect(s.getByText('v1.2.0')).toBeDefined()
+    expect(s.getByText('新功能甲')).toBeDefined()
+    expect(s.getByText('v1.1.9')).toBeDefined()
+    expect(s.queryByText('已是最新')).toBeNull()
+
+    // 下载 → 进度事件 ready → 「重启并升级」出现；确认框取消则不 install
+    fireEvent.click(s.getByRole('button', { name: '下载更新' }))
+    await waitFor(() => expect(api.downloadAppUpdate).toHaveBeenCalled())
+    act(() => {
+      for (const cb of api.appUpdateProgressCallbacks) cb({ phase: 'ready' })
+    })
+    const installBtn = await s.findByRole('button', { name: '重启并升级' })
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    fireEvent.click(installBtn)
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(api.installAppUpdate).not.toHaveBeenCalled()
+    confirmSpy.mockRestore()
+  })
+
+  it('已是最新：显示当前版本说明；侧栏版本按钮出现角标仅在有新版时', async () => {
+    const api = installCwbMock({ projects: [project], tasks: [taskA] })
+    vi.mocked(api.checkAppUpdate).mockResolvedValue({
+      current: '1.1.0',
+      latest: '1.1.0',
+      upToDate: true,
+      notes: [{ version: '1.1.0', items: ['自更新上线'] }]
+    })
+    render(<App />)
+    const s = await openSettings()
+    gotoSection(s, '应用更新')
+    fireEvent.click(s.getByRole('button', { name: '检查更新' }))
+    expect(await s.findByText(/已是最新/)).toBeDefined()
+    expect(s.getByText('自更新上线')).toBeDefined()
+    expect(s.queryByRole('button', { name: '下载更新' })).toBeNull()
+    // 已是最新 → 侧栏无角标
+    expect(screen.queryByTitle(/有新版本/)).toBeNull()
+
+    // 侧栏角标：store 落可更新结果后出现（启动静默检查同路径）
+    act(() => {
+      useAppStore.getState().setAppUpdateInfo({
+        current: '1.1.0',
+        latest: '1.2.0',
+        upToDate: false,
+        notes: []
+      })
+    })
+    expect(screen.getByTitle('有新版本 v1.2.0')).toBeDefined()
   })
 })
 

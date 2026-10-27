@@ -32,6 +32,9 @@ export function ProjectSidebar() {
   const openTaskAutoResume = useAppStore((s) => s.openTaskAutoResume)
   const openAbout = useAppStore((s) => s.openAbout)
   const openSkills = useAppStore((s) => s.openSkills)
+  // v1.1.0 更新角标数据源（null=未检查/已是最新/检查失败）
+  const appUpdateInfo = useAppStore((s) => s.appUpdateInfo)
+  const hasUpdate = appUpdateInfo !== null && !appUpdateInfo.upToDate
   const openSettings = useAppStore((s) => s.openSettings)
 
   const [railCollapsed, setRailCollapsed] = useState(false)
@@ -203,6 +206,10 @@ export function ProjectSidebar() {
                 title="关于 Claude Workbench"
               >
                 v{APP_VERSION}
+                {/* v1.1.0 有新版本角标（启动静默检查/手动检查落 store） */}
+                {hasUpdate && (
+                  <span className="ver-update-dot" title={`有新版本 v${appUpdateInfo.latest}`} />
+                )}
               </button>
             </div>
           </div>

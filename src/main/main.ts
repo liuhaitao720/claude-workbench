@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { createAppContext, registerIpcHandlers, type AppContext } from './ipc'
+import { CrashLogger } from './crash-log'
 import { resolveClaudeCommand } from './pty-manager'
 import { initSingleInstance } from './single-instance'
 import { attachCloseToTray, setupTray, type TrayHandle } from './tray'
@@ -24,6 +25,10 @@ const SMOKE_FLAG = process.argv.includes('--smoke')
 /** v0.4.3 输入回显取证模式 --smoke-input：真实击键路径（DOM输入事件→xterm→PTY→回显→渲染行）逐层取证 */
 const INPUT_PROBE_FLAG = process.argv.includes('--smoke-input')
 
+/** v1.0.8 渲染器探针 --probe-webgl：开真实任务终端后断言 WebGL 渲染器已激活
+ *  （.xterm-screen 出现 canvas；DOM 渲染器无 canvas）。中文栅格对齐修复的前置验收。 */
+const WEBGL_PROBE_FLAG = process.argv.includes('--probe-webgl')
+
 /** --smoke-recovery[=phase-a|phase-b]：无值默认 phase-a */
 function recoveryPhase(): 'a' | 'b' | null {
   const arg = process.argv.find((a) => a === '--smoke-recovery' || a.startsWith('--smoke-recovery='))
@@ -34,7 +39,7 @@ function recoveryPhase(): 'a' | 'b' | null {
 const RECOVERY = recoveryPhase()
 
 /** 冒烟编排模式（--smoke 或 --smoke-recovery） */
-const isSmokeRun = SMOKE_FLAG || RECOVERY !== null || INPUT_PROBE_FLAG
+const isSmokeRun = SMOKE_FLAG || RECOVERY !== null || INPUT_PROBE_FLAG || WEBGL_PROBE_FLAG
 
 /** 测试注入 userData（防污染真实数据目录；须在 ready 前生效） */
 const injectedUserData = process.env['CWB_USER_DATA']
@@ -119,6 +124,48 @@ async function waitPtyDead(ctx: AppContext, taskId: string, timeoutMs = 5_000): 
  */
 
 // ── 输入回显取证（v0.4.3）：模拟"移动到 chat about this 后打字"全链路 ────
+
+// ── v1.0.8 渲染器探针：断言 WebGL 渲染器在真机激活（中文栅格对齐的前置验收）──
+
+/** WebglAddon 把渲染 canvas 挂在 .xterm-screen 内；DOM 渲染器只用 div 行，无 canvas */
+async function runWebglProbe(ctx: AppContext): Promise<void> {
+  const projectDir = join(app.getPath('userData'), 'webgl-probe-project')
+  mkdirSync(projectDir, { recursive: true })
+  const project = await ctx.addProject(projectDir)
+  const task = await ctx.createTask(project.id, 'webgl-probe', { isolation: 'shared' })
+  console.log('[probe] task created:', task.id)
+
+  const deadline = Date.now() + WAIT_DATA_MS
+  while (Date.now() < deadline && ctx.smokeReports.length === 0) await sleep(200)
+  if (ctx.smokeReports.length === 0) smokeFail('no renderer report (terminal not rendering)')
+
+  const win = BrowserWindow.getAllWindows()[0]
+  if (!win) smokeFail('no window for webgl probe')
+  // 探针环境补全：同 input-probe 先例——main 侧建任务，renderer store 无 tab，经测试钩子开
+  const opened = String(
+    await win.webContents.executeJavaScript(
+      "(function(){var t=window.__cwbTest;if(!t||!t.openTask)return 'NO-TEST-HOOK';t.openTask(" +
+        JSON.stringify(task.id) +
+        ");return 'OPENED'})()"
+    )
+  )
+  if (opened !== 'OPENED') smokeFail(`open task hook: ${opened}`)
+  await sleep(3000) // 终端挂载 + WebglAddon 激活 + 首帧绘制
+
+  const webglActive = String(
+    await win.webContents.executeJavaScript(
+      "Boolean(document.querySelector('.term-host-active .xterm-screen canvas'))"
+    )
+  )
+  console.log(`[probe] webgl canvas present: ${webglActive}`)
+  if (webglActive !== 'true') {
+    console.error('[probe] WEBGL-DOM-FALLBACK（渲染回落 DOM——中文对齐/性能修复受限，查 console.info 降级原因）')
+    app.exit(2)
+    return
+  }
+  console.log('[probe] WEBGL-OK')
+  app.exit(0)
+}
 
 async function runInputProbe(ctx: AppContext, sink: PtyByteSink): Promise<void> {
   const projectDir = join(app.getPath('userData'), 'input-probe-project')
@@ -352,6 +399,12 @@ let trayHandle: TrayHandle | null = null
 /** v0.9⑧：组合根引用（createWindow 时尚未创建——close 分流惰性读取；类型 AppContext 见下方 import） */
 let currentCtx: AppContext | null = null
 
+/**
+ * v1.1.0 退出/崩溃取证：用户报告「点更新后突然退出」而事件日志无记录——只记
+ * 元数据（事件/来源/退出码），不记终端内容；文件 userData/cwb-crash.log。
+ */
+const crashLog = new CrashLogger(join(app.getPath('userData'), 'cwb-crash.log'))
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     autoHideMenuBar: true,
@@ -368,6 +421,24 @@ function createWindow(): BrowserWindow {
   // v0.9⑧：关闭按钮行为按设置分流（托盘常驻/直接退出）
   attachCloseToTray(win, () => isQuitting, () => currentCtx?.appSettings.get().closeToTray !== false)
 
+  // v1.1.0 渲染进程崩溃取证：主进程默认不断言（实测崩溃后仍存活），但用户视角
+  // 是"窗口消失=应用没了"。记录事件供诊断；托盘常驻下应用仍可从托盘恢复。
+  win.webContents.on('render-process-gone', (_e, details) => {
+    crashLog.log({
+      event: 'render-process-gone',
+      detail: `reason=${details.reason} exitCode=${details.exitCode}`
+    })
+  })
+  win.webContents.on('unresponsive', () => {
+    crashLog.log({ event: 'renderer-unresponsive' })
+  })
+
+  // v1.0.8 链接安全兜底：终端输出里的链接（WebLinksAddon 默认 handler 走 window.open）不得
+  // 在应用内开新窗口/导航——deny 全部 window.open（合法链接走 openExternal→系统浏览器），
+  // will-navigate 一并拦截（SPA 无导航，任何导航都是异常注入）
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  win.webContents.on('will-navigate', (e) => e.preventDefault())
+
   // v0.5⑥ 补丁：Electron 44 页面 window.close() 无条件销毁（最小实验实证，beforeunload 也拦不住，
   // exposeInMainWorld 不能覆盖内置属性）——主世界注入重定义 window.close → 走 __cwbClose 桥 →
   // 主进程 win.close()（X 按钮同路径，触发 close 拦截）。SPA 无导航，一次性注入即持久
@@ -380,7 +451,7 @@ function createWindow(): BrowserWindow {
   })
 
   // --smoke / --smoke-input：URL query ?smoke=1 通知 renderer 进入冒烟回执模式（零契约改动）
-  const smokeQuery = SMOKE_FLAG || INPUT_PROBE_FLAG
+  const smokeQuery = SMOKE_FLAG || INPUT_PROBE_FLAG || WEBGL_PROBE_FLAG
   if (process.env['ELECTRON_RENDERER_URL']) {
     const url = process.env['ELECTRON_RENDERER_URL']
     void win.loadURL(smokeQuery ? `${url}?smoke=1` : url)
@@ -400,6 +471,14 @@ const runningCountOf = (ctx: AppContext | null): number =>
 
 app.whenReady().then(async () => {
   if (!gotSingleLock) return // v1.0.7 第二实例：不建窗口/托盘，等 initSingleInstance 的 exit(0) 生效
+  crashLog.log({ event: 'app-ready', detail: `version=${app.getVersion()} pid=${process.pid}` })
+  // v1.1.0 未捕获异常取证（异常导致进程退出时留下最后一笔）
+  process.on('uncaughtException', (err) => {
+    crashLog.log({ event: 'uncaughtException', detail: err?.stack ?? String(err) })
+  })
+  process.on('unhandledRejection', (reason) => {
+    crashLog.log({ event: 'unhandledRejection', detail: String(reason) })
+  })
   // v0.5.2 用户指令：移除原生菜单栏（File/Edit/View/Window）——win 上 autoHideMenuBar 兜底
   Menu.setApplicationMenu(null)
   // v0.5⑥ 托盘 tooltip 刷新：任务记录每次变更（含状态迁移）旁路回调（同 onPtyData 注入缝先例）
@@ -422,7 +501,9 @@ app.whenReady().then(async () => {
       app.exit(1)
     }, SMOKE_TIMEOUT_MS)
     setTimeout(() => {
-      const flow = INPUT_PROBE_FLAG
+      const flow = WEBGL_PROBE_FLAG
+        ? runWebglProbe(currentCtx!)
+        : INPUT_PROBE_FLAG
         ? runInputProbe(currentCtx!, sink)
         : SMOKE_FLAG
         ? runSmoke(currentCtx!)
@@ -452,7 +533,17 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  // v1.1.0 托盘驻留修正：closeToTray=true 时窗口消失不得退出应用（用户看不到任何
+  // 提示就"突然退出"）——用户在托盘/设置里明确选过"最小化到托盘"，语义是应用常驻。
+  // 只有 ①真退出流程中（isQuitting）或 ②设置=直接退出 时才 quit。
+  if (process.platform === 'darwin') return
+  if (isQuitting) return
+  if (currentCtx?.appSettings.get().closeToTray !== false) {
+    crashLog.log({ event: 'window-all-closed', detail: '托盘驻留：保持进程存活，等待用户从托盘恢复' })
+    return
+  }
+  crashLog.markOrigin('window-all-closed')
+  app.quit()
 })
 
 // v0.5⑥：真退出前置标志（close 拦截放行）+ 托盘清理
@@ -463,6 +554,7 @@ app.on('before-quit', (event) => {
   isQuitting = true
   trayHandle?.destroy()
   trayHandle = null
+  crashLog.log({ event: 'before-quit', origin: crashLog.origin() || 'unknown' })
   // v1.0.3 退出目录锁修复：PTY 子进程树（cmd.exe→claude→node、ConPTY OpenConsole.exe）
   // 不随主进程退出而亡，残留句柄锁死 exe 所在目录与项目/worktree 目录（实测 win-unpacked
   // 无法删除的根因）。二段式退出：先 taskkill /T /F 定点杀树（记录的 pid，非枚举），

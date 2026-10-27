@@ -51,8 +51,9 @@ export function buildResumeArgs(
 
 /** `where claude` 多命中时优先 npm 全局装的 claude.cmd（.\AppData\Roaming\npm\claude.cmd）；无可用命中返回 null（调用方回退 PATH 语义） */
 /**
- * claude 子进程环境（v0.4.4）：透传 PATH/HOME + TERM=xterm-256color，并剥离
- * 本进程可能继承的 claude 会话身份标记——工作台终端是面向用户的独立会话，
+ * claude 子进程环境：透传 PATH/HOME + TERM=xterm-256color + COLORTERM=truecolor（v1.0.8：
+ * 只设 TERM 时 CLI 按 256 色降级，24 位色需显式声明——Windows Terminal 同款约定），
+ * 并剥离本进程可能继承的 claude 会话身份标记——工作台终端是面向用户的独立会话，
  * 不应继承父级 claude 会话的身份（CLAUDECODE/SESSION_ID 等——子 claude 检测到
  * 会跳过首启对话框、关闭转写保存等）。偏好类变量（EFFORT/模型映射）保留透传。
  */
@@ -68,7 +69,10 @@ const SESSION_MARKER_VARS = [
 ] as const
 
 export function buildClaudeEnv(): Record<string, string> {
-  const env = { ...process.env, TERM: 'xterm-256color' } as Record<string, string>
+  const env = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } as Record<
+    string,
+    string
+  >
   for (const name of SESSION_MARKER_VARS) delete env[name]
   return env
 }

@@ -11,11 +11,17 @@
  * 中日韩友好项（更纱/霞鹜/思源/Noto）对 claude CLI 的中文输出对齐尤其有价值。
  */
 
-/** 白名单：UI select 与存储校验共用（顺序=下拉展示顺序；前 4 项为本机 Windows 预装） */
+/**
+ * 白名单：UI select 与存储校验共用（顺序=下拉展示顺序；前 5 项为本机 Windows 预装）。
+ * v1.0.8：MS Gothic / NSimSun 入列——Windows 自带且 CJK/西文宽度比恰为 2:1（实测
+ * 15px 下 8/16px），中文栅格对齐零漂移；Courier New 实测比值 1.67 保留仅为兼容存量选择。
+ */
 export const FONT_FAMILY_WHITELIST = [
   'Cascadia Mono',
   'Cascadia Code',
   'Consolas',
+  'MS Gothic',
+  'NSimSun',
   'Courier New',
   // —— 以下为免费商用第三方字体（未安装时回退系统等宽，下拉标注「未安装」）——
   'JetBrains Mono',

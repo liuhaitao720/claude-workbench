@@ -1,7 +1,9 @@
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { CliRunner } from './cli-runner'
 import { invalidateClaudePathCache, resolveClaudeCandidates } from './pty-manager'
+import { parseChangelog } from './app-updater'
+import type { AppChangelogEntry } from '../shared/types'
 
 const execFileAsync = promisify(execFile)
 
@@ -80,25 +82,108 @@ export function invalidateVersionCache(): void {
   versionInfoCache = null
 }
 
+/** 探测依赖缝（测试注入假 spawn/假杀树；生产走 node:child_process） */
+export interface VersionProbeDeps {
+  spawnImpl?: typeof spawn
+  /** 定点杀进程树（按记录的 pid；默认 taskkill /T /F——不枚举进程） */
+  killTree?: (pid: number) => void
+  /** 输出静默观察窗口（默认 PROBE_QUIET_MS；测试注入小值提速） */
+  quietMs?: number
+  /** 硬超时（默认 VERSION_TIMEOUT_MS） */
+  timeoutMs?: number
+}
+
+/** 拿到版本串后的静默窗口：期间再无输出即认定「版本已完整」，立即收尾 */
+const PROBE_QUIET_MS = 800
+
+/** 定点杀进程树（no-process-detect：只按记录的 pid 杀，不做进程枚举） */
+function killTreeDefault(pid: number): void {
+  try {
+    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+  } catch {
+    // 进程已退出/权限不足——尽力而为，不阻断探测结果
+  }
+}
+
+/**
+ * v1.1.0 版本探测（用户报告「claude CLI 的版本检测失败」根因修复）：
+ * `cmd.exe /c claude.cmd --version` 存在「输出已到、壳进程不退出」的现象
+ * （本机实测 12 次中 3~5 次，版本串 ~160ms 即到而 cmd 壳残留不退出）。
+ * 原实现用 execFile({timeout}) ——超时即抛错，把**已经拿到的 stdout 一并丢弃**，
+ * 该候选判负；候选表与实际是同一 exe 时全灭 → 误报「未安装」。
+ *
+ * 现实现：spawn 流式累积 stdout，一旦 extractSemver 命中且输出静默 PROBE_QUIET_MS
+ * 即认定成功，立即定点杀进程树并返回（不等壳进程自然退出）；超时/关闭路径仍用
+ * 已累积输出兜底解析。stdin 给 'ignore'（立刻 EOF，排除等待输入）。
+ */
+export function probeClaudeVersion(candidate: string, deps: VersionProbeDeps = {}): Promise<string> {
+  const spawnImpl = deps.spawnImpl ?? spawn
+  const killTree = deps.killTree ?? killTreeDefault
+  const quietMs = deps.quietMs ?? PROBE_QUIET_MS
+  const timeoutMs = deps.timeoutMs ?? VERSION_TIMEOUT_MS
+  return new Promise((resolve) => {
+    let out = ''
+    let settled = false
+    let exited = false
+    let quietTimer: ReturnType<typeof setTimeout> | null = null
+    let hardTimer: ReturnType<typeof setTimeout> | null = null
+    let child: ReturnType<typeof spawn> | undefined
+
+    const clearTimers = (): void => {
+      if (quietTimer !== null) clearTimeout(quietTimer)
+      if (hardTimer !== null) clearTimeout(hardTimer)
+    }
+    const finish = (version: string): void => {
+      if (settled) return
+      settled = true
+      clearTimers()
+      // 只在壳进程仍未退出时定点杀树——已退出的 pid 可能被复用，绝不误杀
+      if (!exited && child?.pid !== undefined) killTree(child.pid)
+      resolve(version)
+    }
+
+    try {
+      child = spawnImpl('cmd.exe', ['/c', candidate, '--version'], {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+    } catch {
+      resolve('')
+      return
+    }
+
+    hardTimer = setTimeout(() => finish(extractSemver(out)), timeoutMs)
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      out += chunk.toString()
+      const v = extractSemver(out)
+      if (v === '') return
+      // 有版本串后保一段静默观察期：期间再有输出就顺延，确保拿到完整串而非截断
+      if (quietTimer !== null) clearTimeout(quietTimer)
+      quietTimer = setTimeout(() => finish(extractSemver(out)), quietMs)
+    })
+    child.on('error', () => {
+      exited = true
+      finish(extractSemver(out))
+    })
+    child.on('close', () => {
+      exited = true
+      finish(extractSemver(out))
+    })
+  })
+}
+
 /** 当前 claude CLI 版本+实际解析路径；探测失败 version=''（=未安装） */
-export async function getClaudeVersionInfo(): Promise<ClaudeVersionInfo> {
+export async function getClaudeVersionInfo(deps: VersionProbeDeps = {}): Promise<ClaudeVersionInfo> {
   if (versionInfoCache !== null) return { ...versionInfoCache }
   const candidates = await resolveClaudeCandidates()
   let version = ''
   let okPath = candidates[0] ?? 'claude'
   for (const cand of candidates) {
-    try {
-      const { stdout } = await execFileAsync('cmd.exe', ['/c', cand, '--version'], {
-        timeout: VERSION_TIMEOUT_MS
-      })
-      const v = extractSemver(stdout.trim())
-      if (v !== '') {
-        version = v
-        okPath = cand
-        break
-      }
-    } catch {
-      // 该候选失败（冷启动慢/垫片瞬时失效/超时）→ 试下一个；无 semver 输出同理
+    const v = await probeClaudeVersion(cand, deps)
+    if (v !== '') {
+      version = v
+      okPath = cand
+      break
     }
   }
   if (version === '') {
@@ -167,6 +252,88 @@ export async function checkClaudeUpdate(): Promise<ClaudeUpdateInfo> {
     latest,
     upToDate: current !== '' && latest !== '' && compareSemver(current, latest) >= 0,
     ...(degraded ? { degraded: true } : {})
+  }
+}
+
+// ── v1.1.0 claude CLI 更新说明（用户需求：检查更新时看到新版 changelog）──────
+
+/** 主源：官方仓库 CHANGELOG.md（raw 直读；~1.1MB 全量但支持 Range——头部即最新版本） */
+export const CLAUDE_CHANGELOG_URL =
+  'https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md'
+/** 兜底：GitHub Releases atom（最近 10 个 release；raw 域被网络策略拦时 github.com 或仍可达） */
+export const CLAUDE_RELEASES_ATOM_URL = 'https://github.com/anthropics/claude-code/releases.atom'
+/** 只请求外部公开内容的 GET（零负载、无凭据）——Range 头部 256KB 覆盖约 45 个版本 */
+const CHANGELOG_RANGE_BYTES = 262_144
+const CHANGELOG_HTTP_TIMEOUT_MS = 8_000
+
+export interface ClaudeChangelogResult {
+  /** (current, latest] 区间条目（已是最新=当前版本段）；两路都失败为空数组 */
+  notes: AppChangelogEntry[]
+  error?: string
+}
+
+/** atom 条目 → 更新说明条目（content 是「XML 转义后的 HTML」：需两趟解实体 → 取 <li> → 去标签） */
+export function atomToEntries(xml: string, fromExclusive: string, toInclusive: string): AppChangelogEntry[] {
+  const out: AppChangelogEntry[] = []
+  const unescapeOnce = (s: string): string =>
+    s
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, '&')
+  // 两趟：XML 层（&amp;lt; → &lt;）+ HTML 层（&lt; → <）；&amp;amp; 亦经两趟还原为 &
+  const unescape = (s: string): string => unescapeOnce(unescapeOnce(s))
+  for (const m of xml.matchAll(/<entry>[\s\S]*?<\/entry>/g)) {
+    const title = /<title>v?(\d+\.\d+\.\d+)<\/title>/.exec(m[0])
+    if (title === null) continue
+    const v = title[1]
+    if (toInclusive === '' || compareSemver(v, toInclusive) > 0) continue
+    if (fromExclusive !== '' && compareSemver(v, fromExclusive) <= 0) continue
+    if (out.length >= 10) break
+    const content = /<content[^>]*>([\s\S]*?)<\/content>/.exec(m[0])?.[1] ?? ''
+    const items = [...unescape(content).matchAll(/<li>([\s\S]*?)<\/li>/g)]
+      .map((li) => li[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 280))
+      .filter((s) => s !== '')
+      .slice(0, 30)
+    out.push({ version: v, items })
+  }
+  return out
+}
+
+/**
+ * 拉取 claude CLI 更新说明：raw CHANGELOG（Range 头部请求）→ 失败回退 releases.atom →
+ * 双路失败降级返回 error。解析复用 app-updater.parseChangelog（同样的 `## <version>` 段格式
+ * 与区间语义；覆盖不到 from 版本时锚定到只展示 latest 段）。
+ */
+export async function fetchClaudeChangelog(
+  current: string,
+  latest: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<ClaudeChangelogResult> {
+  let primaryError = ''
+  try {
+    const res = await fetchImpl(CLAUDE_CHANGELOG_URL, {
+      headers: { Range: `bytes=0-${CHANGELOG_RANGE_BYTES - 1}` },
+      signal: AbortSignal.timeout(CHANGELOG_HTTP_TIMEOUT_MS)
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const md = await res.text()
+    return { notes: parseChangelog(md, current, latest) }
+  } catch (err) {
+    primaryError = err instanceof Error ? err.message : String(err)
+  }
+  try {
+    const res = await fetchImpl(CLAUDE_RELEASES_ATOM_URL, {
+      signal: AbortSignal.timeout(CHANGELOG_HTTP_TIMEOUT_MS)
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return { notes: atomToEntries(await res.text(), current, latest) }
+  } catch (err) {
+    return {
+      notes: [],
+      error: `${primaryError}；atom 兜底 ${err instanceof Error ? err.message : String(err)}`
+    }
   }
 }
 

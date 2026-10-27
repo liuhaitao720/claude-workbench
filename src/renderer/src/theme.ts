@@ -81,27 +81,28 @@ export function applyDomTheme(effective: EffectiveTheme): void {
 }
 
 /**
- * xterm 主题配色：dark 保持既有观感（含 cursor）；light 白底深字。
- * v1.0.5：显式 selectionBackground——xterm 默认选中色是 ~24% 半透明灰，
- * 白底上几乎不可见（用户报告「浅色时看不到选了什么」），且深底下也偏淡。
- * active 取 accent 同族蓝（styles.css --accent-bg 系）保证选中区域清晰；
- * inactive（未聚焦 tab）降一档；selectionForeground 不设——保留原字色
- * （终端惯例，ANSI 彩字被选中后仍可辨）。
+ * xterm 主题配色：dark 保持既有观感（含 cursor）。
+ * v1.0.9：选择高亮改经典反转块（用户指定）——深色主题选中区恒白底黑字、浅色主题
+ * 黑底白字（终端惯例的 invert 语义，取消选择即恢复原色）；inactive（未聚焦 tab）
+ * 同族降一档保留焦点态区分。此前 v1.0.5 只设 selectionBackground 不设前景
+ * （保留 ANSI 原字色），与用户期望的高对比反转不符。
  */
 const TERMINAL_DARK: ITheme = {
   background: '#14151a',
   foreground: '#d7d7db',
   cursor: '#d7d7db',
-  selectionBackground: '#2f5f8f',
-  selectionInactiveBackground: '#24486b'
+  selectionBackground: '#ffffff',
+  selectionForeground: '#000000',
+  selectionInactiveBackground: '#c9c9c9'
 }
 
 const TERMINAL_LIGHT: ITheme = {
   background: '#ffffff',
   foreground: '#33363d',
   cursor: '#33363d',
-  selectionBackground: '#add6ff',
-  selectionInactiveBackground: '#d9e9f8'
+  selectionBackground: '#1f1f1f',
+  selectionForeground: '#ffffff',
+  selectionInactiveBackground: '#5a5a5a'
 }
 
 /** 返回副本防共享对象被 xterm 内部改写串色 */

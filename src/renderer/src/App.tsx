@@ -26,6 +26,18 @@ export function App() {
     return dispose
   }, [])
 
+  // v1.1.0 启动静默检查应用更新：仅正常模式（smoke 不发网络请求）；结果落 store 供
+  // 侧栏版本按钮角标消费，失败静默（手动检查入口在设置中心，会显示具体错误）
+  useEffect(() => {
+    if (isSmokeMode) return
+    void window.cwb
+      .checkAppUpdate()
+      .then((info) => {
+        useAppStore.getState().setAppUpdateInfo(info)
+      })
+      .catch(() => {})
+  }, [])
+
   const projects = useAppStore((s) => s.projects)
   const openTaskIds = useAppStore((s) => s.openTaskIds)
   const aboutOpen = useAppStore((s) => s.aboutOpen)
