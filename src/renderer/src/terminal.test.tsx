@@ -104,7 +104,7 @@ describe('TerminalPanel（xterm 实例管理）', () => {
     expect(terminalCache.get('t-term')).toBe(term1)
   })
 
-  it('close tab → dispose Terminal + 清缓存 + 退订；unmount 后 emit 数据无副作用', async () => {
+  it('close tab → 停止运行中的任务 + dispose Terminal + 清缓存 + 退订；unmount 后 emit 数据无副作用', async () => {
     const api = installCwbMock({ projects: [project], tasks: [task] })
     const { unmount } = render(<App />)
     await waitFor(() =>
@@ -113,16 +113,32 @@ describe('TerminalPanel（xterm 实例管理）', () => {
     openTaskTab('t-term')
     await waitFor(() => expect(terminalCache.size).toBe(1))
     expect(api.ptyCallbacks.length).toBe(1) // App 层已接分发器
-    // × 关 tab：仅关视图，任务行保留、stopTask 不调
+    // × 关 tab：v1.1.0 起运行中的任务一并停止（用户反馈「关了窗口退出仍提示有任务在运行」）
     fireEvent.click(screen.getByRole('button', { name: '×' }))
     await waitFor(() => expect(terminalCache.size).toBe(0))
-    expect(document.querySelector('li[data-task-id="t-term"]')).toBeDefined()
-    expect(api.stopTask).not.toHaveBeenCalled()
+    expect(document.querySelector('li[data-task-id="t-term"]')).toBeDefined() // 任务行保留（可恢复）
+    await waitFor(() => expect(api.stopTask).toHaveBeenCalledWith('t-term'))
     // App 卸载：退订全局事件；此后 emit 无订阅者、无实例，无副作用
     unmount()
     expect(api.ptyDisposer).toHaveBeenCalled()
     expect(() => emitTaskData({ taskId: 't-term', data: 'X' })).not.toThrow()
     expect(terminalCache.size).toBe(0)
+  })
+
+  it('close tab 对已停止的任务不调 stopTask（只有 running 才停）', async () => {
+    const stopped = makeTask({ id: 't-stop', projectId: 'pt', name: '已停任务', status: 'stopped' })
+    const api = installCwbMock({ projects: [project], tasks: [stopped] })
+    render(<App />)
+    await waitFor(() =>
+      expect(document.querySelector('li[data-task-id="t-stop"]')).toBeDefined()
+    )
+    act(() => {
+      useAppStore.getState().openTask('t-stop')
+    })
+    await waitFor(() => expect(terminalCache.get('t-stop')).toBeDefined())
+    fireEvent.click(screen.getByRole('button', { name: '×' }))
+    await waitFor(() => expect(terminalCache.size).toBe(0))
+    expect(api.stopTask).not.toHaveBeenCalled()
   })
 
   it('任务恢复（v0.1.2 光标错位修复）：stopped→running 时 term.reset 清缓冲 + ptyResize 强制重同步', async () => {

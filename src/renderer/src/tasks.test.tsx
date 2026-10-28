@@ -215,19 +215,21 @@ describe('任务行操作（S6-B：⋯ 溢出菜单 + 单行化）', () => {
     )
   })
 
-  it('单击任务行主区=开 tab；× 仅关视图不停任务；菜单无「打开」项（v0.5① 与单击重复移除）', async () => {
+  it('单击任务行主区=开 tab；× 关闭并停止运行中任务；菜单无「打开」项（v0.5① 与单击重复移除）', async () => {
     const api = await renderWithProject(gitProject, [runner])
     fireEvent.click((taskRow('tr') as HTMLElement).querySelector('.task-main') as HTMLElement)
     const tab = await screen.findByRole('tab')
     expect(within(tab).getByText('runner')).toBeDefined()
     fireEvent.click(within(tab).getByRole('button', { name: '×' }))
     await waitFor(() => expect(screen.queryByRole('tab')).toBeNull())
-    expect(taskRow('tr')).toBeDefined() // 任务行仍在
-    expect(api.stopTask).not.toHaveBeenCalled() // 不停止任务
+    expect(taskRow('tr')).toBeDefined() // 任务行仍在（可恢复）
+    // v1.1.0：× 关闭运行中的任务会一并停止（用户反馈「关了窗口退出仍提示有任务在运行」）
+    await waitFor(() => expect(api.stopTask).toHaveBeenCalledWith('tr'))
     // v0.5① 回归断言：菜单不再有「打开」（与单击行完全重复）
     openTaskMenu('tr')
     expect(screen.queryByRole('menuitem', { name: '打开' })).toBeNull()
-    expect(screen.getByRole('menuitem', { name: '停止' })).toBeDefined() // 其余菜单项保留
+    // 已被 × 停止 → 菜单项变为「恢复」（其余菜单项保留）
+    expect(screen.getByRole('menuitem', { name: '恢复' })).toBeDefined()
     fireEvent.keyDown(document.body, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
     // 再单击行可重新打开 tab（开 tab 语义只剩单击入口）

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { createAppContext, registerIpcHandlers, type AppContext } from './ipc'
 import { CrashLogger } from './crash-log'
+import { countLiveRunningTasks } from './running-count'
 import { resolveClaudeCommand } from './pty-manager'
 import { initSingleInstance } from './single-instance'
 import { attachCloseToTray, setupTray, type TrayHandle } from './tray'
@@ -465,9 +466,13 @@ function createWindow(): BrowserWindow {
 
 const sink = new PtyByteSink()
 
-/** 运行任务数（托盘 tooltip/退出确认的真值源——以 tasks.json 为准，TaskUpdate 旁路驱动刷新） */
+/**
+ * 运行任务数（托盘 tooltip/退出确认的真值源）。
+ * v1.1.0 加固：不只信 tasks.json 的 status==='running'，还要求 PTY 句柄确实存活——
+ * 异常退出/崩溃残留的「幽灵 running」记录不该让用户看到「仍有任务在运行」。
+ */
 const runningCountOf = (ctx: AppContext | null): number =>
-  (ctx?.tasks.list() ?? []).filter((t) => t.status === 'running').length
+  ctx === null ? 0 : countLiveRunningTasks(ctx.tasks.list(), (id) => ctx.pty.isRunning(id))
 
 app.whenReady().then(async () => {
   if (!gotSingleLock) return // v1.0.7 第二实例：不建窗口/托盘，等 initSingleInstance 的 exit(0) 生效
