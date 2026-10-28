@@ -98,14 +98,22 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [appUpdError, setAppUpdError] = useState('')
   const [appUpdProgress, setAppUpdProgress] = useState<AppUpdateProgressEvent | null>(null)
   const [appUpdReady, setAppUpdReady] = useState(false)
+  /** v1.2.1 自动升级开关（main settings.json 持久化；缺省开） */
+  const [autoUpdate, setAutoUpdate] = useState(true)
   /** S14：当前展示的分类（默认首项「外观」） */
   const [activeSection, setActiveSection] = useState<SettingsSectionId>('appearance')
 
-  // v1.1.0 下载进度订阅（main 经 cwb:event:app-update-progress 推送）
+  // v1.1.0 下载进度订阅（main 经 cwb:event:app-update-progress 推送；v1.2.1 增加
+  // available=自动检查结果 / waiting-tasks=等任务结束）
   useEffect(() => {
     return window.cwb.onAppUpdateProgress((e) => {
+      if (e.phase === 'available') {
+        setAppUpd(e.info)
+        useAppStore.getState().setAppUpdateInfo(e.info)
+        return
+      }
       setAppUpdProgress(e)
-      setAppUpdReady(e.phase === 'ready')
+      setAppUpdReady(e.phase === 'ready' || e.phase === 'waiting-tasks' || e.phase === 'installing')
     })
   }, [])
 
@@ -113,7 +121,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     setAppUpdChecking(true)
     setAppUpdError('')
     try {
-      const info = await window.cwb.checkAppUpdate()
+      // v1.2.1：手动点检查 → force 重新拉清单（不复用启动自动检查的缓存）
+      const info = await window.cwb.checkAppUpdate(true)
       setAppUpd(info)
       setAppUpdReady(false)
       useAppStore.getState().setAppUpdateInfo(info) // 同步侧栏版本按钮角标
@@ -129,6 +138,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     setAppUpdReady(false)
     const r = await window.cwb.downloadAppUpdate()
     if (!r.ok) setAppUpdError(r.error ?? t('settings.appDownloadFailed'))
+    // 下载成功由 main 的 ready 进度事件置 appUpdReady → 显示「立即升级」
+    // （自动升级开关打开时，main 侧会自行完成重启，这个按钮是手动路径/兜底）
   }
 
   const installAppUpd = async (): Promise<void> => {
@@ -171,6 +182,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       .then((s) => {
         setCloseToTray(s.closeToTray)
         setLaunchAtLogin(s.launchAtLogin)
+        setAutoUpdate(s.autoUpdate !== false)
       })
       .catch(() => {})
   }, [])
@@ -608,6 +620,19 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             {activeSection === 'update' && (
               <div className="dialog-section">
                 <p className="section-title">{t('settings.appUpdateTitle')}</p>
+                {/* v1.2.1 自动升级开关（缺省开）：无需点按钮——下载就绪且无运行任务即自动重启升级 */}
+                <label className="dialog-check">
+                  <input
+                    type="checkbox"
+                    checked={autoUpdate}
+                    onChange={(e) => {
+                      setAutoUpdate(e.target.checked)
+                      void window.cwb.setAppSettings({ autoUpdate: e.target.checked })
+                    }}
+                  />
+                  {t('settings.autoUpdate')}
+                </label>
+                <p className="hint-small">{t('settings.autoUpdateHint')}</p>
                 <div className="dialog-actions">
                   <button
                     type="button"
@@ -635,10 +660,21 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   )}
                   {appUpdReady && (
                     <button type="button" className="btn primary" onClick={() => void installAppUpd()}>
-                      {t('settings.appRestartInstall')}
+                      {t('settings.appInstallNow')}
                     </button>
                   )}
                 </div>
+                {/* 自动升级进行中状态：等待任务结束 / 正在退出升级 */}
+                {appUpdProgress?.phase === 'waiting-tasks' && (
+                  <p className="muted" role="status">
+                    {t('settings.appWaitingTasks', { count: appUpdProgress.count })}
+                  </p>
+                )}
+                {appUpdProgress?.phase === 'installing' && (
+                  <p className="muted" role="status">
+                    {t('settings.appAutoInstalling')}
+                  </p>
+                )}
                 {appUpd !== null && (
                   <p className="muted">
                     {t('settings.appUpdateLine', {

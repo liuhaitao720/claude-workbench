@@ -27,6 +27,16 @@ const projectSkill: SkillInfo = {
   projectId: 'ps',
   dir: 'D:\\skillproj\\.claude\\skills\\deploy'
 }
+/** v1.2.1：市场安装的插件 skill（落点在 ~/.claude/plugins/cache，不在 .claude/skills） */
+const pluginSkill = (over: Partial<SkillInfo> = {}): SkillInfo => ({
+  name: 'skill-creator',
+  description: '创建与改进 skill',
+  source: 'plugin',
+  pluginId: 'skill-creator@official',
+  pluginEnabled: true,
+  dir: 'C:\\Users\\u\\.claude\\plugins\\cache\\official\\skill-creator\\1.0.0\\skills\\skill-creator',
+  ...over
+})
 
 beforeEach(() => {
   // v1.2.0：语言 store 跨文件模块级共享——每个用例回到中文基线（英文用例自行切换）
@@ -60,6 +70,11 @@ async function openSkills(): Promise<ReturnType<typeof within>> {
   fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
   const dialog = await screen.findByRole('dialog', { name: 'Skills 管理' })
   return within(dialog)
+}
+
+/** v1.2.1 三页签：切到指定页签（已安装 / 在线搜索 / 导入） */
+function gotoTab(skills: ReturnType<typeof within>, name: string): void {
+  fireEvent.click(skills.getByRole('tab', { name: new RegExp(`^${name}`) }))
 }
 
 function fireCliOutput(
@@ -105,7 +120,23 @@ describe('入口与列表', () => {
   it('安全提示常驻：仅安装可信来源——skill 可携带可执行脚本', async () => {
     await renderApp()
     const skills = await openSkills()
+    gotoTab(skills, '导入')
     expect(skills.getByText('仅安装可信来源——skill 可携带可执行脚本')).toBeDefined()
+  })
+
+  it('三页签：默认「已安装」；切「在线搜索」「导入」显示各自内容（同一时刻只渲染一页）', async () => {
+    await renderApp([userSkill])
+    const skills = await openSkills()
+    expect(skills.getByRole('tab', { name: /已安装/ }).getAttribute('aria-selected')).toBe('true')
+    expect(skills.queryByLabelText('搜索 skill 市场')).toBeNull()
+
+    gotoTab(skills, '在线搜索')
+    expect(skills.getByLabelText('搜索 skill 市场')).toBeDefined()
+    expect(skills.queryByText('用户级 · 全局生效')).toBeNull()
+
+    gotoTab(skills, '导入')
+    expect(skills.getByLabelText('claude CLI 命令')).toBeDefined()
+    expect(skills.queryByLabelText('搜索 skill 市场')).toBeNull()
   })
 })
 
@@ -150,7 +181,7 @@ describe('导入通道①：导入文件夹', () => {
     vi.mocked(api.pickDirectory).mockResolvedValue('D:\\skill-src')
     vi.mocked(api.importSkillFolder).mockResolvedValue({ ...userSkill, name: 'new-skill' })
     const skills = await openSkills()
-    await skills.findByText('pdf')
+    gotoTab(skills, '导入')
     fireEvent.click(skills.getByRole('button', { name: '导入文件夹…' }))
     await waitFor(() =>
       expect(api.importSkillFolder).toHaveBeenCalledWith('D:\\skill-src', { scope: 'user' })
@@ -166,6 +197,7 @@ describe('导入通道①：导入文件夹', () => {
     const api = await renderApp()
     vi.mocked(api.pickDirectory).mockResolvedValue('D:\\skill-src')
     const skills = await openSkills()
+    gotoTab(skills, '导入')
     fireEvent.click(skills.getByRole('radio', { name: /项目级（SkillProj）/ }))
     fireEvent.click(skills.getByRole('button', { name: '导入文件夹…' }))
     await waitFor(() =>
@@ -180,6 +212,7 @@ describe('导入通道①：导入文件夹', () => {
     const api = await renderApp()
     vi.mocked(api.pickDirectory).mockResolvedValue(null)
     const skills = await openSkills()
+    gotoTab(skills, '导入')
     fireEvent.click(skills.getByRole('button', { name: '导入文件夹…' }))
     await new Promise((r) => setTimeout(r, 0))
     expect(api.importSkillFolder).not.toHaveBeenCalled()
@@ -190,9 +223,69 @@ describe('导入通道①：导入文件夹', () => {
     vi.mocked(api.pickDirectory).mockResolvedValue('D:\\skill-src')
     vi.mocked(api.importSkillFolder).mockRejectedValue(new Error('同名 skill 已存在：pdf'))
     const skills = await openSkills()
+    gotoTab(skills, '导入')
     fireEvent.click(skills.getByRole('button', { name: '导入文件夹…' }))
     expect(await skills.findByText(/同名 skill 已存在：pdf/)).toBeDefined()
     expect(screen.queryByText(/对已运行会话不生效/)).toBeNull() // 失败不 toast
+  })
+})
+
+describe('v1.2.1 插件 skill（市场装完要能在已安装列表看到）', () => {
+  it('已安装页出现「插件」分组：行显示 pluginId，已停用的标「已停用」并给「启用」按钮', async () => {
+    await renderApp([
+      pluginSkill(),
+      pluginSkill({ name: 'ai-readiness', pluginId: 'postman@official', pluginEnabled: false })
+    ])
+    const skills = await openSkills()
+    expect(await skills.findByText('skill-creator')).toBeDefined()
+    const titles = groupTitles()
+    expect(titles.some((t) => t.includes('插件 · 由 marketplace 安装'))).toBe(true)
+
+    const enabledRow = document.querySelector('[data-skill-name="skill-creator"]') as HTMLElement
+    expect(enabledRow.textContent).toContain('skill-creator@official')
+    expect(enabledRow.querySelector('[data-plugin-toggle]')?.textContent).toBe('停用')
+
+    const disabledRow = document.querySelector('[data-skill-name="ai-readiness"]') as HTMLElement
+    expect(disabledRow.dataset.pluginEnabled).toBe('false')
+    expect(disabledRow.textContent).toContain('已停用')
+    expect(disabledRow.querySelector('[data-plugin-toggle]')?.textContent).toBe('启用')
+  })
+
+  it('插件行没有「移除」（目录归插件机制管），改为启用/停用', async () => {
+    await renderApp([pluginSkill()])
+    const skills = await openSkills()
+    await skills.findByText('skill-creator')
+    expect(skills.queryByRole('button', { name: '移除' })).toBeNull()
+    expect(skills.getByRole('button', { name: '停用' })).toBeDefined()
+  })
+
+  it('点「停用」→ setSkillPluginEnabled(id,false)；命令退出后重扫列表', async () => {
+    const api = await renderApp([pluginSkill()])
+    const skills = await openSkills()
+    await skills.findByText('skill-creator')
+    fireEvent.click(skills.getByRole('button', { name: '停用' }))
+    await waitFor(() =>
+      expect(api.setSkillPluginEnabled).toHaveBeenCalledWith('skill-creator@official', false)
+    )
+    // 命令输出与退出后的重扫共用 CLI 输出通道
+    await waitFor(() => expect(skills.getByRole('log')).toBeDefined())
+    const before = vi.mocked(api.listSkills).mock.calls.length
+    fireCliOutput(api, { commandId: 'skill-plugin-toggle-test', type: 'exit', exitCode: 0 })
+    await waitFor(() =>
+      expect(vi.mocked(api.listSkills).mock.calls.length).toBeGreaterThan(before)
+    )
+  })
+
+  it('启用/停用失败 → 行内错误，不静默', async () => {
+    const api = await renderApp([pluginSkill({ pluginEnabled: false })])
+    vi.mocked(api.setSkillPluginEnabled).mockResolvedValue({
+      ok: false,
+      error: '插件未安装，无法切换启用状态: x@y'
+    })
+    const skills = await openSkills()
+    await skills.findByText('skill-creator')
+    fireEvent.click(skills.getByRole('button', { name: '启用' }))
+    expect(await skills.findByText(/插件未安装/)).toBeDefined()
   })
 })
 
@@ -217,7 +310,8 @@ describe('v1.2.0 在线搜索与安装', () => {
     render(<App />)
     await waitFor(() => expect(document.querySelector('li[data-project-id="ps"]')).toBeDefined())
     const skills = await openSkills()
-    await skills.findByText('在线搜索并安装')
+    gotoTab(skills, '在线搜索')
+    await skills.findByText('pdf-tools')
     return skills
   }
 
@@ -237,6 +331,7 @@ describe('v1.2.0 在线搜索与安装', () => {
     vi.mocked(api.listSkillMarketplaces).mockResolvedValue([{ name: 'official', count: 1 }])
     vi.mocked(api.searchSkillMarket).mockResolvedValue([entry])
     const skills = await openSkills()
+    gotoTab(skills, '在线搜索')
     await skills.findByText('pdf-tools')
 
     fireEvent.change(skills.getByLabelText('搜索 skill 市场'), { target: { value: 'pdf' } })
@@ -258,6 +353,7 @@ describe('v1.2.0 在线搜索与安装', () => {
     render(<App />)
     await waitFor(() => expect(document.querySelector('li[data-project-id="ps"]')).toBeDefined())
     const skills = await openSkills()
+    gotoTab(skills, '在线搜索')
     fireEvent.click(await skills.findByRole('button', { name: '安装' }))
     await waitFor(() => expect(api.installMarketSkill).toHaveBeenCalledWith('pdf-tools@official'))
     // 安装命令的 commandId 挂进 CliOutputView
@@ -280,6 +376,7 @@ describe('v1.2.0 在线搜索与安装', () => {
     render(<App />)
     await waitFor(() => expect(document.querySelector('li[data-project-id="ps"]')).toBeDefined())
     const skills = await openSkills()
+    gotoTab(skills, '在线搜索')
     fireEvent.click(await skills.findByRole('button', { name: '安装' }))
     expect(await skills.findByText(/安装失败：插件名含非法字符/)).toBeDefined()
   })
@@ -289,6 +386,7 @@ describe('v1.2.0 在线搜索与安装', () => {
     vi.mocked(api.searchSkillMarket).mockResolvedValue([])
     vi.mocked(api.refreshSkillMarket).mockResolvedValue({ ok: true, commandId: 'skill-refresh-test' })
     const skills = await openSkills()
+    gotoTab(skills, '在线搜索')
     expect(await skills.findByText(/未配置 marketplace/)).toBeDefined()
     fireEvent.click(skills.getByRole('button', { name: '刷新' }))
     await waitFor(() => expect(api.refreshSkillMarket).toHaveBeenCalledTimes(1))
@@ -301,15 +399,17 @@ describe('v1.2.0 在线搜索与安装', () => {
     vi.mocked(api.searchSkillMarket).mockResolvedValue([])
     fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
     const dialog = await screen.findByRole('dialog', { name: 'Manage skills' })
-    expect(within(dialog).getByText('Search and install online')).toBeDefined()
+    fireEvent.click(within(dialog).getByRole('tab', { name: /^Find skills/ }))
     expect(within(dialog).getByPlaceholderText('Search skills (name / description / category)…')).toBeDefined()
   })
 })
 
 describe('导入通道②：CLI 命令', () => {
+
   it('执行 → runCliCommand(命令)；输出区 onCliOutput 追加；exit(0) → 刷新列表+toast', async () => {
     const api = await renderApp()
     const skills = await openSkills()
+    gotoTab(skills, '导入')
     fireEvent.change(skills.getByLabelText('claude CLI 命令'), {
       target: { value: 'claude plugin install foo@marketplace' }
     })
@@ -335,6 +435,7 @@ describe('导入通道②：CLI 命令', () => {
       new Error('命令不合法：仅允许 plugin/update/upgrade/mcp 子命令')
     )
     const skills = await openSkills()
+    gotoTab(skills, '导入')
     fireEvent.change(skills.getByLabelText('claude CLI 命令'), {
       target: { value: 'claude danger --flag' }
     })
@@ -345,6 +446,7 @@ describe('导入通道②：CLI 命令', () => {
   it('关闭弹窗 → killCliCommand 防孤儿', async () => {
     const api = await renderApp()
     const skills = await openSkills()
+    gotoTab(skills, '导入')
     fireEvent.change(skills.getByLabelText('claude CLI 命令'), {
       target: { value: 'claude plugin install foo' }
     })

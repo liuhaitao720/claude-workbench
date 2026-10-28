@@ -1241,12 +1241,25 @@ button {
   font-size: 11px;
 }
 
+/* v1.2.1 插件 skill 停用标记（列表里一眼看出「装了但没生效」） */
+.skill-badge-off {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 9px;
+  border: 1px solid var(--border-3);
+  color: var(--text-4);
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
 .btn-mini {
   padding: 2px 8px;
   font-size: 11px;
 }
 
-/* v1.2.0 skill 市场：搜索行（输入 + marketplace 过滤 + 刷新）与结果列表 */
+/* v1.2.0 skill 市场：搜索行（输入 + marketplace 过滤 + 刷新）；结果列表本身由
+   v1.2.1 的 .skills-pane 承担滚动，这里不再单独限高 */
 .market-search-row {
   display: flex;
   align-items: center;
@@ -1274,16 +1287,128 @@ button {
   color: inherit;
 }
 
-.market-list {
-  max-height: 260px;
-  overflow-y: auto;
-  margin-top: 6px;
+/* ── v1.2.1 Skills 弹窗：固定高度的三页签布局 ─────────────────────────
+   旧布局把「已安装 / 在线搜索 / 导入」自上而下摞在一起，列表一长整页滚到底才能
+   看到导入区。现在弹窗高度固定（不随内容长高），标题/页签/关闭恒定可见，
+   只有中间列表自身滚动——切页签不跳位置，导入区永远一眼可达。 */
+
+.skills-dialog {
+  width: 640px;
+  max-width: calc(100vw - 32px);
+  height: min(78vh, 620px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  overflow: hidden; /* 滚动收敛到 .skills-body */
 }
 
-/* v0.5.2 Skills 独占一行 → v0.9 用户指令覆盖：Skills | 设置 并排（flex:1 平分一行；
- * 原 .skills-btn + .sidebar-actions .skills-btn 双定义合并沿革自 v0.5.2） */
-.skills-btn {
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dialog-head .dialog-title {
+  margin: 0;
+}
+
+/* 标题右侧的关闭：与弹窗内其他图标按钮同一手感（图标 + tooltip） */
+.dialog-close {
+  font-size: 18px;
+  padding: 2px 8px;
+}
+
+/* 分段式页签：底槽 + 选中项提亮（VS Code 设置页 / 系统偏好设置的密度） */
+.seg-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-soft);
+}
+
+.seg-tab {
   flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.seg-tab:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+.seg-tab.active {
+  background: var(--bg-sel);
+  color: var(--text-max);
+  box-shadow: inset 0 0 0 1px var(--border-3);
+}
+
+.seg-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.seg-tab-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--bg-sel-hover);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.skills-body {
+  flex: 1;
+  min-height: 0; /* flex 链：允许页签内容内滚 */
+  display: flex;
+  flex-direction: column;
+}
+
+/* 每个页签的内容区：自身滚动，底部留一点呼吸空间 */
+.skills-pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.skills-result-count {
+  margin: 2px 0 4px;
+  color: var(--text-4);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 空态：一句说明 + 两个直达页签的动作（空屏是邀请，不是死胡同） */
+.skills-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 28px 4px;
+  color: var(--text-3);
+}
+
+.skills-empty p {
+  margin: 0;
+  max-width: 46ch;
+  line-height: 1.6;
 }
 
 /* ── v0.5③ 导入成功一次性 toast ── */
@@ -1310,6 +1435,23 @@ button {
   width: auto;
   margin: 0;
   padding: 2px 8px;
+}
+
+/* v1.2.1：版本号改为静态文本（不再是弹窗入口），其后紧跟三个图标按钮 */
+.version-text {
+  flex: 0 0 auto;
+  color: var(--text-4);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.sidebar-icon-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 auto;
 }
 
 .sidebar-dir-row {

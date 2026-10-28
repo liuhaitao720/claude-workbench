@@ -1,65 +1,60 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join, sep } from 'node:path'
 import { shell } from 'electron'
 import type { SkillInfo } from '../shared/types'
 import { translate } from '../shared/i18n'
 import { mainLanguage } from './language'
+import { describeSkillDir, parseSkillFrontmatter, scanSkillDirs } from './skill-files'
+import { PluginSkills } from './plugin-skills'
 
 /** v1.2.0 错误文案按当前界面语言取（main 进程级语言，renderer 启动/切换时同步） */
 function tr(key: Parameters<typeof translate>[1], params: Record<string, string>): string {
   return translate(mainLanguage(), key, params)
 }
 
+export { parseSkillFrontmatter }
+
 /**
  * v0.5③ skill 扫描/导入/移除（main 侧）。
  *
- * 只读扫描两级来源：用户级 %USERPROFILE%\.claude\skills（全局生效）与
- * 项目级 <项目dir>\.claude\skills（仅该项目会话生效）。解析 SKILL.md frontmatter
- * （name/description/version/author），容忍缺字段（name 缺省用目录名）与超长
- * description（截断至 120 字）。
+ * 扫描三级来源（v1.2.1 补第三级）：
+ * - 用户级 %USERPROFILE%\.claude\skills（全局生效）
+ * - 项目级 <项目dir>\.claude\skills（仅该项目会话生效）
+ * - 插件级 ~/.claude/plugins/cache/<marketplace>/<plugin>/<版本>/skills（见 plugin-skills）
+ *
+ * 第三级是用户报障「在线搜索装完，已安装列表里没有」的修复：`claude plugin install`
+ * 从不往 ~/.claude/skills 复制文件，插件技能落在自己的 cache 目录，v0.5 的两个根
+ * 天然扫不到，所以装成功后重启也看不见。
+ *
+ * 解析 SKILL.md frontmatter（name/description/version/author），容忍缺字段（name
+ * 缺省用目录名）与超长 description（截断至 120 字）。
  *
  * 移除走 Electron shell.trashItem()（回收站，非永久删除——终版评审高2）；
  * 删除前 realpathSync 解析真实路径并校验必须严格位于对应 skills 根之下
- * （防 junction/symlink 越界把任意目录送进回收站）。
+ * （防 junction/symlink 越界把任意目录送进回收站）。插件来源不可走这条路——
+ * 它的目录归 claude 插件机制管，删除会破坏插件的一致性。
  */
-
-/** description 截断上限（v0.5③：SKILL.md 实测存在 ~500 字单行，列表只显示前 120 字） */
-const MAX_DESCRIPTION_LENGTH = 120
-
-/** frontmatter 中采纳的字段（其余忽略） */
-const FRONTMATTER_FIELDS = ['name', 'description', 'version', 'author'] as const
 
 export interface SkillsStoreOptions {
   /** 用户级 skills 根（缺省 CWB_SKILLS_USER_ROOT 环境缝 → %USERPROFILE%\.claude\skills；测试注入 temp） */
   userRoot?: () => string
   /** 已注册项目快照（项目级扫描与 import/remove 归属校验的 dir 来源；缺省空） */
   projects?: () => ReadonlyArray<{ id: string; dir: string }>
+  /** 插件 skill 来源（缺省按真实 ~/.claude；测试注入 temp 主目录） */
+  pluginSkills?: PluginSkills
 }
 
 function defaultUserRoot(): string {
   return process.env['CWB_SKILLS_USER_ROOT'] ?? join(homedir(), '.claude', 'skills')
 }
 
-/** 解析 SKILL.md frontmatter（容忍缺失/空文件；仅取单行 key: value 形态） */
-export function parseSkillFrontmatter(text: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  if (!text.startsWith('---')) return out
-  const lines = text.split(/\r?\n/)
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i] ?? ''
-    if (line.trim() === '---' || line.trim() === '...') break
-    const match = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(line)
-    if (match) {
-      const key = match[1] ?? ''
-      if ((FRONTMATTER_FIELDS as readonly string[]).includes(key)) out[key] = (match[2] ?? '').trim()
-    }
-  }
-  return out
-}
-
 export class SkillsStore {
-  constructor(private readonly opts: SkillsStoreOptions = {}) {}
+  private readonly pluginSkills: PluginSkills
+
+  constructor(private readonly opts: SkillsStoreOptions = {}) {
+    this.pluginSkills = opts.pluginSkills ?? new PluginSkills()
+  }
 
   private userRoot(): string {
     return this.opts.userRoot?.() ?? defaultUserRoot()
@@ -69,12 +64,17 @@ export class SkillsStore {
     return this.opts.projects?.() ?? []
   }
 
-  /** 全部 skill（用户级 + 全部项目级；目录缺失/无 SKILL.md 的条目跳过） */
+  /** 全部 skill（用户级 + 项目级 + 插件级；目录缺失/无 SKILL.md 的条目跳过） */
   list(): SkillInfo[] {
-    const out: SkillInfo[] = [...scanRoot(this.userRoot(), 'user')]
+    const out: SkillInfo[] = scanSkillDirs(this.userRoot()).map((dir) =>
+      describeSkillDir(dir, 'user')
+    )
     for (const project of this.projects()) {
-      out.push(...scanRoot(join(project.dir, '.claude', 'skills'), 'project', project.id))
+      for (const dir of scanSkillDirs(join(project.dir, '.claude', 'skills'))) {
+        out.push(describeSkillDir(dir, 'project', project.id))
+      }
     }
+    out.push(...this.pluginSkills.list())
     return out
   }
 
@@ -118,8 +118,10 @@ export class SkillsStore {
    * 移除 skill（回收站）：realpathSync 解析 dir 与对应 skills 根的真实路径，
    * 校验 dir 必须严格位于根之下（含 junction/symlink 解析后的真实落点），
    * 通过后 shell.trashItem()（可从回收站找回，非永久删除）。
+   * 插件来源拒绝——那会拆坏插件的目录结构，应由 claude plugin uninstall 处理。
    */
   async removeSkill(skill: SkillInfo): Promise<void> {
+    if (skill.source === 'plugin') throw new Error(tr('skills.errPluginRemove', { id: skill.pluginId ?? '' }))
     const root = this.rootForScope(skill.source, skill.projectId)
     let realDir: string
     let realRoot: string
@@ -133,47 +135,6 @@ export class SkillsStore {
       throw new Error(tr('skills.errOutOfRoot', { dir: skill.dir }))
     }
     await shell.trashItem(realDir)
-  }
-}
-
-/** 扫描单个 skills 根（目录缺失 → 空列表） */
-function scanRoot(root: string, source: 'user' | 'project', projectId?: string): SkillInfo[] {
-  let entries
-  try {
-    entries = readdirSync(root, { withFileTypes: true })
-  } catch {
-    return []
-  }
-  const out: SkillInfo[] = []
-  for (const entry of entries) {
-    // 跳过 zip 文件形态（如打包分发的 .skill 压缩包）与非目录条目——仅识别「目录内含 SKILL.md」形态；
-    // 符号链接目录（isSymbolicLink）也接受，归属校验在 removeSkill 的 realpath 侧兜底
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
-    const dir = join(root, entry.name)
-    const skillMd = join(dir, 'SKILL.md')
-    if (!existsSync(skillMd)) continue
-    out.push(describeSkillDir(dir, source, projectId))
-  }
-  return out
-}
-
-/** 由目录与 SKILL.md（可缺失）构造 SkillInfo；description 超长截断至 120 字 */
-function describeSkillDir(dir: string, source: 'user' | 'project', projectId?: string): SkillInfo {
-  let frontmatter: Record<string, string> = {}
-  try {
-    frontmatter = parseSkillFrontmatter(readFileSync(join(dir, 'SKILL.md'), 'utf8'))
-  } catch {
-    // SKILL.md 读取失败按缺字段处理（name 用目录名）
-  }
-  const rawDescription = frontmatter['description'] ?? ''
-  return {
-    name: frontmatter['name']?.trim() || basename(dir),
-    description: rawDescription.slice(0, MAX_DESCRIPTION_LENGTH),
-    ...(frontmatter['version'] ? { version: frontmatter['version'] } : {}),
-    ...(frontmatter['author'] ? { author: frontmatter['author'] } : {}),
-    source,
-    ...(source === 'project' && projectId ? { projectId } : {}),
-    dir
   }
 }
 

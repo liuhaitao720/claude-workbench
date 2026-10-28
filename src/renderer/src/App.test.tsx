@@ -24,10 +24,17 @@ function projectRow(id: string): HTMLElement {
 }
 
 describe('App（布局与侧栏）', () => {
-  it('renders the version button（v0.5.1：顶部菜单移除，版本入口取代标题）', () => {
+  it('renders the version text + header icon entries（v1.2.1：版本号纯文本，其后三个图标入口）', () => {
     installCwbMock()
     render(<App />)
-    expect(screen.getByRole('button', { name: 'v1.2.0' })).toBeDefined()
+    expect(document.querySelector('.version-text')?.textContent).toContain('v1.2.1')
+    // 版本号不再可点开弹窗
+    expect(screen.queryByRole('button', { name: /^v1\./ })).toBeNull()
+    // Skills / 设置 / 关于 三个图标按钮（@title 与 aria-label 同名，读屏可达）
+    const header = document.querySelector('.sidebar-header') as HTMLElement
+    expect(within(header).getByRole('button', { name: 'Skills' })).toBeDefined()
+    expect(within(header).getByRole('button', { name: '设置' })).toBeDefined()
+    expect(within(header).getByRole('button', { name: '关于 Claude Workbench' })).toBeDefined()
   })
 
   it('mount 时并行加载 projects 与 tasks（均调用一次）', async () => {

@@ -19,6 +19,8 @@ const SMOKE_TIMEOUT_MS = 60_000
 const WAIT_DATA_MS = 50_000
 /** renderer did-finish-load 后的缓冲（React mount + initListeners 订阅完成余量） */
 const RENDERER_SETTLE_MS = 300
+/** 自动升级开始检查的延迟（等窗口/托盘稳定；避免与首屏渲染抢网络与 CPU） */
+const AUTO_UPDATE_START_DELAY_MS = 5_000
 
 // ── 启动模式解析（须在 app ready 前） ─────────────────────────────────
 
@@ -42,6 +44,9 @@ const RECOVERY = recoveryPhase()
 
 /** 冒烟编排模式（--smoke 或 --smoke-recovery） */
 const isSmokeRun = SMOKE_FLAG || RECOVERY !== null || INPUT_PROBE_FLAG || WEBGL_PROBE_FLAG
+
+/** --no-auto-update：显式关闭启动自动升级（打包产物验收探针用——探针进程不该下载/替换自身） */
+const NO_AUTO_UPDATE_FLAG = process.argv.includes('--no-auto-update')
 
 /** 测试注入 userData（防污染真实数据目录；须在 ready 前生效） */
 const injectedUserData = process.env['CWB_USER_DATA']
@@ -543,6 +548,15 @@ app.whenReady().then(async () => {
     })
     trayHandle.setRunningCount(runningCountOf(currentCtx))
   })()
+
+  // v1.2.1 自动升级：正常模式启动即检查 → 有新版本后台下载 → 无运行任务（且过启动宽限期）
+  // 自动退出替换重启，全程无需点按钮；冒烟/探针模式不触网
+  if (!isSmokeRun) {
+    win.webContents.once('did-finish-load', () => {
+      if (NO_AUTO_UPDATE_FLAG) return
+      setTimeout(() => void currentCtx?.appUpdate.runAutoUpdate(), AUTO_UPDATE_START_DELAY_MS)
+    })
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow()

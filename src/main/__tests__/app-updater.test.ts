@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import {
   AppUpdater,
   buildUpdaterCmd,
+  buildUpdaterLauncher,
   parseChangelog,
   type AppUpdaterDeps
 } from '../app-updater'
@@ -71,6 +72,30 @@ describe('buildUpdaterCmd（替换脚本安全红线）', () => {
     // 路径含空格全程引号；无执行策略绕过、无进程枚举
     expect(cmd).toContain('"D:\\App Dir\\Claude"')
     expect(cmd).not.toMatch(/ExecutionPolicy|tasklist|Get-Process/)
+  })
+
+  // ── v1.2.1 升级后残留控制台窗口修复 ────────────────────────────────
+  it('脚本收尾自删（.cmd 自身 + .vbs 垫片），只留 update.log 取证', () => {
+    const cmd = buildUpdaterCmd({
+      zipPath: 'C:\\tmp\\z.zip',
+      installDir: 'D:\\App',
+      exeName: 'app.exe',
+      extractDir: 'C:\\tmp\\ex',
+      logPath: 'C:\\tmp\\log',
+      launcherPath: 'C:\\tmp\\updater-launch.vbs'
+    })
+    expect(cmd).toContain('del "C:\\tmp\\updater-launch.vbs"')
+    expect(cmd).toContain('del "%~f0"') // 自删（批处理读完即释放句柄）
+  })
+
+  it('静默启动垫片：wscript 以隐藏窗口（0）异步拉起，纯 ASCII、路径来自参数不拼接', () => {
+    const vbs = buildUpdaterLauncher()
+    expect(vbs).toContain('CreateObject("WScript.Shell")')
+    expect(vbs).toMatch(/sh\.Run\s+""""\s*&\s*target\s*&\s*""""\s*,\s*0\s*,\s*False/)
+    expect(vbs).toContain('WScript.Arguments(0)')
+    // 不含中文/非 ASCII（wscript 按系统 ANSI 解析纯 ASCII 脚本最稳）
+    // eslint-disable-next-line no-control-regex
+    expect(/^[\x00-\x7F]*$/.test(vbs)).toBe(true)
   })
 })
 
@@ -171,16 +196,157 @@ describe('AppUpdater（注入式：假网络/假 spawn/临时目录）', () => {
 
     const r = await u2.install()
     expect(r.ok).toBe(true)
-    // 更新器脚本落盘且引用校验过的 zip；spawn detached；触发正常退出
+    // 更新器脚本落盘且引用校验过的 zip；经 wscript 静默拉起；触发正常退出
     const cmd = readFileSync(join(dir, 'updates', 'updater.cmd'), 'utf8')
     expect(cmd).toContain('robocopy')
     expect(deps.spawnImpl).toHaveBeenCalled()
-    expect(
-      (deps.spawnImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0][2]
-    ).toMatchObject({
-      detached: true,
-      stdio: 'ignore'
-    })
+    const [file, args, opts] = (deps.spawnImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      string[],
+      Record<string, unknown>
+    ]
+    // v1.2.1：不再直起 cmd.exe（detached+windowsHide 互斥会露出黑窗），改 wscript 隐藏拉起
+    expect(file).toBe('wscript.exe')
+    expect(args[0]).toBe('//nologo')
+    expect(args[1]).toBe(join(dir, 'updates', 'updater-launch.vbs'))
+    expect(args[2]).toBe(join(dir, 'updates', 'updater.cmd'))
+    expect(opts).toMatchObject({ detached: true, stdio: 'ignore' })
+    expect(opts['windowsHide']).toBeUndefined() // 靠 vbs 的窗口样式 0，不依赖该标志
+    expect(readFileSync(join(dir, 'updates', 'updater-launch.vbs'), 'utf8')).toContain('WScript.Shell')
     expect(deps.quit).toHaveBeenCalled()
+  })
+
+  // ── v1.2.1 自动升级（无需点按钮）──────────────────────────────────
+  /** 就绪态：check + download 成功（真 sha256） */
+  async function readyUpdater(over: Partial<AppUpdaterDeps> = {}): Promise<{
+    updater: AppUpdater
+    deps: AppUpdaterDeps
+    progress: Array<{ phase: string; [k: string]: unknown }>
+  }> {
+    const progress: Array<{ phase: string; [k: string]: unknown }> = []
+    const body = new Uint8Array([7, 7, 7])
+    const sha = createHash('sha256').update(body).digest('hex')
+    const dl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('latest.json')) {
+        return new Response(JSON.stringify({ version: '1.2.0', url: 'http://x/zip', sha256: sha }), { status: 200 })
+      }
+      if (String(url).includes('CHANGELOG')) return new Response(CHANGELOG_MD, { status: 200 })
+      return new Response(body, { status: 200, headers: { 'content-length': String(body.byteLength) } })
+    })
+    const deps = makeDeps({
+      fetchImpl: dl as unknown as typeof fetch,
+      onProgress: (e) => progress.push(e),
+      ...over
+    })
+    return { updater: new AppUpdater(deps), deps, progress }
+  }
+
+  it('自动升级：无运行任务且过宽限期 → 直接下载并退出替换（不点任何按钮）', async () => {
+    const { updater, deps, progress } = await readyUpdater({ autoInstallGraceMs: 0 })
+    await updater.runAutoUpdate()
+    await vi.waitFor(() => expect(deps.quit).toHaveBeenCalledTimes(1))
+    // 进度事件：available（版本+说明）→ 下载百分比 → verifying → ready → installing
+    expect(progress[0]?.phase).toBe('available')
+    expect(progress.some((e) => e.phase === 'installing')).toBe(true)
+  })
+
+  it('自动升级：有运行任务 → 不退出，广播 waiting-tasks；任务结束后自动续上升级', async () => {
+    let running = 2
+    const { updater, deps, progress } = await readyUpdater({
+      autoInstallGraceMs: 0,
+      autoInstallPollMs: 1_000_000, // 轮询拉到很长：验证「任务变更即续上」而非等轮询
+      runningCount: () => running
+    })
+    await updater.runAutoUpdate()
+    expect(deps.quit).not.toHaveBeenCalled()
+    const waiting = progress.filter((e) => e.phase === 'waiting-tasks')
+    expect(waiting.at(-1)).toEqual({ phase: 'waiting-tasks', count: 2 })
+
+    running = 0
+    updater.tryAutoInstall() // 组合根 onTaskUpdate 钩子在任务停下时调用
+    await vi.waitFor(() => expect(deps.quit).toHaveBeenCalledTimes(1))
+  })
+
+  it('任务结束后只剩宽限期 → 广播 ready（界面从「等待 N 个任务」退回已就绪）', async () => {
+    let running = 1
+    const { updater, deps, progress } = await readyUpdater({
+      autoInstallGraceMs: 60_000,
+      autoInstallPollMs: 1_000_000,
+      runningCount: () => running
+    })
+    await updater.runAutoUpdate()
+    expect(progress.filter((e) => e.phase === 'waiting-tasks').at(-1)).toEqual({
+      phase: 'waiting-tasks',
+      count: 1
+    })
+    running = 0
+    updater.tryAutoInstall()
+    expect(progress.at(-1)?.phase).toBe('ready')
+    expect(deps.quit).not.toHaveBeenCalled() // 仍在宽限期，不退出
+  })
+
+  it('自动升级：启动宽限期内不重启（避免刚打开就闪退观感）', async () => {
+    const { updater, deps, progress } = await readyUpdater({
+      autoInstallGraceMs: 60_000,
+      autoInstallPollMs: 1_000_000
+    })
+    await updater.runAutoUpdate()
+    expect(deps.quit).not.toHaveBeenCalled()
+    // 宽限期内仅静默等待：不广播「等待 0 个任务」这种读不懂的状态
+    expect(progress.some((e) => e.phase === 'waiting-tasks')).toBe(false)
+  })
+
+  it('自动升级关闭 / 开发模式 → 不发起任何请求', async () => {
+    const off = await readyUpdater({ autoUpdate: () => false })
+    await off.updater.runAutoUpdate()
+    expect(off.deps.quit).not.toHaveBeenCalled()
+    expect(off.deps.fetchImpl).not.toHaveBeenCalled()
+
+    const dev = await readyUpdater({ isPackaged: false })
+    await dev.updater.runAutoUpdate()
+    expect(dev.deps.quit).not.toHaveBeenCalled()
+    expect(dev.deps.fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('已是最新 → 不下载不退出', async () => {
+    const dl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('latest.json')) {
+        return new Response(JSON.stringify({ version: '1.1.0', url: 'x', sha256: 'y' }), { status: 200 })
+      }
+      return new Response(CHANGELOG_MD, { status: 200 })
+    })
+    const deps = makeDeps({ fetchImpl: dl as unknown as typeof fetch, autoInstallGraceMs: 0 })
+    await new AppUpdater(deps).runAutoUpdate()
+    expect(deps.quit).not.toHaveBeenCalled()
+  })
+
+  it('cancelAutoInstall：用户关掉自动升级 → 取消挂起安装（不再退出）', async () => {
+    let running = 1
+    const { updater, deps } = await readyUpdater({
+      autoInstallGraceMs: 0,
+      autoInstallPollMs: 1_000_000,
+      runningCount: () => running
+    })
+    await updater.runAutoUpdate()
+    expect(deps.quit).not.toHaveBeenCalled()
+    updater.cancelAutoInstall()
+    running = 0
+    updater.tryAutoInstall()
+    expect(deps.quit).not.toHaveBeenCalled()
+  })
+
+  it('checkAppUpdate：非强制复用缓存；force 重新请求；并发去重只打一次网络', async () => {
+    const { updater, deps } = await readyUpdater()
+    const [a, b] = await Promise.all([updater.checkAppUpdate(), updater.checkAppUpdate()])
+    expect(a).toBe(b)
+    const callsAfterFirst = (deps.fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length
+    // 非强制 → 命中缓存，不再请求
+    await updater.checkAppUpdate()
+    expect((deps.fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterFirst)
+    // force → 重新请求清单
+    await updater.checkAppUpdate(true)
+    expect(
+      (deps.fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length
+    ).toBeGreaterThan(callsAfterFirst)
   })
 })

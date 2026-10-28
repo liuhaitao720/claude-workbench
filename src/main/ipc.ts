@@ -17,6 +17,7 @@ import { checkClaudeUpdate, fetchClaudeChangelog, getClaudeVersionInfo, installC
 import { AppUpdater } from './app-updater'
 import { CliRunner } from './cli-runner'
 import { isGitRepo, worktreeAdd, worktreeRemove } from './isolation'
+import { countLiveRunningTasks } from './running-count'
 import { AppSettingsStore } from './settings-store'
 import { FontScanner } from './font-scan'
 import { NotifyService } from './notify'
@@ -25,6 +26,7 @@ import { mainLanguage, setMainLanguage } from './language'
 import { PtyManager, buildNewSessionArgs, buildResumeArgs } from './pty-manager'
 import { importTasksFromSessionsImpl } from './session-import'
 import { SkillsStore } from './skills-store'
+import { PluginSkills, isValidPluginId } from './plugin-skills'
 import { SkillMarket, validateInstallTarget } from './skill-market'
 import { startTaskActivityServer, type TaskActivityHandle } from './task-activity'
 import { TaskStore } from './task-store'
@@ -69,6 +71,8 @@ export interface AppContext {
   readonly cli: CliRunner
   /** v1.2.0 skill 市场（读本机 marketplace 目录；联网由 CLI 自身完成） */
   readonly skillMarket: SkillMarket
+  /** v1.2.1 插件 skill 来源（读 ~/.claude/plugins 的安装记录与启用状态） */
+  readonly pluginSkills: PluginSkills
   /** v0.5④N webhook 推送（awaiting 防抖推送；配置 userData/notify.json） */
   readonly notify: NotifyService
   /** smoke:report 回执累积（S4：renderer→main 冒烟回执；编排侧轮询消费） */
@@ -115,9 +119,12 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   tasks.normalizeOnStartup()
 
   const smokeReports: string[] = []
+  /** v1.2.1：任务记录变更后的补钩（appUpdate 在下方创建，避免 TDZ；自动升级等任务结束时续上） */
+  let onTaskUpdateHook: (() => void) | null = null
   const broadcastTaskUpdate = (record: TaskRecord): void => {
     broadcast(IpcChannels.TaskUpdate, record)
     options.onTaskUpdate?.(record) // v0.5⑥ 托盘 tooltip 运行数刷新旁路
+    onTaskUpdateHook?.()
   }
 
   /**
@@ -149,6 +156,9 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   const appSettings = new AppSettingsStore(settingsFile, (s) => {
     setMainLanguage(s.language === 'en' ? 'en' : 'zh')
     options.onSettingsChange?.(s)
+    // v1.2.1 自动升级开关：关闭即取消挂起安装；重新打开则立即补跑一轮
+    if (s.autoUpdate === false) appUpdate.cancelAutoInstall()
+    else void appUpdate.runAutoUpdate()
   })
   setMainLanguage(appSettings.get().language === 'en' ? 'en' : 'zh')
 
@@ -168,8 +178,13 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     updateDir: join(baseDir, 'updates'),
     tempDir: app.getPath('temp'),
     onProgress: (e) => broadcast(IpcChannels.AppUpdateProgress, e),
-    quit: () => app.quit()
+    quit: () => app.quit(),
+    // v1.2.1 自动升级：有任务在跑不打断，任务停完立即续上升级
+    runningCount: () => countLiveRunningTasks(tasks.list(), (id) => pty.isRunning(id)),
+    autoUpdate: () => appSettings.get().autoUpdate !== false
   })
+  // v1.2.1：任务停下即重试自动安装（轮询是兜底——正常情况下最后一次 stop 就续上升级）
+  onTaskUpdateHook = () => appUpdate.tryAutoInstall()
   const activity = startTaskActivityServer({
     settingsDir,
     onActivity: (e) => {
@@ -191,8 +206,12 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     onExit: (taskId) => markStatus(taskId, 'exited')
   })
 
-  // v0.5③ skill 管理（只读扫描用户级+项目级；移除走回收站+realpath 归属校验）
-  const skills = new SkillsStore({ projects: () => projects.list() })
+  // v1.2.0 skill 市场 / v1.2.1 插件 skill 的注入缝（同 CWB_SKILLS_USER_ROOT 先例，防读真实 ~/.claude）
+  const skillMarketHome = process.env['CWB_SKILL_MARKET_HOME']
+
+  // v0.5③ skill 管理（只读扫描用户级+项目级；v1.2.1 增加插件级；移除走回收站+realpath 归属校验）
+  const pluginSkills = new PluginSkills(skillMarketHome ? { home: () => skillMarketHome } : {})
+  const skills = new SkillsStore({ projects: () => projects.list(), pluginSkills })
 
   // v0.5③ CLI 命令执行器：独立隐藏 PTY，输出仅走 cwb:event:cli-output（不进 PtyData/noteBytes）
   const cli = new CliRunner({
@@ -203,8 +222,6 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   })
 
   // v1.2.0 skill 市场：只读本机 marketplace 目录（搜索/过滤）；安装与刷新复用 CLI 受控执行面
-  // CWB_SKILL_MARKET_HOME 为测试注入缝（同 CWB_SKILLS_USER_ROOT 先例，防读真实 ~/.claude）
-  const skillMarketHome = process.env['CWB_SKILL_MARKET_HOME']
   const skillMarket = new SkillMarket(skillMarketHome ? { home: skillMarketHome } : {})
 
   /**
@@ -387,6 +404,7 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     skills,
     cli,
     skillMarket,
+    pluginSkills,
     notify,
     smokeReports,
     addProject,
@@ -478,6 +496,35 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
+  // v1.2.1 插件 skill 启用/停用：`claude plugin enable|disable <id> -s user`
+  // id 必须来自真实安装记录（白名单）——不接受任意字符串进命令行
+  ipcMain.handle(
+    IpcChannels.SkillPluginSetEnabled,
+    async (_e, pluginId: unknown, enabled: unknown) => {
+      const lang = mainLanguage()
+      if (typeof pluginId !== 'string' || !isValidPluginId(pluginId)) {
+        return { ok: false, error: translate(lang, 'skill.errIdFormat') }
+      }
+      if (typeof enabled !== 'boolean') {
+        return { ok: false, error: translate(lang, 'skill.errParam') }
+      }
+      if (!ctx.pluginSkills.installedIds().includes(pluginId)) {
+        return { ok: false, error: translate(lang, 'skill.errNotInstalled', { id: pluginId }) }
+      }
+      try {
+        const { commandId } = await ctx.cli.runPlugin([
+          'plugin',
+          enabled ? 'enable' : 'disable',
+          pluginId,
+          '-s',
+          'user'
+        ])
+        return { ok: true, commandId }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
   // v0.5③ CLI 执行（校验+spawn 即返 commandId；拒绝抛带原因 Error）
   ipcMain.handle(IpcChannels.CliRun, (_e, command: string) => ctx.cli.run(command))
   // v0.5⑤ 版本/更新/安装（安装为固定模板，完成钩子失效 claudePathCache）
@@ -490,8 +537,16 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   // v0.9 应用设置
   ipcMain.handle(IpcChannels.FontsInstalled, () => ctx.fontScanner.getInstalledMonoFonts())
   // v1.1.0 应用自更新（检测/下载/退出替换；进度走 EVENT AppUpdateProgress 广播）
-  ipcMain.handle(IpcChannels.AppUpdateCheck, () => ctx.appUpdate.check())
-  ipcMain.handle(IpcChannels.AppUpdateDownload, () => ctx.appUpdate.download())
+  // v1.2.1：启动自动检查+下载+等任务结束自动升级；手动检查 force=true 重新拉清单
+  ipcMain.handle(IpcChannels.AppUpdateCheck, (_e, force?: unknown) =>
+    ctx.appUpdate.checkAppUpdate(force === true)
+  )
+  ipcMain.handle(IpcChannels.AppUpdateDownload, async () => {
+    const r = await ctx.appUpdate.download()
+    // v1.2.1：手动下载成功后同样续接自动安装守卫（开关关闭时不接管）
+    if (r.ok) ctx.appUpdate.continueAfterManualDownload()
+    return r
+  })
   ipcMain.handle(IpcChannels.AppUpdateInstall, () => ctx.appUpdate.install())
   // v1.1.0 claude CLI 更新说明（官方 CHANGELOG 区间；参数非法只报错不抛）
   ipcMain.handle(IpcChannels.ClaudeChangelogGet, (_e, current: unknown, latest: unknown) => {

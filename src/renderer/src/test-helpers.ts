@@ -184,6 +184,11 @@ export function installCwbMock(opts: { projects?: ProjectRecord[]; tasks?: TaskR
     listSkillMarketplaces: vi.fn(async () => [] as SkillMarketplaceInfo[]),
     installMarketSkill: vi.fn(async () => ({ ok: true, commandId: 'skill-install-test' })),
     refreshSkillMarket: vi.fn(async () => ({ ok: true, commandId: 'skill-refresh-test' })),
+    // v1.2.1 插件 skill 启用/停用（默认成功；用例可覆写断言）
+    setSkillPluginEnabled: vi.fn(async (_pluginId: string, _enabled: boolean) => ({
+      ok: true,
+      commandId: 'skill-plugin-toggle-test'
+    })),
     reportSmoke: vi.fn()
   }
 

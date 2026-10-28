@@ -359,21 +359,23 @@ describe('快捷键（S6-F：Ctrl+N/F/B，焦点守卫）', () => {
   })
 })
 
-// ── v0.9 设置入口：展开态 Skills | 设置 并排 + 折叠 rail ⚙ ──────────────────
+// ── v1.2.1 设置入口：展开态头部图标组（版本号后）+ 折叠 rail ⚙ ─────────────
 
-describe('设置入口（v0.9）', () => {
+describe('设置入口（v1.2.1 图标化）', () => {
   const pg = makeProject({ id: 'pg', name: 'GitProj' })
   const runner = makeTask({ id: 'tr', projectId: 'pg', name: 'runner', status: 'running' })
 
-  it('展开态 Skills | 设置 并排（同一行）：点「设置」开设置弹窗', async () => {
+  it('展开态：版本号后依次 🧩 ⚙ ⓘ 三个图标按钮；点 ⚙ 开设置弹窗', async () => {
     await renderApp([pg], [runner])
-    const settingsBtn = screen.getByRole('button', { name: '设置' })
-    // 并排：两按钮同属一行容器（v0.9 指令覆盖 v0.5.2 “Skills 独占一行”）
-    const row = settingsBtn.closest('.sidebar-dir-row') as HTMLElement
-    expect(row).not.toBeNull()
-    expect(within(row).getByRole('button', { name: 'Skills' })).toBeDefined()
-    expect(row.querySelectorAll('button')).toHaveLength(2)
+    const header = document.querySelector('.sidebar-header') as HTMLElement
+    expect(header.querySelector('.version-text')?.textContent).toContain('v1.2.1')
+    // 图标组紧跟版本号（DOM 顺序即视觉顺序）
+    const group = header.querySelector('.sidebar-icon-group') as HTMLElement
+    expect(group).not.toBeNull()
+    const buttons = Array.from(group.querySelectorAll('button')) as HTMLElement[]
+    expect(buttons.map((b) => b.textContent)).toEqual(['🧩', '⚙', 'ⓘ'])
 
+    const settingsBtn = within(group).getByRole('button', { name: '设置' })
     fireEvent.click(settingsBtn)
     expect(await screen.findByRole('dialog', { name: '设置' })).toBeDefined()
   })

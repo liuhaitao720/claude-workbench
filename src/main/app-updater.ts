@@ -65,8 +65,22 @@ export type AppUpdateProgressEvent =
   | { phase: 'downloading'; percent: number }
   | { phase: 'verifying' }
   | { phase: 'ready' }
+  /** v1.2.1 自动升级：已下载就绪，正在等运行中的任务结束（count=当前运行任务数） */
+  | { phase: 'waiting-tasks'; count: number }
   | { phase: 'installing' }
   | { phase: 'error'; error: string }
+  /** v1.2.1 启动检查结果（含版本对比与更新说明；renderer 据此显示角标/说明，无需再自查一次） */
+  | { phase: 'available'; info: AppUpdateCheckResult }
+
+/** 自动升级轮询间隔（等待运行中任务结束；任务记录变更也会经 onTaskUpdate 触发） */
+export const AUTO_INSTALL_POLL_MS = 5_000
+
+/**
+ * 启动后不立刻自动重启的宽限期（v1.2.1）：用户刚打开应用就开始升级、窗口一闪而过会
+ * 让人以为应用崩了。下载通常要几十秒，实际上多数情况已超过本窗口；无任务且已过宽限期
+ * 才退出替换。
+ */
+export const AUTO_INSTALL_GRACE_MS = 30_000
 
 export interface AppUpdaterDeps {
   /** 注入测试替身；生产用全局 fetch */
@@ -78,10 +92,18 @@ export interface AppUpdaterDeps {
   updateDir: string
   /** 解压暂存目录（生产=系统 temp；测试=临时目录） */
   tempDir: string
-  /** 结构化最小接口（生产=child_process.spawn detached；测试替身只需返回可 unref 句柄） */
+  /** 结构化最小接口（生产=child_process.spawn；测试替身只需返回可 unref 句柄） */
   spawnImpl?: (cmd: string, args: readonly string[], opts: object) => { unref(): void }
   quit?: () => void
   onProgress?: (e: AppUpdateProgressEvent) => void
+  /** 运行中的任务数（v1.2.1 自动升级守卫：有任务在跑时不打断，等全部停止后自动继续） */
+  runningCount?: () => number
+  /** v1.2.1 自动升级开关来源（缺省读 settings.autoUpdate；false = 仅检查不下载） */
+  autoUpdate?: () => boolean
+  /** 等待运行任务结束的轮询间隔（测试注入小值） */
+  autoInstallPollMs?: number
+  /** 启动宽限期：应用刚打开时即使无任务也先等一会儿再自动重启（缺省 30s） */
+  autoInstallGraceMs?: number
 }
 
 /**
@@ -128,8 +150,10 @@ export function sha256Hex(buf: Buffer): string {
 }
 
 /**
- * 更换器脚本（.cmd）：等主进程退出 → tar 解压 → robocopy /E 覆盖 → 重启 exe → 清理。
+ * 更新器脚本（.cmd）：等主进程退出 → tar 解压 → robocopy /E 覆盖 → 重启 exe → 清理。
  * 路径全部引号包裹（安装目录含空格安全）；不使用 /MIR（绝不删安装目录额外文件）。
+ *
+ * v1.2.1：脚本自身不留痕——结束前删掉 .cmd 与 .vbs 启动垫片（只保留 update.log 取证）。
  */
 export function buildUpdaterCmd(params: {
   zipPath: string
@@ -137,8 +161,10 @@ export function buildUpdaterCmd(params: {
   exeName: string
   extractDir: string
   logPath: string
+  /** 启动垫片 .vbs 路径（v1.2.1；缺省不生成删除行——保持旧签名兼容） */
+  launcherPath?: string
 }): string {
-  const { zipPath, installDir, exeName, extractDir, logPath } = params
+  const { zipPath, installDir, exeName, extractDir, logPath, launcherPath } = params
   return [
     '@echo off',
     'timeout /t 3 /nobreak >nul',
@@ -150,7 +176,33 @@ export function buildUpdaterCmd(params: {
     `start "" "${installDir}\\${exeName}"`,
     `rd /s /q "${extractDir}" >>"${logPath}" 2>&1`,
     `del "${zipPath}" >>"${logPath}" 2>&1`,
+    ...(launcherPath !== undefined ? [`del "${launcherPath}" >>"${logPath}" 2>&1`] : []),
+    // 自删：cmd 正在执行本文件时 Windows 允许删除（句柄已随批处理读入释放），失败无碍
+    `del "%~f0" >>"${logPath}" 2>&1`,
     'exit /b 0'
+  ].join('\r\n')
+}
+
+/**
+ * 静默启动垫片（.vbs，v1.2.1）——修「自升级后残留 cmd 窗口」：
+ *
+ * 根因：Node 在 Windows 上 detached:true 与 windowsHide:true 同时给时，CreateProcess
+ * 拿到的 CREATE_NO_WINDOW 会被 DETACHED_PROCESS 忽略（两者互斥），于是 cmd.exe 带着
+ * 自己的可见控制台窗口跑 updater.cmd（updater 跨主进程退出存活，这个过程常驻数十秒）。
+ *
+ * 做法：改由 wscript.exe（GUI 子系统，本身无控制台）以 `sh.Run <cmd>, 0, False`
+ * 隐藏窗口异步拉起 updater.cmd。垫片内容纯 ASCII、路径经命令行参数传入（Node 以
+ * UTF-16 传参，中文用户名路径不会损坏），不拼接任何外部输入。
+ */
+export function buildUpdaterLauncher(): string {
+  return [
+    "' Claude Workbench updater launcher (v1.2.1)",
+    "' Usage: wscript.exe //nologo updater-launch.vbs \"<abs path to updater.cmd>\"",
+    "' Window style 0 = hidden; third arg False = do not wait (updater waits for the app to exit)",
+    'Dim sh, target',
+    'Set sh = CreateObject("WScript.Shell")',
+    'target = WScript.Arguments(0)',
+    'sh.Run """" & target & """", 0, False'
   ].join('\r\n')
 }
 
@@ -160,11 +212,131 @@ export class AppUpdater {
   private readonly deps: AppUpdaterDeps
   private manifest: AppUpdateManifest | null = null
   private downloadedZip: string | null = null
+  /** v1.2.1 最近一次检查结果（renderer 经 IPC 读，避免启动时重复请求清单/CHANGELOG） */
+  private lastInfo: AppUpdateCheckResult | null = null
+  /** v1.2.1 自动升级：轮次进行中 / 安装已交给更新器（防重复触发） */
+  private autoRunning = false
+  private installStarted = false
+  /** 下载就绪、等运行中任务结束后自动安装 */
+  private pendingInstall = false
+  private pollTimer: NodeJS.Timeout | null = null
+  /** 上次广播的等待计数（同计数不重复推送，见 tryAutoInstall） */
+  private lastWaitingCount = -1
+  /** 进行中的检查（并发去重；见 checkAppUpdate） */
+  private inflight: Promise<AppUpdateCheckResult> | null = null
+  /** 自动升级流程启动时刻（宽限期基准；0=未启动） */
+  private autoStartedAt = 0
 
   constructor(deps: AppUpdaterDeps) {
     this.deps = deps
     this.fetchImpl = deps.fetchImpl ?? fetch
     this.spawnImpl = deps.spawnImpl ?? spawn
+  }
+
+  /**
+   * v1.2.1 自动升级（用户要求「无需手动点击按钮」）：
+   * 检查 → 有新版本则后台下载校验 → 等运行中的任务全部结束后自动退出替换重启。
+   *
+   * 为什么等任务：自动重启会终止 PTY 会话，正在跑的任务会被打断。产品取舍是
+   * 不打断工作——任务一结束就自动升级；期间 UI 显示「等待 N 个任务结束」。
+   * autoUpdate()=false 时整个自动路径不启动（用户仍可手动检查/下载）。
+   */
+  async runAutoUpdate(): Promise<void> {
+    if (this.autoRunning || this.installStarted) return
+    if (!this.deps.isPackaged) return // 开发运行不自升级
+    if (this.deps.autoUpdate !== undefined && !this.deps.autoUpdate()) return
+    this.autoRunning = true
+    if (this.autoStartedAt === 0) this.autoStartedAt = Date.now()
+    try {
+      const info = await this.checkAndCache()
+      if (info.upToDate || info.latest === '') return
+      // 先让界面拿到版本+说明（侧栏角标/设置中心「更新说明」立即有内容）
+      this.deps.onProgress?.({ phase: 'available', info })
+      if (this.downloadedZip === null) {
+        const r = await this.download()
+        if (!r.ok) return // 下载/校验失败：静默降级，设置中心可手动重试
+      }
+      this.pendingInstall = true
+      this.tryAutoInstall()
+    } finally {
+      this.autoRunning = false
+    }
+  }
+
+  /**
+   * 就绪后尝试安装：无运行中任务且过了启动宽限期 → 立即退出替换；否则广播等待态并轮询。
+   * 任务记录变更（onTaskUpdate）也会调用本方法，所以最后一条任务停下能立即续上。
+   */
+  tryAutoInstall(): void {
+    if (!this.pendingInstall || this.installStarted) return
+    const running = this.deps.runningCount?.() ?? 0
+    const graceLeft = this.graceRemaining()
+    if (running > 0 || graceLeft > 0) {
+      // 去重：任务记录每次变更都会调到本方法，同计数不重复广播。
+      // 只在真有运行任务时广播——宽限期内等 0 个任务不算「等待任务」，界面别显示
+      // 「等待 0 个任务结束」这种读不懂的状态。
+      if (running === 0) {
+        // 任务跑完了但还在宽限期：把界面从「等待 N 个任务」退回「已就绪」
+        if (this.lastWaitingCount > 0) {
+          this.lastWaitingCount = 0
+          this.deps.onProgress?.({ phase: 'ready' })
+        }
+      } else if (this.lastWaitingCount !== running) {
+        this.lastWaitingCount = running
+        this.deps.onProgress?.({ phase: 'waiting-tasks', count: running })
+      }
+      if (this.pollTimer === null) {
+        // 有任务时按固定间隔轮询；仅剩宽限期则精确到剩余毫秒
+        const pollMs = this.deps.autoInstallPollMs ?? AUTO_INSTALL_POLL_MS
+        const delay = running > 0 ? pollMs : Math.min(graceLeft, pollMs)
+        const timer = setTimeout(() => {
+          this.pollTimer = null
+          this.tryAutoInstall()
+        }, Math.max(50, delay))
+        timer.unref?.()
+        this.pollTimer = timer
+      }
+      return
+    }
+    this.clearPoll()
+    this.pendingInstall = false
+    this.installStarted = true
+    void this.install()
+  }
+
+  /** 距「允许自动重启」还剩多少毫秒（宽限期从自动升级流程启动算起） */
+  private graceRemaining(): number {
+    if (this.autoStartedAt === 0) return 0
+    const grace = this.deps.autoInstallGraceMs ?? AUTO_INSTALL_GRACE_MS
+    return Math.max(0, this.autoStartedAt + grace - Date.now())
+  }
+
+  /** 取消挂起的自动安装（用户关掉自动升级开关时由组合根调用） */
+  cancelAutoInstall(): void {
+    this.pendingInstall = false
+    this.lastWaitingCount = -1
+    this.clearPoll()
+  }
+
+  /**
+   * 手动下载完成后的续接（v1.2.1）：自动升级开启时同样无需再点「立即升级」——
+   * 交给与自动路径相同的守卫（有运行任务则等，宽限期后退出替换）。
+   * 自动升级关闭时不接管（尊重「我要手动决定何时重启」的选择）。
+   */
+  continueAfterManualDownload(): void {
+    if (this.installStarted) return
+    if (this.deps.autoUpdate !== undefined && !this.deps.autoUpdate()) return
+    if (this.deps.runningCount === undefined) return
+    if (this.autoStartedAt === 0) this.autoStartedAt = Date.now()
+    this.pendingInstall = true
+    this.tryAutoInstall()
+  }
+
+  private clearPoll(): void {
+    if (this.pollTimer !== null) {
+      clearTimeout(this.pollTimer)
+      this.pollTimer = null
+    }
   }
 
   /** 检查更新：manifest（版本对比）+ CHANGELOG（更新说明）并行，各自独立降级 */
@@ -205,8 +377,38 @@ export class AppUpdater {
     }
   }
 
-  /** 下载安装包到 updateDir 并做 sha256 校验；进度经 onProgress 推送 */
+  /** 最近一次检查结果（null=本次启动尚未检查）；供 renderer 启动时直接取用 */
+  cachedInfo(): AppUpdateCheckResult | null {
+    return this.lastInfo
+  }
+
+  /**
+   * 检查（带缓存与并发去重）：
+   * - force=true（设置中心手动点「检查更新」）→ 总是重新请求
+   * - 非强制：已有结果直接返回；正在检查则复用同一个 promise（启动自动检查与
+   *   renderer 启动自查往往同时发生，不该打两次网络）
+   */
+  async checkAppUpdate(force = false): Promise<AppUpdateCheckResult> {
+    if (!force && this.lastInfo !== null) return this.lastInfo
+    if (this.inflight !== null) return this.inflight
+    const p = this.check().then((info) => {
+      this.lastInfo = info
+      this.inflight = null
+      return info
+    })
+    this.inflight = p
+    return p
+  }
+
+  /** 检查并缓存（自动升级用；与 checkAppUpdate 同一去重链） */
+  async checkAndCache(): Promise<AppUpdateCheckResult> {
+    return this.checkAppUpdate(false)
+  }
+
+  /** 下载安装包到 updateDir 并做 sha256 校验；进度经 onProgress 推送。
+   *  v1.2.1：已下载并校验过的包直接复用（自动升级已下好，用户手动点下载不再重复拉 185MB）。 */
   async download(): Promise<{ ok: boolean; error?: string }> {
+    if (this.downloadedZip !== null && existsSync(this.downloadedZip)) return { ok: true }
     this.downloadedZip = null
     if (!this.manifest) return { ok: false, error: tr('appUpd.errNoManifest') }
     if (!this.deps.isPackaged) return { ok: false, error: tr('appUpd.errDevMode') }
@@ -260,8 +462,13 @@ export class AppUpdater {
   }
 
   /**
-   * 退出并替换：写更新器脚本 → detached 启动（3s 后动手）→ app.quit() 正常退出
+   * 退出并替换：写更新器脚本 + 静默启动垫片 → 经 wscript 隐藏拉起 → app.quit() 正常退出
    * （before-quit 杀 PTY 树释放文件锁 → 更新器覆盖安装目录 → 重启新版）。
+   *
+   * v1.2.1 两处修正（用户反馈「升级成功后还有 2 个 cmd 窗口没关」）：
+   * 1) 不再 detached+windowsHide 直起 cmd.exe（两者互斥，隐藏标志被忽略 → 可见黑窗）；
+   *    改由 wscript.exe 以 0 号窗口样式异步拉起，全程无控制台；
+   * 2) 更新器脚本收尾自删 .cmd/.vbs，不留下可再次误触的脚本。
    */
   async install(): Promise<{ ok: boolean; error?: string }> {
     if (!this.deps.isPackaged) return { ok: false, error: tr('appUpd.errDevMode') }
@@ -274,6 +481,7 @@ export class AppUpdater {
       const extractDir = join(this.deps.tempDir, `cwb-update-${Date.now()}`)
       mkdirSync(extractDir, { recursive: true })
       const cmdPath = join(this.deps.updateDir, 'updater.cmd')
+      const vbsPath = join(this.deps.updateDir, 'updater-launch.vbs')
       const logPath = join(this.deps.updateDir, 'update.log')
       writeFileSync(
         cmdPath,
@@ -282,16 +490,19 @@ export class AppUpdater {
           installDir: dirname(this.deps.execPath),
           exeName: basename(this.deps.execPath),
           extractDir,
-          logPath
+          logPath,
+          launcherPath: vbsPath
         }),
         'utf8'
       )
+      writeFileSync(vbsPath, buildUpdaterLauncher(), 'ascii')
       this.deps.onProgress?.({ phase: 'installing' })
-      const child = this.spawnImpl('cmd.exe', ['/c', cmdPath], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true
-      })
+      // wscript：GUI 子系统无控制台；隐藏窗口异步执行，主进程随后正常退出
+      const child = this.spawnImpl(
+        'wscript.exe',
+        ['//nologo', vbsPath, cmdPath],
+        { detached: true, stdio: 'ignore' }
+      )
       child.unref()
       this.deps.quit?.()
       return { ok: true }

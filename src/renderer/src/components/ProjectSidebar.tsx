@@ -195,18 +195,13 @@ export function ProjectSidebar() {
           aria-hidden={railCollapsed}
           style={railCollapsed ? { display: 'none' } : undefined}
         >
-          {/* v0.5.2 用户指令：标题与版本号同行（版本点击开 About）；📁 文件夹图标
-              + 搜索栏同行；新建任务经项目 ⋯ 菜单 / Ctrl+N。v0.9 用户指令覆盖：
-              Skills | 设置 并排一行（取代 v0.5.2 "Skills 独占一行"） */}
+          {/* v1.2.1 用户指令：版本号改为纯文本（不再开弹窗）；Skills / 设置 / 关于
+              三个入口收敛为图标按钮，紧跟版本号之后——头部一行解决，不再单独占
+              「Skills | 设置」一整行（腾出的空间给项目树）。 */}
           <div className="sidebar-header">
             <div className="sidebar-title-row">
               <h1>Claude Workbench</h1>
-              <button
-                type="button"
-                className="btn btn-header version-btn"
-                onClick={openAbout}
-                title={t('sidebar.about')}
-              >
+              <span className="version-text" title={t('sidebar.versionTitle', { version: APP_VERSION })}>
                 v{APP_VERSION}
                 {/* v1.1.0 有新版本角标（启动静默检查/手动检查落 store） */}
                 {hasUpdate && (
@@ -215,18 +210,39 @@ export function ProjectSidebar() {
                     title={t('sidebar.newVersion', { version: appUpdateInfo.latest })}
                   />
                 )}
-              </button>
+              </span>
+              <span className="sidebar-icon-group">
+                <button
+                  type="button"
+                  className="btn-icon"
+                  title={t('sidebar.skills')}
+                  aria-label={t('sidebar.skillsLabel')}
+                  onClick={openSkills}
+                >
+                  🧩
+                </button>
+                <button
+                  type="button"
+                  className="btn-icon"
+                  title={t('sidebar.settings')}
+                  aria-label={t('sidebar.settings')}
+                  onClick={openSettings}
+                >
+                  ⚙
+                </button>
+                <button
+                  type="button"
+                  className="btn-icon"
+                  title={t('sidebar.about')}
+                  aria-label={t('sidebar.about')}
+                  onClick={openAbout}
+                >
+                  ⓘ
+                </button>
+              </span>
             </div>
           </div>
           <div className="sidebar-actions">
-            <div className="sidebar-dir-row">
-              <button type="button" className="btn skills-btn" onClick={openSkills}>
-                Skills
-              </button>
-              <button type="button" className="btn skills-btn" onClick={openSettings}>
-                {t('sidebar.settings')}
-              </button>
-            </div>
             <div className="sidebar-dir-row">
               <button
                 type="button"

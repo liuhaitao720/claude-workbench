@@ -38,20 +38,24 @@ async function renderApp(): Promise<CwbApiMock> {
   return api
 }
 
-/** 打开 About：点侧栏顶部版本按钮（rail ⓘ 入口在折叠态，另有专门用例） */
+/**
+ * 打开 About：点侧栏头部 ⓘ 图标按钮（v1.2.1 起版本号是纯文本，不再是入口；
+ * 折叠态 rail 的 ⓘ 另有专门用例）
+ */
 async function openAbout(): Promise<ReturnType<typeof within>> {
-  fireEvent.click(screen.getByRole('button', { name: 'v1.2.0' }))
+  const header = document.querySelector('.sidebar-header') as HTMLElement
+  fireEvent.click(within(header).getByRole('button', { name: '关于 Claude Workbench' }))
   const dialog = await screen.findByRole('dialog', { name: '关于' })
   return within(dialog)
 }
 
-describe('About 渲染（v0.5.1：侧栏顶部版本按钮入口；v0.9 瘦身为身份页）', () => {
-  it('状态栏显示 v1.2.0；点击开 About：应用名/版本/作者/许可证 MIT', async () => {
+describe('About 渲染（v1.2.1：侧栏头部 ⓘ 图标入口；v0.9 瘦身为身份页）', () => {
+  it('侧栏显示 v1.2.1 文本（不可点击）；ⓘ 开 About：应用名/版本/作者/许可证 MIT', async () => {
     await renderApp()
-    expect(screen.getByText('v1.2.0')).toBeDefined()
+    expect(document.querySelector('.version-text')?.textContent).toContain('v1.2.1')
     const about = await openAbout()
     expect(about.getByText('Claude Workbench')).toBeDefined()
-    expect(about.getByText(/版本 v1.2.0/)).toBeDefined()
+    expect(about.getByText(/版本 v1.2.1/)).toBeDefined()
     expect(about.getByText('作者 Liu Haitao')).toBeDefined()
     expect(about.getByText('MIT')).toBeDefined() // 许可证链接锚点
   })

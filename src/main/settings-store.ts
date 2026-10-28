@@ -20,7 +20,12 @@ export class AppSettingsStore {
 
   get(): AppSettings {
     if (this.cache) return { ...this.cache }
-    let settings: AppSettings = { closeToTray: true, launchAtLogin: false, language: 'zh' }
+    let settings: AppSettings = {
+      closeToTray: true,
+      launchAtLogin: false,
+      language: 'zh',
+      autoUpdate: true
+    }
     try {
       const parsed: unknown = JSON.parse(readFileSync(this.file, 'utf8'))
       if (typeof parsed === 'object' && parsed !== null) {
@@ -28,7 +33,9 @@ export class AppSettingsStore {
         settings = {
           closeToTray: typeof rec['closeToTray'] === 'boolean' ? rec['closeToTray'] : true,
           launchAtLogin: typeof rec['launchAtLogin'] === 'boolean' ? rec['launchAtLogin'] : false,
-          language: rec['language'] === 'en' ? 'en' : 'zh'
+          language: rec['language'] === 'en' ? 'en' : 'zh',
+          // v1.2.1 缺省开启（用户要求升级无需手动点按钮；想要手动的人可在设置里关）
+          autoUpdate: typeof rec['autoUpdate'] === 'boolean' ? rec['autoUpdate'] : true
         }
       }
     } catch {

@@ -30,6 +30,7 @@ export const zh = {
   'sidebar.openDir': '打开目录',
   'sidebar.gitProject': 'git 项目',
   'sidebar.skills': 'Skills 管理',
+  'sidebar.skillsLabel': 'Skills',
   'sidebar.settings': '设置',
   'sidebar.about': '关于 Claude Workbench',
   'sidebar.expand': '展开侧栏 (Ctrl+B)',
@@ -38,6 +39,7 @@ export const zh = {
   'sidebar.empty': '尚未注册项目，点击“打开目录”开始',
   'sidebar.recent': '最近',
   'sidebar.newVersion': '有新版本 v{version}',
+  'sidebar.versionTitle': 'Claude Workbench v{version}',
   'sidebar.skipPermsTitle':
     '该任务启动 claude 时附加 --dangerously-skip-permissions：跳过全部权限确认（含文件写入与命令执行）。仅建议在可信目录使用。',
   'sidebar.skipPermsLabel': '跳过权限确认（--dangerously-skip-permissions）',
@@ -175,7 +177,12 @@ export const zh = {
   'settings.appDownload': '下载更新',
   'settings.appDownloading': '下载中 {percent}%',
   'settings.appVerifying': '校验中…',
-  'settings.appRestartInstall': '重启并升级',
+  'settings.appInstallNow': '立即升级',
+  'settings.autoUpdate': '有新版本时自动升级',
+  'settings.autoUpdateHint':
+    '默认开启：启动后自动检查并后台下载，运行中的任务全部结束后自动退出替换并重启——无需点任何按钮。有任务在跑时不会打断，等任务结束后再升级。',
+  'settings.appWaitingTasks': '更新已就绪，等待 {count} 个任务结束后自动升级',
+  'settings.appAutoInstalling': '更新已就绪，正在退出并升级…',
   'settings.appUpdateLine': '当前 v{current} · 最新 v{latest} · {state}',
   'settings.appManifestError': '（清单获取失败：{error}）',
   'settings.appUpdateHint':
@@ -200,7 +207,11 @@ export const zh = {
   // ── Skills ──────────────────────────────────────────────
   'skills.aria': 'Skills 管理',
   'skills.title': 'Skills 管理',
-  'skills.empty': '暂无已安装 skill——可通过下方导入',
+  'skills.tabsAria': 'Skills 分类',
+  'skills.tabInstalled': '已安装',
+  'skills.tabMarket': '在线搜索',
+  'skills.tabImport': '导入',
+  'skills.empty': '暂无已安装 skill——到「在线搜索」找现成的，或到「导入」添加本地文件夹',
   'skills.userLevel': '用户级 · 全局生效',
   'skills.userLevelSub': '（~/.claude/skills，本机所有 claude 会话可用）',
   'skills.projectLevel': '项目级 · 仅该项目',
@@ -293,6 +304,16 @@ export const zh = {
   'skills.errConflict': '同名 skill 已存在，导入取消（如需覆盖请先移除既有项）: {name}',
   'skills.errDirGone': 'skill 目录不存在或不可解析: {dir}',
   'skills.errOutOfRoot': '拒绝移除：目录不在对应 skills 根之下（越界防护）: {dir}',
+  'skills.errPluginRemove': '插件 skill 由 claude 插件机制管理，请用「停用/卸载插件」处理（{id}）',
+
+  // ── v1.2.1：插件 skill 来源 ────────────────────────────────
+  'skills.pluginLevel': '插件 · 由 marketplace 安装',
+  'skills.pluginLevelSub': '（~/.claude/plugins/cache，由插件机制加载）',
+  'skills.pluginDisabled': '已停用——在该条目上点「启用」后新任务才生效',
+  'skills.pluginDisabledShort': '已停用',
+  'skills.pluginEnable': '启用',
+  'skills.pluginDisable': '停用',
+  'skill.errNotInstalled': '插件未安装，无法切换启用状态: {id}',
 
   // ── main 侧：会话导入默认任务名 ────────────────────────────
   'session.defaultName': '会话 {id}',
@@ -335,6 +356,7 @@ export const en: Record<MessageKey, string> = {
   'sidebar.openDir': 'Open folder',
   'sidebar.gitProject': 'Git project',
   'sidebar.skills': 'Manage skills',
+  'sidebar.skillsLabel': 'Skills',
   'sidebar.settings': 'Settings',
   'sidebar.about': 'About Claude Workbench',
   'sidebar.expand': 'Expand sidebar (Ctrl+B)',
@@ -343,6 +365,7 @@ export const en: Record<MessageKey, string> = {
   'sidebar.empty': 'No projects yet — click “Open folder” to start',
   'sidebar.recent': 'Recent',
   'sidebar.newVersion': 'New version v{version} available',
+  'sidebar.versionTitle': 'Claude Workbench v{version}',
   'sidebar.skipPermsTitle':
     'This task starts claude with --dangerously-skip-permissions: all permission prompts are skipped (including file writes and command execution). Use only in trusted folders.',
   'sidebar.skipPermsLabel': 'Skip permission prompts (--dangerously-skip-permissions)',
@@ -474,7 +497,13 @@ export const en: Record<MessageKey, string> = {
   'settings.appDownload': 'Download update',
   'settings.appDownloading': 'Downloading {percent}%',
   'settings.appVerifying': 'Verifying…',
-  'settings.appRestartInstall': 'Restart and update',
+  'settings.appInstallNow': 'Update now',
+  'settings.autoUpdate': 'Update automatically when a new version is available',
+  'settings.autoUpdateHint':
+    'On by default: checks and downloads in the background at startup, then quits, replaces and restarts once all running tasks have finished — no clicks needed. Running tasks are never interrupted; the update waits for them.',
+  'settings.appWaitingTasks':
+    'Update ready — it will install automatically once {count} running task(s) finish',
+  'settings.appAutoInstalling': 'Update ready — quitting and upgrading…',
   'settings.appUpdateLine': 'Current v{current} · Latest v{latest} · {state}',
   'settings.appManifestError': ' (manifest fetch failed: {error})',
   'settings.appUpdateHint':
@@ -498,7 +527,12 @@ export const en: Record<MessageKey, string> = {
 
   'skills.aria': 'Manage skills',
   'skills.title': 'Manage skills',
-  'skills.empty': 'No skills installed yet — import one below',
+  'skills.tabsAria': 'Skill categories',
+  'skills.tabInstalled': 'Installed',
+  'skills.tabMarket': 'Find skills',
+  'skills.tabImport': 'Import',
+  'skills.empty':
+    'No skills installed yet — find one under “Find skills”, or add a local folder under “Import”',
   'skills.userLevel': 'User level · global',
   'skills.userLevelSub': '(~/.claude/skills, available to every claude session on this machine)',
   'skills.projectLevel': 'Project level · this project only',
@@ -589,6 +623,16 @@ export const en: Record<MessageKey, string> = {
   'skills.errDirGone': 'Skill directory is missing or unresolvable: {dir}',
   'skills.errOutOfRoot':
     'Removal refused: directory is not under the expected skills root: {dir}',
+  'skills.errPluginRemove':
+    'Plugin skills are managed by the claude plugin system — use “Disable / Uninstall plugin” instead ({id})',
+
+  'skills.pluginLevel': 'Plugins · installed from marketplaces',
+  'skills.pluginLevelSub': '(~/.claude/plugins/cache, loaded by the plugin system)',
+  'skills.pluginDisabled': 'Disabled — click “Enable” on this entry; new tasks pick it up',
+  'skills.pluginDisabledShort': 'Disabled',
+  'skills.pluginEnable': 'Enable',
+  'skills.pluginDisable': 'Disable',
+  'skill.errNotInstalled': 'Plugin is not installed, cannot toggle: {id}',
 
   'session.defaultName': 'Session {id}',
 

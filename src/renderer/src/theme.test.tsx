@@ -62,9 +62,10 @@ async function renderApp() {
   return api
 }
 
-/** 打开 About（点侧栏版本按钮，对齐 about.test 先例） */
+/** 打开 About（点侧栏头部 ⓘ 图标按钮，对齐 about.test 先例） */
 async function openAbout(): Promise<ReturnType<typeof within>> {
-  fireEvent.click(screen.getByRole('button', { name: 'v1.2.0' }))
+  const header = document.querySelector('.sidebar-header') as HTMLElement
+  fireEvent.click(within(header).getByRole('button', { name: '关于 Claude Workbench' }))
   const dialog = await screen.findByRole('dialog', { name: '关于' })
   return within(dialog)
 }

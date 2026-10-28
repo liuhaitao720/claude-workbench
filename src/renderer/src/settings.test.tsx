@@ -390,13 +390,13 @@ describe('应用更新', () => {
     expect(s.getByText('v1.1.9')).toBeDefined()
     expect(s.queryByText('已是最新')).toBeNull()
 
-    // 下载 → 进度事件 ready → 「重启并升级」出现；确认框取消则不 install
+    // 下载 → 进度事件 ready → 「立即升级」出现；确认框取消则不 install
     fireEvent.click(s.getByRole('button', { name: '下载更新' }))
     await waitFor(() => expect(api.downloadAppUpdate).toHaveBeenCalled())
     act(() => {
       for (const cb of api.appUpdateProgressCallbacks) cb({ phase: 'ready' })
     })
-    const installBtn = await s.findByRole('button', { name: '重启并升级' })
+    const installBtn = await s.findByRole('button', { name: '立即升级' })
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     fireEvent.click(installBtn)
     expect(confirmSpy).toHaveBeenCalled()
@@ -432,6 +432,41 @@ describe('应用更新', () => {
       })
     })
     expect(screen.getByTitle('有新版本 v1.2.0')).toBeDefined()
+  })
+
+  it('v1.2.1 自动升级：开关缺省勾选、关闭写 settings；available 事件落 store；waiting-tasks 显示等待态', async () => {
+    const api = await renderApp()
+    const s = await openSettings()
+    gotoSection(s, '应用更新')
+    // 缺省开（main settings 缺字段时视为 true）
+    const auto = s.getByRole('checkbox', { name: '有新版本时自动升级' }) as HTMLInputElement
+    expect(auto.checked).toBe(true)
+
+    // 自动检查结果经进度事件送到界面（无需用户点「检查更新」）
+    act(() => {
+      for (const cb of api.appUpdateProgressCallbacks) {
+        cb({
+          phase: 'available',
+          info: { current: '1.2.1', latest: '1.3.0', upToDate: false, notes: [{ version: '1.3.0', items: ['自动升级'] }] }
+        })
+      }
+    })
+    expect(await s.findByText(/最新 v1.3.0 · 可更新/)).toBeDefined()
+    expect(s.getByText('自动升级')).toBeDefined()
+
+    // 有任务在跑 → 等待态文案（含数量）
+    act(() => {
+      for (const cb of api.appUpdateProgressCallbacks) cb({ phase: 'waiting-tasks', count: 2 })
+    })
+    expect(await s.findByRole('status')).toHaveProperty(
+      'textContent',
+      '更新已就绪，等待 2 个任务结束后自动升级'
+    )
+    // 就绪后按钮变成「立即升级」（自动路径会自动执行，这是手动兜底）
+    expect(s.getByRole('button', { name: '立即升级' })).toBeDefined()
+
+    fireEvent.click(auto)
+    await waitFor(() => expect(api.setAppSettings).toHaveBeenCalledWith({ autoUpdate: false }))
   })
 })
 

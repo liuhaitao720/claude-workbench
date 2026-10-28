@@ -97,6 +97,7 @@ vi.mock('../pty-manager', async (importOriginal) => {
 })
 
 import { isSafeExternalUrl, registerIpcHandlers } from '../ipc'
+import { CliRunner } from '../cli-runner'
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   const entry = h.handleCalls.find(([c]) => c === channel)
@@ -583,5 +584,131 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
       name: 'proj-only',
       projectId: proj.id
     })
+  })
+
+  // ── v1.2.1 插件 skill（用户报障：市场装完列表里没有）───────────────────
+  /** 造一个插件检出：<market-home>/.claude/plugins/cache/<market>/<plugin>/<ver>/skills/<name>/SKILL.md */
+  function makeInstalledPlugin(
+    pluginId: string,
+    skillNames: string[],
+    enabled: boolean
+  ): void {
+    const [plugin, market] = pluginId.split('@') as [string, string]
+    const installPath = join(
+      h.tempDir,
+      'market-home',
+      '.claude',
+      'plugins',
+      'cache',
+      market,
+      plugin,
+      '1.0.0'
+    )
+    for (const name of skillNames) {
+      const dir = join(installPath, 'skills', name)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: 插件技能\n---\n`)
+    }
+    const registryPath = join(h.tempDir, 'market-home', '.claude', 'plugins', 'installed_plugins.json')
+    let registry: { version: number; plugins: Record<string, unknown> } = { version: 2, plugins: {} }
+    try {
+      registry = JSON.parse(readFileSync(registryPath, 'utf8')) as typeof registry
+    } catch {
+      /* 首次写入 */
+    }
+    registry.plugins[pluginId] = [{ scope: 'user', installPath, version: '1.0.0' }]
+    mkdirSync(join(h.tempDir, 'market-home', '.claude', 'plugins'), { recursive: true })
+    writeFileSync(registryPath, JSON.stringify(registry))
+
+    const settingsPath = join(h.tempDir, 'market-home', '.claude', 'settings.json')
+    let settings: { enabledPlugins?: Record<string, boolean> } = {}
+    try {
+      settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as typeof settings
+    } catch {
+      /* 首次写入 */
+    }
+    settings.enabledPlugins = { ...(settings.enabledPlugins ?? {}), [pluginId]: enabled }
+    writeFileSync(settingsPath, JSON.stringify(settings))
+  }
+
+  it('v1.2.1 市场安装的插件 skill 出现在已安装列表（source=plugin + pluginId + 启用态）', async () => {
+    makeInstalledPlugin('skill-creator@official', ['skill-creator'], true)
+    makeInstalledPlugin('postman@official', ['ai-readiness', 'api-discovery'], false)
+
+    const list = await invoke<SkillInfo[]>(IpcChannels.SkillsList)
+    const plugins = list.filter((s) => s.source === 'plugin')
+    expect(plugins.map((s) => s.name).sort()).toEqual([
+      'ai-readiness',
+      'api-discovery',
+      'skill-creator'
+    ])
+    expect(plugins.find((s) => s.name === 'skill-creator')).toMatchObject({
+      pluginId: 'skill-creator@official',
+      pluginEnabled: true
+    })
+    // 停用插件的 skill 也列出（界面标「已停用」），否则用户以为装了就能用
+    expect(plugins.find((s) => s.name === 'ai-readiness')).toMatchObject({
+      pluginId: 'postman@official',
+      pluginEnabled: false
+    })
+  })
+
+  it('v1.2.1 插件 skill 不可走 removeSkill（交由插件机制管理）', async () => {
+    makeInstalledPlugin('skill-creator@official', ['skill-creator'], true)
+    const [skill] = (await invoke<SkillInfo[]>(IpcChannels.SkillsList)).filter(
+      (s) => s.source === 'plugin'
+    )
+    await expect(
+      invoke(IpcChannels.SkillsRemove, skill)
+    ).rejects.toThrow(/插件机制/)
+  })
+
+  it('v1.2.1 SkillPluginSetEnabled：白名单外的 id / 未安装 id 不启动进程；合法 id 走 enable|disable', async () => {
+    makeInstalledPlugin('skill-creator@official', ['skill-creator'], true)
+
+    const badId = await invoke<{ ok: boolean; error?: string }>(
+      IpcChannels.SkillPluginSetEnabled,
+      'x@y&calc',
+      true
+    )
+    expect(badId.ok).toBe(false)
+    const notInstalled = await invoke<{ ok: boolean; error?: string }>(
+      IpcChannels.SkillPluginSetEnabled,
+      'ghost@official',
+      false
+    )
+    expect(notInstalled.ok).toBe(false)
+    expect(notInstalled.error).toContain('未安装')
+    expect(currentPty().spawnCalls).toHaveLength(0) // 不经 PtyManager
+
+    // 合法 id：argv 形状由单元层断言（不真起 CLI 进程——假 id 的 enable/disable 没有任何本地副作用）
+    const runPlugin = vi
+      .spyOn(CliRunner.prototype, 'runPlugin')
+      .mockResolvedValue({ commandId: 'skill-toggle-test' })
+    try {
+      const off = await invoke<{ ok: boolean; commandId?: string }>(
+        IpcChannels.SkillPluginSetEnabled,
+        'skill-creator@official',
+        false
+      )
+      expect(off).toEqual({ ok: true, commandId: 'skill-toggle-test' })
+      expect(runPlugin).toHaveBeenLastCalledWith([
+        'plugin',
+        'disable',
+        'skill-creator@official',
+        '-s',
+        'user'
+      ])
+      await invoke(IpcChannels.SkillPluginSetEnabled, 'skill-creator@official', true)
+      expect(runPlugin).toHaveBeenLastCalledWith([
+        'plugin',
+        'enable',
+        'skill-creator@official',
+        '-s',
+        'user'
+      ])
+    } finally {
+      runPlugin.mockRestore()
+    }
   })
 })

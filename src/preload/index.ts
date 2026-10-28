@@ -101,7 +101,8 @@ const api: CWBApi = {
   openExternal: (url) =>
     ipcRenderer.invoke(IpcChannels.ShellOpenExternal, url) as Promise<boolean>,
   // v1.1.0 应用自更新
-  checkAppUpdate: () => ipcRenderer.invoke(IpcChannels.AppUpdateCheck) as Promise<AppUpdateInfo>,
+  checkAppUpdate: (force) =>
+    ipcRenderer.invoke(IpcChannels.AppUpdateCheck, force === true) as Promise<AppUpdateInfo>,
   downloadAppUpdate: () =>
     ipcRenderer.invoke(IpcChannels.AppUpdateDownload) as Promise<{ ok: boolean; error?: string }>,
   installAppUpdate: () =>
@@ -134,6 +135,13 @@ const api: CWBApi = {
     }>,
   refreshSkillMarket: () =>
     ipcRenderer.invoke(IpcChannels.SkillMarketRefresh) as Promise<{
+      ok: boolean
+      commandId?: string
+      error?: string
+    }>,
+  // v1.2.1 插件 skill 启用/停用（claude plugin enable|disable <id> -s user）
+  setSkillPluginEnabled: (pluginId, enabled) =>
+    ipcRenderer.invoke(IpcChannels.SkillPluginSetEnabled, pluginId, enabled) as Promise<{
       ok: boolean
       commandId?: string
       error?: string

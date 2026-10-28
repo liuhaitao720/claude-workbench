@@ -66,11 +66,18 @@ export interface SkillInfo {
   description: string
   version?: string
   author?: string
-  /** user=用户级(~/.claude/skills，全局生效) | project=项目级(.claude/skills，仅该项目) */
-  source: 'user' | 'project'
+  /**
+   * user=用户级(~/.claude/skills，全局生效) | project=项目级(.claude/skills，仅该项目)
+   * | plugin=插件（v1.2.1：~/.claude/plugins/cache/…，由 claude 插件机制加载）
+   */
+  source: 'user' | 'project' | 'plugin'
   projectId?: string
   /** skill 目录绝对路径（removeSkill 归属校验用） */
   dir: string
+  /** v1.2.1 插件来源 id，如 `skill-creator@claude-plugins-official`（启用/停用/卸载的键） */
+  pluginId?: string
+  /** v1.2.1 插件是否在 claude settings.json 的 enabledPlugins 中启用（停用=会话里不生效） */
+  pluginEnabled?: boolean
 }
 
 /** Skill 市场条目【v1.2.0：来自本机已配置 marketplace 目录】 */
@@ -134,8 +141,15 @@ export type AppUpdateProgressEvent =
   | { phase: 'downloading'; percent: number }
   | { phase: 'verifying' }
   | { phase: 'ready' }
+  /** v1.2.1 自动升级：已下载就绪，正在等运行中的任务结束（count=当前运行任务数） */
+  | { phase: 'waiting-tasks'; count: number }
   | { phase: 'installing' }
   | { phase: 'error'; error: string }
+  /**
+   * v1.2.1 启动自动检查结果（含版本对比与更新说明）：renderer 据此更新侧栏角标与
+   * 设置中心说明，无需再次自查（与 checkAppUpdate 的缓存同源）。
+   */
+  | { phase: 'available'; info: AppUpdateInfo }
 
 /** main 侧应用设置（v0.9：关闭行为/开机自启——userData/settings.json） */
 export interface AppSettings {
@@ -148,6 +162,12 @@ export interface AppSettings {
    * 供 main 侧的托盘菜单与退出确认框取文案。缺省='zh'。
    */
   language?: 'zh' | 'en'
+  /**
+   * 自动升级（v1.2.1，缺省 true）：启动静默检查 → 有新版本后台下载校验 →
+   * 运行中的任务全部结束后自动退出替换重启（有任务在跑时不打断）。
+   * false 时仅检查并提示，由用户在设置中心手动升级。
+   */
+  autoUpdate?: boolean
 }
 
 /** 任务活动状态事件（v3.2：'busy'=执行中黄转圈 | 'awaiting'=待答复红 | 'idle'=就绪绿） */
@@ -280,8 +300,11 @@ export interface CWBApi {
   openExternal(url: string): Promise<boolean>
 
   // ── 应用自更新（3+1 事件，v1.1.0）──────────
-  /** 检查自身更新（GitHub Releases 清单 + CHANGELOG 更新说明；网络失败逐项降级） */
-  checkAppUpdate(): Promise<AppUpdateInfo>
+  /**
+   * 检查自身更新（GitHub Releases 清单 + CHANGELOG 更新说明；网络失败逐项降级）。
+   * v1.2.1：非 force 时复用 main 侧缓存/进行中的检查（启动自动检查与手动检查不重复请求）。
+   */
+  checkAppUpdate(force?: boolean): Promise<AppUpdateInfo>
   /** 下载安装包并 sha256 校验（进度走 onAppUpdateProgress）；需先 checkAppUpdate */
   downloadAppUpdate(): Promise<{ ok: boolean; error?: string }>
   /** 退出并替换重启（写更新器脚本 → 杀 PTY 树正常退出 → 覆盖安装 → 拉起新版） */
@@ -313,6 +336,14 @@ export interface CWBApi {
   ): Promise<{ ok: boolean; commandId?: string; error?: string }>
   /** 刷新所有 marketplace 目录（`claude plugin marketplace update`，走 CLI 网络/凭据策略） */
   refreshSkillMarket(): Promise<{ ok: boolean; commandId?: string; error?: string }>
+  /**
+   * v1.2.1 启用/停用插件（`claude plugin enable|disable <id> -s user`）。
+   * pluginId 必须来自已安装记录（main 侧白名单校验），否则直接返回错误不启动进程。
+   */
+  setSkillPluginEnabled(
+    pluginId: string,
+    enabled: boolean
+  ): Promise<{ ok: boolean; commandId?: string; error?: string }>
 
   // ── webhook 通知（3，v0.5④N）───────────────
   /** 读取通知配置（默认 {url:'', enabled:false}） */

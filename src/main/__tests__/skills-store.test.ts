@@ -9,6 +9,7 @@ const trashItem = vi.hoisted(() => vi.fn(async (_path: string) => {}))
 vi.mock('electron', () => ({ shell: { trashItem } }))
 
 import { SkillsStore, parseSkillFrontmatter } from '../skills-store'
+import { PluginSkills } from '../plugin-skills'
 
 /** 建一个 skill 目录（frontmatter 可定制） */
 function makeSkill(root: string, name: string, skillMd?: string): string {
@@ -16,6 +17,22 @@ function makeSkill(root: string, name: string, skillMd?: string): string {
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'SKILL.md'), skillMd ?? `---\nname: ${name}\ndescription: ${name} 的描述\n---\n\n正文\n`)
   return dir
+}
+
+/**
+ * 建 store：插件来源指向 temp 主目录（缺省会读真实 ~/.claude/plugins，把本机已装
+ * 插件混进断言）。需要验证插件扫描的用例用 opts.pluginHome 指定自己的假 home。
+ */
+function makeStore(opts: {
+  userRoot?: () => string
+  projects?: () => ReadonlyArray<{ id: string; dir: string }>
+  pluginHome: string
+}): SkillsStore {
+  return new SkillsStore({
+    ...(opts.userRoot !== undefined ? { userRoot: opts.userRoot } : {}),
+    ...(opts.projects !== undefined ? { projects: opts.projects } : {}),
+    pluginSkills: new PluginSkills({ home: () => opts.pluginHome })
+  })
 }
 
 describe('parseSkillFrontmatter（容忍缺字段/超长）', () => {
@@ -51,10 +68,7 @@ describe('SkillsStore.list（用户级+项目级扫描）', () => {
     writeFileSync(join(userRoot, 'packed.skill'), 'zip-bytes') // zip 文件形态（.skill 包）→ 跳过
     makeSkill(join(projectDir, '.claude', 'skills'), 'proj-skill', '---\ndescription: 仅描述缺 name\n---\n')
 
-    const store = new SkillsStore({
-      userRoot: () => userRoot,
-      projects: () => [{ id: 'p1', dir: projectDir }]
-    })
+    const store = makeStore({ userRoot: () => userRoot, projects: () => [{ id: 'p1', dir: projectDir }], pluginHome: join(tempDir, 'plugin-home') })
     const list = store.list()
     expect(list).toHaveLength(2)
     const global = list.find((s) => s.source === 'user')
@@ -77,14 +91,14 @@ describe('SkillsStore.list（用户级+项目级扫描）', () => {
   it('超长 description（~500 字单行）截断至 120 字；author 有则带出', () => {
     const long = '长'.repeat(500)
     makeSkill(userRoot, 'long-desc', `---\ndescription: ${long}\nauthor: someone\n---\n`)
-    const store = new SkillsStore({ userRoot: () => userRoot })
+    const store = makeStore({ userRoot: () => userRoot, pluginHome: join(tempDir, 'plugin-home') })
     const skill = store.list()[0]
     expect(skill?.description).toBe('长'.repeat(120))
     expect(skill?.author).toBe('someone')
   })
 
   it('skills 根缺失 → 空列表不抛；项目级同理', () => {
-    const store = new SkillsStore({ userRoot: () => join(tempDir, 'missing') })
+    const store = makeStore({ userRoot: () => join(tempDir, 'missing'), pluginHome: join(tempDir, 'plugin-home') })
     expect(store.list()).toEqual([])
   })
 })
@@ -103,7 +117,7 @@ describe('SkillsStore.importSkillFolder（复制+冲突检测）', () => {
   afterEach(() => rmSync(tempDir, { recursive: true, force: true }))
 
   it('复制到目标 scope（含附属文件）并返回新 SkillInfo', () => {
-    const store = new SkillsStore({ userRoot: () => userRoot })
+    const store = makeStore({ userRoot: () => userRoot, pluginHome: join(tempDir, 'plugin-home') })
     const info = store.importSkillFolder(sourceDir, { scope: 'user' })
     expect(info).toMatchObject({ name: 'my-skill', source: 'user', dir: join(userRoot, 'my-skill') })
     expect(existsSync(join(userRoot, 'my-skill', 'SKILL.md'))).toBe(true)
@@ -113,13 +127,13 @@ describe('SkillsStore.importSkillFolder（复制+冲突检测）', () => {
 
   it('同名冲突抛错且不覆盖', () => {
     makeSkill(userRoot, 'my-skill')
-    const store = new SkillsStore({ userRoot: () => userRoot })
+    const store = makeStore({ userRoot: () => userRoot, pluginHome: join(tempDir, 'plugin-home') })
     expect(() => store.importSkillFolder(sourceDir, { scope: 'user' })).toThrow(/同名 skill 已存在/)
     expect(existsSync(join(userRoot, 'my-skill', 'extra.md'))).toBe(false) // 未覆盖
   })
 
   it('源缺 SKILL.md / 源不存在 / 项目 scope 未知 projectId → 抛错', () => {
-    const store = new SkillsStore({ userRoot: () => userRoot })
+    const store = makeStore({ userRoot: () => userRoot, pluginHome: join(tempDir, 'plugin-home') })
     const notSkill = join(tempDir, 'not-a-skill')
     mkdirSync(notSkill, { recursive: true })
     expect(() => store.importSkillFolder(notSkill, { scope: 'user' })).toThrow(/SKILL\.md/)
@@ -143,7 +157,7 @@ describe('SkillsStore.removeSkill（realpath 归属校验 + 回收站）', () =>
 
   it('界内目录 → shell.trashItem（回收站，非永久删除）以 realpath 解析后的路径调用', async () => {
     const dir = makeSkill(userRoot, 'removable')
-    const store = new SkillsStore({ userRoot: () => userRoot })
+    const store = makeStore({ userRoot: () => userRoot, pluginHome: join(tempDir, 'plugin-home') })
     await store.removeSkill({ name: 'removable', description: '', source: 'user', dir })
     expect(trashItem).toHaveBeenCalledTimes(1)
     expect(trashItem).toHaveBeenCalledWith(dir)
@@ -152,7 +166,7 @@ describe('SkillsStore.removeSkill（realpath 归属校验 + 回收站）', () =>
   it('越界目录（skills 根之外）拒绝且不调 trashItem', async () => {
     mkdirSync(userRoot, { recursive: true }) // 根存在（空）——归属校验才有比对对象
     const outside = makeSkill(join(tempDir, 'elsewhere'), 'outside')
-    const store = new SkillsStore({ userRoot: () => userRoot })
+    const store = makeStore({ userRoot: () => userRoot, pluginHome: join(tempDir, 'plugin-home') })
     await expect(
       store.removeSkill({ name: 'outside', description: '', source: 'user', dir: outside })
     ).rejects.toThrow(/越界/)
@@ -161,7 +175,7 @@ describe('SkillsStore.removeSkill（realpath 归属校验 + 回收站）', () =>
 
   it('dir 恰为 skills 根本身 → 拒绝（防整根误删）；不存在目录 → 报错', async () => {
     mkdirSync(userRoot, { recursive: true })
-    const store = new SkillsStore({ userRoot: () => userRoot })
+    const store = makeStore({ userRoot: () => userRoot, pluginHome: join(tempDir, 'plugin-home') })
     await expect(
       store.removeSkill({ name: 'root', description: '', source: 'user', dir: userRoot })
     ).rejects.toThrow(/越界/)
@@ -174,10 +188,7 @@ describe('SkillsStore.removeSkill（realpath 归属校验 + 回收站）', () =>
   it('项目级移除：按 skill.projectId 定位根；项目记录缺失报错', async () => {
     const projectDir = join(tempDir, 'proj')
     const dir = makeSkill(join(projectDir, '.claude', 'skills'), 'p-skill')
-    const store = new SkillsStore({
-      userRoot: () => userRoot,
-      projects: () => [{ id: 'p1', dir: projectDir }]
-    })
+    const store = makeStore({ userRoot: () => userRoot, projects: () => [{ id: 'p1', dir: projectDir }], pluginHome: join(tempDir, 'plugin-home') })
     const skill: SkillInfo = { name: 'p-skill', description: '', source: 'project', projectId: 'p1', dir }
     await store.removeSkill(skill)
     expect(trashItem).toHaveBeenCalledWith(dir)

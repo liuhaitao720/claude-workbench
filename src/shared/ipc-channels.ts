@@ -49,7 +49,9 @@ const HANDLE = {
   SkillSearch: 'cwb:skill:search',
   SkillMarketplaces: 'cwb:skill:marketplaces',
   SkillMarketInstall: 'cwb:skill:market-install',
-  SkillMarketRefresh: 'cwb:skill:market-refresh'
+  SkillMarketRefresh: 'cwb:skill:market-refresh',
+  // v1.2.1 插件 skill 启用/停用（已安装列表里插件条目切换状态）
+  SkillPluginSetEnabled: 'cwb:skill:plugin-set-enabled'
 } as const
 
 const SEND = {
