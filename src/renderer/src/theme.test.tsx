@@ -64,7 +64,7 @@ async function renderApp() {
 
 /** 打开 About（点侧栏版本按钮，对齐 about.test 先例） */
 async function openAbout(): Promise<ReturnType<typeof within>> {
-  fireEvent.click(screen.getByRole('button', { name: 'v1.1.0' }))
+  fireEvent.click(screen.getByRole('button', { name: 'v1.1.1' }))
   const dialog = await screen.findByRole('dialog', { name: '关于' })
   return within(dialog)
 }
@@ -104,7 +104,7 @@ describe('theme.ts 纯函数（对齐 font-size.ts 先例的持久化语义）',
     expect(light.background).toBe('#ffffff')
     expect(light.foreground).toBe('#33363d')
     expect(light.cursor).toBe('#33363d')
-    // v1.1.0：选择高亮反转块（用户指定）——深色白底黑字/浅色黑底白字，取消选择恢复
+    // v1.1.1：选择高亮反转块（用户指定）——深色白底黑字/浅色黑底白字，取消选择恢复
     expect(dark.selectionBackground).toBe('#ffffff')
     expect(dark.selectionForeground).toBe('#000000')
     expect(light.selectionBackground).toBe('#1f1f1f')
