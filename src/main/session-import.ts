@@ -3,6 +3,8 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { TaskRecord } from '../shared/types'
+import { translate } from '../shared/i18n'
+import { mainLanguage } from './language'
 import type { ProjectStore } from './project-store'
 import type { TaskStore } from './task-store'
 
@@ -161,12 +163,14 @@ async function readSessionHead(
 /** 命名素材 → 任务名：优先级链 + 空白归一 + 控制字符剔除 + 40 字（码点）截断 */
 function buildSessionName(info: SessionHeadInfo, sessionId: string): string {
   const raw = info.customTitle ?? info.aiTitle ?? info.summary ?? info.firstUser
-  if (raw === undefined) return `会话 ${sessionId.slice(0, 8)}`
+  // v1.2.0：兜底名随界面语言（历史会话无任何命名素材时才会用到）
+  const fallback = translate(mainLanguage(), 'session.defaultName', { id: sessionId.slice(0, 8) })
+  if (raw === undefined) return fallback
   const normalized = raw
     .replace(/[\u0000-\u001f\u007f]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-  if (normalized === '') return `会话 ${sessionId.slice(0, 8)}`
+  if (normalized === '') return fallback
   return Array.from(normalized).slice(0, MAX_NAME_LENGTH).join('')
 }
 

@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { spawn as ptySpawn, type IPty } from 'node-pty'
 import type { CliOutputEvent } from '../shared/types'
+import { translate, type Language } from '../shared/i18n'
 import { buildClaudeEnv, resolveClaudeCommand } from './pty-manager'
 
 /**
@@ -81,26 +82,29 @@ function isClaudeToken(token: string): boolean {
  * 校验用户命令（纯函数，拒绝抛带原因 Error，合法返回 token 数组）。
  * 顺序：非空 → 原文无换行（多语句注入纵深防御——裸换行会被 tokenizer 当空白吞掉，
  * 故在切分前先拒）→ 首 token=claude → 次 token ∈ 白名单 → 全 token 无元字符。
+ * language：错误文案语言（默认中文——纯函数单测按中文断言；UI 传当前语言）。
  */
-export function validateClaudeCommand(input: string): string[] {
-  if (input.trim().length === 0) throw new Error('命令为空')
+export function validateClaudeCommand(input: string, language: Language = 'zh'): string[] {
+  const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>): string =>
+    translate(language, key, params)
+  if (input.trim().length === 0) throw new Error(t('cli.errEmpty'))
   if (/[\r\n]/.test(input)) {
-    throw new Error('命令含换行（拒绝多语句注入）')
+    throw new Error(t('cli.errNewline'))
   }
   const tokens = tokenizeCommand(input)
-  if (tokens.length === 0) throw new Error('命令为空')
+  if (tokens.length === 0) throw new Error(t('cli.errEmpty'))
   const first = tokens[0] ?? ''
   if (!isClaudeToken(first)) {
-    throw new Error(`命令必须以 claude 开头（实际首个词: ${first}）`)
+    throw new Error(t('cli.errNotClaude', { word: first }))
   }
   const subcommand = tokens[1]
-  if (subcommand === undefined) throw new Error('缺少子命令（claude 后须跟 plugin/update/upgrade/mcp）')
+  if (subcommand === undefined) throw new Error(t('cli.errMissingSub'))
   if (!CLI_SUBCOMMAND_WHITELIST.has(subcommand)) {
-    throw new Error(`子命令不在白名单 {plugin, update, upgrade, mcp} 内: ${subcommand}`)
+    throw new Error(t('cli.errSubNotAllowed', { word: subcommand }))
   }
-  const offending = tokens.find((t) => CMD_METACHARS.test(t))
+  const offending = tokens.find((t2) => CMD_METACHARS.test(t2))
   if (offending !== undefined) {
-    throw new Error(`命令含被禁止的元字符（& | > < % ^ " 反引号 或换行）: ${offending}`)
+    throw new Error(t('cli.errMetachar', { word: offending }))
   }
   return tokens
 }
@@ -109,6 +113,8 @@ export interface CliRunnerCallbacks {
   onData: (event: CliOutputEvent) => void
   /** 进程结束（含超时 kill 与显式 kill）；exitCode 为 PTY 上报值 */
   onExit: (commandId: string, exitCode: number) => void
+  /** v1.2.0 校验错误文案语言（组合根读 AppSettings.language；缺省中文） */
+  language?: () => Language
 }
 
 interface TrackedCommand {
@@ -126,11 +132,24 @@ export class CliRunner {
 
   /** 校验用户命令并启动（经 cmd.exe 包装 resolved claude）；返回 commandId；拒绝抛 Error */
   async run(userCommand: string): Promise<{ commandId: string }> {
-    const tokens = validateClaudeCommand(userCommand)
+    const tokens = validateClaudeCommand(userCommand, this.callbacks.language?.() ?? 'zh')
     const claudeCmd = await resolveClaudeCommand()
     // 受控 args：白名单校验后的 token 数组（无元字符），claude 路径取 main 解析结果——不回拼原文
     // v1.0 乱码修复：npm 子进程在中文 Windows 输出 GBK——chcp 65001 切 UTF-8（输出串行生效）
     return this.spawnFixed('cmd.exe', ['/c', 'chcp 65001>nul&&' + claudeCmd, ...tokens.slice(1)])
+  }
+
+  /**
+   * v1.2.0 skill 市场固定模板：`claude plugin <argv...>`。
+   * 与 spawnFixed 同性质（main 侧构造的受控 args，无自由命令面），但额外按
+   * validateClaudeCommand 同口径复核每个 token 的元字符——installId 虽来自
+   * marketplace 目录（外部不可信输入，已在 SkillMarket 侧过白名单），仍做纵深防御。
+   */
+  async runPlugin(argv: readonly string[]): Promise<{ commandId: string }> {
+    const offending = argv.find((t) => CMD_METACHARS.test(t))
+    if (offending !== undefined) throw new Error(`参数含被禁止的元字符: ${offending}`)
+    const claudeCmd = await resolveClaudeCommand()
+    return this.spawnFixed('cmd.exe', ['/c', 'chcp 65001>nul&&' + claudeCmd, ...argv])
   }
 
   /**

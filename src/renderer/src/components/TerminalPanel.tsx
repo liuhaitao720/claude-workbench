@@ -12,6 +12,7 @@ import { terminalThemeFor } from '../theme'
 import { SidebarMenu } from './SidebarMenu'
 import type { EffectiveTheme } from '../theme'
 import { subscribeTaskData, useAppStore } from '../store'
+import { useI18n } from '../i18n'
 
 /**
  * 终端面板：每任务一个 xterm Terminal 实例（模块级缓存）。
@@ -148,6 +149,7 @@ function disposeTaskTerminal(taskId: string, host: HTMLElement): void {
 }
 
 function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
+  const tr = useI18n()
   const hostRef = useRef<HTMLDivElement>(null)
   // v1.0.4 右键菜单：光标锚点 + 打开时刻的选中快照；nullBtnRef 永空（占位满足
   // SidebarMenu 的 triggerRef 契约——outside-click 对任何点击都关闭，含终端区）
@@ -462,7 +464,7 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
             ...(ctxMenu.sel !== ''
               ? [
                   {
-                    label: '复制',
+                    label: tr('term.copy'),
                     onClick: () =>
                       void navigator.clipboard
                         .writeText(ctxMenu.sel)
@@ -471,7 +473,7 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
                 ]
               : []),
             {
-              label: '粘贴',
+              label: tr('term.paste'),
               // v1.0.8：与 Ctrl+V 同路——term.paste() 走 xterm 粘贴通道（括号粘贴/换行归一化）；
               // v1.0.9：粘贴后焦点还终端（菜单点击会 steal focus，光标需回位）
               onClick: () =>
@@ -484,11 +486,11 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
                   .finally(() => terminalCache.get(task.id)?.focus())
             },
             {
-              label: '全选',
+              label: tr('term.selectAll'),
               onClick: () => terminalCache.get(task.id)?.selectAll()
             },
             {
-              label: '清屏',
+              label: tr('term.clear'),
               onClick: () => terminalCache.get(task.id)?.clear()
             }
           ]}
@@ -512,6 +514,7 @@ export function focusActiveTerminal(): void {
  * - 目标=打开时的活跃终端；切换 tab 自动关（对齐 VS Code），关闭清装饰并把焦点还终端
  */
 function TerminalSearchBar() {
+  const t = useI18n()
   const closeSearch = useAppStore((s) => s.closeSearch)
   const activeTaskId = useAppStore((s) => s.activeTaskId)
   const [term, setTerm] = useState('')
@@ -567,7 +570,7 @@ function TerminalSearchBar() {
     result !== null && term !== ''
       ? result.index >= 0
         ? `${result.index + 1}/${result.count}`
-        : `>${result.count}`
+        : t('term.exceeded', { count: result.count })
       : ''
 
   return (
@@ -576,9 +579,9 @@ function TerminalSearchBar() {
         ref={inputRef}
         className="term-search-input"
         type="text"
-        placeholder="在终端中查找…"
+        placeholder={t('term.searchPlaceholder')}
         value={term}
-        aria-label="终端搜索"
+        aria-label={t('term.searchAria')}
         onChange={(e) => {
           const v = e.target.value
           setTerm(v)
@@ -595,16 +598,16 @@ function TerminalSearchBar() {
         }}
       />
       <span className="term-search-count">{label}</span>
-      <button type="button" className="btn btn-mini" aria-label="上一个匹配" onClick={() => run('prev', false, term)}>
+      <button type="button" className="btn btn-mini" aria-label={t('term.prevMatch')} onClick={() => run('prev', false, term)}>
         ↑
       </button>
-      <button type="button" className="btn btn-mini" aria-label="下一个匹配" onClick={() => run('next', false, term)}>
+      <button type="button" className="btn btn-mini" aria-label={t('term.nextMatch')} onClick={() => run('next', false, term)}>
         ↓
       </button>
       <button
         type="button"
         className="btn btn-mini"
-        aria-label="关闭搜索"
+        aria-label={t('term.closeSearch')}
         onClick={() => {
           closeSearch()
           focusActiveTerminal()
@@ -617,6 +620,7 @@ function TerminalSearchBar() {
 }
 
 export function TerminalPanel() {
+  const t = useI18n()
   const openTaskIds = useAppStore((s) => s.openTaskIds)
   const tasks = useAppStore((s) => s.tasks)
   const activeTaskId = useAppStore((s) => s.activeTaskId)
@@ -647,7 +651,7 @@ export function TerminalPanel() {
       {openTasks.length === 0 ? (
         /* 零项目时提示由主区 empty-hint 承担（A3），此处不再叠加一句误导文案 */
         projects.length > 0 && (
-          <div className="terminal-empty">暂无打开的终端——点击任务行打开终端 tab</div>
+          <div className="terminal-empty">{t('term.empty')}</div>
         )
       ) : (
         <>

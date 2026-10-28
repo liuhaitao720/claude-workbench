@@ -1,7 +1,9 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import type { ProjectRecord, TaskRecord } from '../../../shared/types'
+import type { MessageKey } from '../../../shared/i18n'
 import { useAppStore } from '../store'
+import { useI18n } from '../i18n'
 import { useEscapeClose } from '../hooks/useEscapeClose'
 import { TaskStatusDot } from './TaskStatusDot'
 import { SidebarMenu } from './SidebarMenu'
@@ -32,6 +34,7 @@ export function ProjectTree({
   /** 项目菜单「新建任务」入口：预选中该项目并打开顶部新建对话框（见 ProjectSidebar） */
   onNewTask: (projectId: string) => void
 }) {
+  const t = useI18n()
   const projects = useAppStore((s) => s.projects)
   const tasks = useAppStore((s) => s.tasks)
   /** 折叠集（默认空集=全部展开；新增项目天然展开） */
@@ -67,7 +70,7 @@ export function ProjectTree({
   return (
     <MenuOpenCtx.Provider value={{ openKey, setOpenKey }}>
       {q !== '' && visible.length === 0 ? (
-        <div className="search-empty">无匹配结果</div>
+        <div className="search-empty">{t('tree.noMatch')}</div>
       ) : (
         <ul className="project-list">
           {visible.map(({ project, tasks: pTasks }) => (
@@ -103,6 +106,7 @@ function ProjectNode({
   onToggle: () => void
   onNewTask: (projectId: string) => void
 }) {
+  const t = useI18n()
   const selectedProjectId = useAppStore((s) => s.selectedProjectId)
   const selectProject = useAppStore((s) => s.selectProject)
   const removeProjectFlow = useAppStore((s) => s.removeProjectFlow)
@@ -121,13 +125,13 @@ function ProjectNode({
   }
 
   const menuItems: MenuItemDef[] = [
-    { label: '新建任务', onClick: () => onNewTask(project.id) },
-    { label: '重命名', onClick: () => setRenaming(true) },
+    { label: t('tree.newTask'), onClick: () => onNewTask(project.id) },
+    { label: t('tree.rename'), onClick: () => setRenaming(true) },
     {
-      label: '移除',
+      label: t('tree.remove'),
       danger: true,
       onClick: () => {
-        if (window.confirm(`移除项目 “${project.name}”？（仅移除记录，不删除磁盘目录）`)) {
+        if (window.confirm(t('tree.removeConfirm', { name: project.name }))) {
           void removeProjectFlow(project.id)
         }
       }
@@ -145,8 +149,12 @@ function ProjectNode({
           className="tree-caret"
           onClick={onToggle}
           aria-expanded={expanded}
-          aria-label={expanded ? `折叠 ${project.name} 的任务` : `展开 ${project.name} 的任务`}
-          title={expanded ? '折叠任务' : '展开任务'}
+          aria-label={
+            expanded
+              ? t('tree.collapseTasks', { name: project.name })
+              : t('tree.expandTasks', { name: project.name })
+          }
+          title={expanded ? t('tree.collapse') : t('tree.expand')}
         >
           {expanded ? '▾' : '▸'}
         </button>
@@ -177,7 +185,7 @@ function ProjectNode({
             </button>
             <RowMenuButton
               ref={menuBtnRef}
-              ariaLabel="项目操作"
+              ariaLabel={t('tree.projectActions')}
               open={menuOpen}
               onToggle={() => setOpenKey(menuOpen ? null : menuKey)}
             />
@@ -197,7 +205,7 @@ function ProjectNode({
         ) : (
           <TaskGroups tasks={tasks} />
         )}
-        {tasks.length === 0 && <div className="task-empty">暂无任务</div>}
+        {tasks.length === 0 && <div className="task-empty">{t('tree.noTasks')}</div>}
       </div>
     </li>
   )
@@ -208,11 +216,11 @@ function ProjectNode({
 type GroupKey = 'today' | 'yesterday' | 'week' | 'older'
 
 const GROUP_ORDER: readonly GroupKey[] = ['today', 'yesterday', 'week', 'older']
-const GROUP_LABELS: Readonly<Record<GroupKey, string>> = {
-  today: '今天',
-  yesterday: '昨天',
-  week: '近 7 天',
-  older: '更早'
+const GROUP_LABEL_KEYS: Readonly<Record<GroupKey, MessageKey>> = {
+  today: 'tree.groupToday',
+  yesterday: 'tree.groupYesterday',
+  week: 'tree.groupWeek',
+  older: 'tree.groupOlder'
 }
 
 /** now 往前 days 个日历日的 00:00（日历算术，避开毫秒减法的午夜/DST 偏差） */
@@ -249,6 +257,7 @@ function TaskFlatList({ tasks }: { tasks: TaskRecord[] }) {
 }
 
 function TaskGroups({ tasks }: { tasks: TaskRecord[] }) {
+  const t = useI18n()
   /** 组折叠集（默认全展开；同 F5 原则用 display 隐藏保挂载） */
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<GroupKey>>(new Set())
 
@@ -282,7 +291,7 @@ function TaskGroups({ tasks }: { tasks: TaskRecord[] }) {
               onClick={() => toggleGroup(key)}
             >
               <span className="task-group-caret">{folded ? '▸' : '▾'}</span>
-              {GROUP_LABELS[key]}
+              {GROUP_LABEL_KEYS[key] !== undefined && t(GROUP_LABEL_KEYS[key])}
               <span className="task-group-count">{list.length}</span>
             </button>
             <ul className="task-rows" style={folded ? { display: 'none' } : undefined}>
@@ -300,6 +309,7 @@ function TaskGroups({ tasks }: { tasks: TaskRecord[] }) {
 // ── 任务行（单行化 + ⋯ 菜单 + 双击重命名 + active 高亮） ────────────────
 
 function TaskRow({ task }: { task: TaskRecord }) {
+  const t = useI18n()
   const openTaskAutoResume = useAppStore((s) => s.openTaskAutoResume)
   const stopTaskFlow = useAppStore((s) => s.stopTaskFlow)
   const resumeTaskFlow = useAppStore((s) => s.resumeTaskFlow)
@@ -331,24 +341,22 @@ function TaskRow({ task }: { task: TaskRecord }) {
   const menuItems: MenuItemDef[] = [
     // v0.5①：移除「打开」——与单击任务行完全重复（v0.4.1 后单击即开+自动恢复）
     task.status === 'running'
-      ? { label: '停止', onClick: () => void stopTaskFlow(task.id) }
-      : { label: '恢复', onClick: () => void resumeTaskFlow(task.id) },
-    { label: '重命名', onClick: () => setRenaming(true) },
+      ? { label: t('tree.stop'), onClick: () => void stopTaskFlow(task.id) }
+      : { label: t('tree.resume'), onClick: () => void resumeTaskFlow(task.id) },
+    { label: t('tree.rename'), onClick: () => setRenaming(true) },
     {
       // 单任务"跳过权限确认"切换（v0.3.1）：显示当前状态；仅元数据，下次 spawn（恢复）生效
-      label: task.skipPermissions
-        ? '跳过权限确认：开（点击关闭）'
-        : '跳过权限确认：关（点击开启）',
+      label: t(task.skipPermissions ? 'tree.skipPermsOn' : 'tree.skipPermsOff'),
       onClick: () => void setTaskSkipPermissionsFlow(task.id, task.skipPermissions !== true)
     },
     {
-      label: '复制 sessionId',
+      label: t('tree.copySessionId'),
       onClick: () => {
         // renderer 权限内（spec v0.3 约束）：jsdom/未聚焦场景无 clipboard 时静默跳过
         void navigator.clipboard?.writeText(task.sessionId)
       }
     },
-    { label: '删除', danger: true, onClick: () => setDeleting(true) }
+    { label: t('tree.delete'), danger: true, onClick: () => setDeleting(true) }
   ]
 
   return (
@@ -398,7 +406,7 @@ function TaskRow({ task }: { task: TaskRecord }) {
             {task.skipPermissions === true && (
               <span
                 className="skip-perm-badge"
-                title="已开启 --dangerously-skip-permissions（下次启动生效）"
+                title={t('tree.skipPermsBadge')}
               >
                 ⚡
               </span>
@@ -406,7 +414,7 @@ function TaskRow({ task }: { task: TaskRecord }) {
           </button>
           <RowMenuButton
             ref={menuBtnRef}
-            ariaLabel="任务操作"
+            ariaLabel={t('tree.taskActions')}
             open={menuOpen}
             onToggle={() => setOpenKey(menuOpen ? null : menuKey)}
           />
@@ -443,6 +451,7 @@ function DeleteTaskDialog({
   onConfirm: (deleteWorktree: boolean) => void
 }) {
   const [deleteWorktree, setDeleteWorktree] = useState(false)
+  const t = useI18n()
   // A1：document 级 Escape + 遮罩空白点击关闭（对齐 About/Skills/新建任务基线）
   useEscapeClose(onClose)
 
@@ -453,8 +462,8 @@ function DeleteTaskDialog({
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="dialog" role="dialog" aria-label="确认删除任务">
-        <p className="dialog-title">删除任务 “{name}”？</p>
+      <div className="dialog" role="dialog" aria-label={t('tree.deleteAria')}>
+        <p className="dialog-title">{t('tree.deleteTitle', { name })}</p>
         {hasWorktree && (
           <label className="dialog-check">
             <input
@@ -462,15 +471,15 @@ function DeleteTaskDialog({
               checked={deleteWorktree}
               onChange={(e) => setDeleteWorktree(e.target.checked)}
             />
-            同时删除 worktree 分支
+            {t('tree.deleteWorktree')}
           </label>
         )}
         <div className="dialog-actions">
           <button type="button" className="btn danger" onClick={() => onConfirm(deleteWorktree)}>
-            确认删除
+            {t('tree.confirmDelete')}
           </button>
           <button type="button" className="btn" onClick={onClose}>
-            取消
+            {t('common.cancel')}
           </button>
         </div>
       </div>

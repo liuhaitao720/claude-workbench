@@ -73,6 +73,27 @@ export interface SkillInfo {
   dir: string
 }
 
+/** Skill 市场条目【v1.2.0：来自本机已配置 marketplace 目录】 */
+export interface SkillMarketEntry {
+  name: string
+  /** marketplace 名（安装时拼 <name>@<marketplace>） */
+  marketplace: string
+  description: string
+  category?: string
+  author?: string
+  version?: string
+  /** 安装量（用于排序；无数据=0） */
+  installs: number
+  /** `<name>@<marketplace>`，安装命令与去重键 */
+  installId: string
+}
+
+/** 已配置的 marketplace 概要【v1.2.0】 */
+export interface SkillMarketplaceInfo {
+  name: string
+  count: number
+}
+
 /** CLI 执行输出事件【v0.5③：main CliRunner 推送 / renderer 弹窗内嵌终端消费】 */
 export interface CliOutputEvent {
   commandId: string
@@ -122,6 +143,11 @@ export interface AppSettings {
   closeToTray: boolean
   /** 开机自启（app.setLoginItemSettings） */
   launchAtLogin: boolean
+  /**
+   * 界面语言（v1.2.0）：renderer 是权威（localStorage），打开/切换语言时同步到此，
+   * 供 main 侧的托盘菜单与退出确认框取文案。缺省='zh'。
+   */
+  language?: 'zh' | 'en'
 }
 
 /** 任务活动状态事件（v3.2：'busy'=执行中黄转圈 | 'awaiting'=待答复红 | 'idle'=就绪绿） */
@@ -272,6 +298,21 @@ export interface CWBApi {
     current: string,
     latest: string
   ): Promise<{ notes: AppChangelogEntry[]; error?: string }>
+
+  // ── Skill 市场（3，v1.2.0）─────────────────
+  /** 从本机已配置 marketplace 目录搜索 skill（空 query = 按安装量排序的推荐列表） */
+  searchSkillMarket(query: string, marketplace?: string, limit?: number): Promise<SkillMarketEntry[]>
+  /** 已配置的 marketplace 概要（名称 + 条目数；用于过滤器） */
+  listSkillMarketplaces(): Promise<SkillMarketplaceInfo[]>
+  /**
+   * 安装市场 skill：`claude plugin install <name>@<marketplace> -y`
+   * （经 CLI 受控模板执行；返回 commandId 供弹窗挂 onCliOutput 展示进度）
+   */
+  installMarketSkill(
+    installId: string
+  ): Promise<{ ok: boolean; commandId?: string; error?: string }>
+  /** 刷新所有 marketplace 目录（`claude plugin marketplace update`，走 CLI 网络/凭据策略） */
+  refreshSkillMarket(): Promise<{ ok: boolean; commandId?: string; error?: string }>
 
   // ── webhook 通知（3，v0.5④N）───────────────
   /** 读取通知配置（默认 {url:'', enabled:false}） */

@@ -191,4 +191,46 @@ describe('setupTray（菜单/还原/退出确认/tooltip）', () => {
     click()
     expect(shown()).toBe(1)
   })
+
+  // ── v1.2.0 双语托盘 ─────────────────────────────────────────
+  it('language=en：菜单/tooltip 英文；setLanguage 切换后重建菜单与提示', async () => {
+    const { win } = fakeWindow()
+    const handle = await setupTray({ win, runningCount: () => 3, language: () => 'en' })
+    const tray = h.trayInstances.at(-1)
+    expect(h.menuTemplates.at(-1)?.map((i) => i['label'])).toEqual([
+      'Show Claude Workbench',
+      undefined,
+      'Quit (ends all tasks)'
+    ])
+    expect(tray?.setToolTipCalls.at(-1)).toBe('Claude Workbench (3 task(s) running)')
+
+    handle.setRunningCount(4)
+    expect(tray?.setToolTipCalls.at(-1)).toBe('Claude Workbench (4 task(s) running)')
+
+    // 切回中文 → 菜单与 tooltip 同源重建（tooltip 保留当前计数）
+    handle.setLanguage('zh')
+    expect(h.menuTemplates.at(-1)?.map((i) => i['label'])).toEqual([
+      '显示 Claude Workbench',
+      undefined,
+      '退出（结束所有任务）'
+    ])
+    expect(tray?.setToolTipCalls.at(-1)).toBe('Claude Workbench（4 个任务运行中）')
+
+    // 同语言重复设置是 no-op（不重建菜单）
+    const menus = h.menuTemplates.length
+    handle.setLanguage('zh')
+    expect(h.menuTemplates).toHaveLength(menus)
+  })
+
+  it('language=en：退出确认框按钮/正文英文，计数仍来自 runningCount', async () => {
+    const { win } = fakeWindow()
+    await setupTray({ win, runningCount: () => 2, language: () => 'en' })
+    const click = menuItem('Quit (ends all tasks)')['click'] as () => void
+    const dialogBefore = h.dialogCalls.length
+    h.dialogResponse = 1
+    click()
+    await vi.waitFor(() => expect(h.dialogCalls.length).toBe(dialogBefore + 1))
+    expect(h.dialogCalls.at(-1)?.message).toBe('2 task(s) still running')
+    expect(h.dialogCalls.at(-1)?.detail).toContain('Quit anyway?')
+  })
 })

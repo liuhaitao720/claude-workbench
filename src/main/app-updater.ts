@@ -3,6 +3,13 @@ import { createHash } from 'node:crypto'
 import { createWriteStream, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { compareSemver } from './claude-version'
+import { translate } from '../shared/i18n'
+import { mainLanguage } from './language'
+
+/** v1.2.0 错误文案按当前界面语言（main 进程级语言） */
+function tr(key: Parameters<typeof translate>[1], params?: Record<string, string | number>): string {
+  return translate(mainLanguage(), key, params)
+}
 
 /**
  * 应用自更新（v1.1.0）：检测 → 下载校验 → 退出替换重启。
@@ -169,7 +176,7 @@ export class AppUpdater {
       manifest = await this.fetchJson<AppUpdateManifest>(LATEST_MANIFEST_URL, HTTP_TIMEOUT_MS)
       if (typeof manifest.version !== 'string' || manifest.version === '') {
         manifest = null
-        manifestError = '清单格式异常（无 version）'
+        manifestError = tr('appUpd.errManifestNoVersion')
       }
     } catch (err) {
       manifestError = err instanceof Error ? err.message : String(err)
@@ -201,13 +208,15 @@ export class AppUpdater {
   /** 下载安装包到 updateDir 并做 sha256 校验；进度经 onProgress 推送 */
   async download(): Promise<{ ok: boolean; error?: string }> {
     this.downloadedZip = null
-    if (!this.manifest) return { ok: false, error: '尚未检查更新（无清单）' }
-    if (!this.deps.isPackaged) return { ok: false, error: '开发模式运行，不支持自升级' }
+    if (!this.manifest) return { ok: false, error: tr('appUpd.errNoManifest') }
+    if (!this.deps.isPackaged) return { ok: false, error: tr('appUpd.errDevMode') }
     const m = this.manifest
     try {
       mkdirSync(this.deps.updateDir, { recursive: true })
       const res = await this.fetchImpl(m.url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) })
-      if (!res.ok || res.body === null) return { ok: false, error: `下载失败 HTTP ${res.status}` }
+      if (!res.ok || res.body === null) {
+        return { ok: false, error: tr('appUpd.errHttp', { status: res.status }) }
+      }
       const total = Number(res.headers.get('content-length') ?? m.size ?? 0)
       const zipPath = join(this.deps.updateDir, `Claude-Workbench-${m.version}-portable.zip`)
       const hash = createHash('sha256')
@@ -235,12 +244,12 @@ export class AppUpdater {
       const actual = hash.digest('hex')
       if (actual.toLowerCase() !== m.sha256.toLowerCase()) {
         rmSync(zipPath, { force: true })
-        return { ok: false, error: 'sha256 校验失败（下载损坏或被篡改）' }
+        return { ok: false, error: tr('appUpd.errSha') }
       }
       if (total > 0 && received !== total) {
         // content-length 已知却不完整——同样视为损坏
         rmSync(zipPath, { force: true })
-        return { ok: false, error: `下载不完整 ${received}/${total}` }
+        return { ok: false, error: tr('appUpd.errIncomplete', { received, total }) }
       }
       this.downloadedZip = zipPath
       this.deps.onProgress?.({ phase: 'ready' })
@@ -255,13 +264,13 @@ export class AppUpdater {
    * （before-quit 杀 PTY 树释放文件锁 → 更新器覆盖安装目录 → 重启新版）。
    */
   async install(): Promise<{ ok: boolean; error?: string }> {
-    if (!this.deps.isPackaged) return { ok: false, error: '开发模式运行，不支持自升级' }
+    if (!this.deps.isPackaged) return { ok: false, error: tr('appUpd.errDevMode') }
     if (this.downloadedZip === null || !existsSync(this.downloadedZip)) {
-      return { ok: false, error: '安装包未就绪（请先下载）' }
+      return { ok: false, error: tr('appUpd.errPackageMissing') }
     }
     try {
       // 下载后安装目录未变（同机自更新），zip 存在即校验过；体积兜底防零字节文件
-      if (statSync(this.downloadedZip).size === 0) return { ok: false, error: '安装包为空' }
+      if (statSync(this.downloadedZip).size === 0) return { ok: false, error: tr('appUpd.errPackageEmpty') }
       const extractDir = join(this.deps.tempDir, `cwb-update-${Date.now()}`)
       mkdirSync(extractDir, { recursive: true })
       const cmdPath = join(this.deps.updateDir, 'updater.cmd')

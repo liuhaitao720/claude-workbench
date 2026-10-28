@@ -4,6 +4,8 @@ import type { CliRunner } from './cli-runner'
 import { invalidateClaudePathCache, resolveClaudeCandidates } from './pty-manager'
 import { parseChangelog } from './app-updater'
 import type { AppChangelogEntry } from '../shared/types'
+import { translate, type Language } from '../shared/i18n'
+import { mainLanguage } from './language'
 
 const execFileAsync = promisify(execFile)
 
@@ -209,7 +211,7 @@ export function resolveNpmRegistry(homeDir: string, npmrcText: string | null): s
   return 'https://registry.npmjs.org'
 }
 
-export async function fetchLatestFromRegistry(): Promise<string> {
+export async function fetchLatestFromRegistry(language: Language = mainLanguage()): Promise<string> {
   const { homedir } = await import('node:os')
   const { readFileSync } = await import('node:fs')
   let npmrcText: string | null = null
@@ -225,7 +227,9 @@ export async function fetchLatestFromRegistry(): Promise<string> {
   if (!res.ok) throw new Error(`registry HTTP ${res.status}`)
   const json: unknown = await res.json()
   const version = (json as { version?: unknown }).version
-  if (typeof version !== 'string' || version === '') throw new Error('registry 响应无 version')
+  if (typeof version !== 'string' || version === '') {
+    throw new Error(translate(language, 'cliVer.errRegistryNoVersion'))
+  }
   return version
 }
 
@@ -332,7 +336,10 @@ export async function fetchClaudeChangelog(
   } catch (err) {
     return {
       notes: [],
-      error: `${primaryError}；atom 兜底 ${err instanceof Error ? err.message : String(err)}`
+      error: translate(mainLanguage(), 'cliVer.errBothFailed', {
+        primary: primaryError,
+        fallback: err instanceof Error ? err.message : String(err)
+      })
     }
   }
 }

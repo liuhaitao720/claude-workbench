@@ -7,6 +7,7 @@ import { SmokeBridge } from './components/SmokeBridge'
 import { AboutDialog } from './components/AboutDialog'
 import { SkillsDialog } from './components/SkillsDialog'
 import { SettingsDialog } from './components/SettingsDialog'
+import { useI18n, syncLanguageToMain } from './i18n'
 
 /** ?smoke=1：--smoke 冒烟模式下 main 注入的 URL query（模块加载时解析一次，运行期不变） */
 const isSmokeMode = new URLSearchParams(window.location.search).get('smoke') === '1'
@@ -20,9 +21,12 @@ const isSmokeMode = new URLSearchParams(window.location.search).get('smoke') ===
  * v0.9：Settings 设置中心弹窗同族（About 瘦身为身份页 + 「打开设置」入口）。
  */
 export function App() {
+  const t = useI18n()
   useEffect(() => {
     void useAppStore.getState().loadAll()
     const dispose = initListeners()
+    // v1.2.0：启动把界面语言同步给 main（托盘/退出确认取同一语言）
+    syncLanguageToMain()
     return dispose
   }, [])
 
@@ -52,7 +56,7 @@ export function App() {
         {/* A3：仅零项目且无打开 tab 时显示（主区中部绝对定位，不再占 TabBar 上方布局）；
             有项目无 tab 时由 TerminalPanel 空态接管提示 */}
         {projects.length === 0 && openTaskIds.length === 0 && (
-          <div className="empty-hint">从左侧“打开目录”注册一个项目开始</div>
+          <div className="empty-hint">{t('app.emptyHint')}</div>
         )}
         <TabBar />
         <TerminalPanel />

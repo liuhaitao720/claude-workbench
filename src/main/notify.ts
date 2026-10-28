@@ -1,5 +1,7 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import type { NotifyConfig, TaskActivityEvent } from '../shared/types'
+import { translate, type Language } from '../shared/i18n'
+import { mainLanguage } from './language'
 
 /**
  * v0.5④N webhook 推送（企业微信/钉钉/通用 JSON）。
@@ -28,20 +30,22 @@ export interface NotifyServiceOptions {
   now?: () => number
   /** 任务显示名查找（推送文案含任务名；缺省用 taskId 前 8 位） */
   taskNameOf?: (taskId: string) => string | undefined
+  /** v1.2.0 文案语言来源（缺省读 main 进程级 mainLanguage()；测试可注入固定值） */
+  language?: () => Language
 }
 
 /**
  * Webhook URL 校验（v0.5.4：用户误填机器人管理页——给出可操作指引而非静默 404）。
  * 返回 null=合法；字符串=拒绝原因。
  */
-export function validateWebhookUrl(url: string): string | null {
+export function validateWebhookUrl(url: string, language: Language = 'zh'): string | null {
   const trimmed = url.trim()
   if (trimmed.length === 0) return null // 空=禁用，合法
   if (/work\.weixin\.qq\.com\/wework_admin|openBotProfile/i.test(trimmed)) {
-    return '这是企业微信机器人的管理页地址，不是 Webhook 推送地址。请在 群设置 → 群机器人 → 复制 Webhook 地址（形如 https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...）'
+    return translate(language, 'notify.urlIsAdminPage')
   }
   if (!/^https?:\/\//i.test(trimmed)) {
-    return 'URL 须以 http:// 或 https:// 开头'
+    return translate(language, 'notify.urlScheme')
   }
   return null
 }
@@ -76,6 +80,14 @@ export class NotifyService {
     return this.opts.fetchImpl ?? fetch
   }
 
+  private language(): Language {
+    return this.opts.language?.() ?? mainLanguage()
+  }
+
+  private t(key: Parameters<typeof translate>[1], params?: Record<string, string | number>): string {
+    return translate(this.language(), key, params)
+  }
+
   /** 读取配置（容错：缺失/损坏 → 默认 {url:'', enabled:false, channel:'wecom'}） */
   getConfig(): NotifyConfig {
     return this.load()
@@ -84,7 +96,7 @@ export class NotifyService {
   /** 保存 webhook 配置（channel 按 URL 推断；URL 为空强制 enabled=false）并返回 */
   setWebhook(url: string, enabled: boolean): NotifyConfig {
     const trimmed = url.trim()
-    const invalid = validateWebhookUrl(trimmed)
+    const invalid = validateWebhookUrl(trimmed, this.language())
     if (invalid !== null) throw new Error(invalid)
     const config: NotifyConfig = {
       url: trimmed,
@@ -110,17 +122,19 @@ export class NotifyService {
     if (last !== undefined && at - last < PUSH_DEBOUNCE_MS) return
     this.lastPushAt.set(event.taskId, at)
     const name = this.opts.taskNameOf?.(event.taskId) ?? event.taskId.slice(0, 8)
-    const when = new Date(at).toLocaleString('zh-CN', { hour12: false })
-    const text = `【Claude Workbench】任务「${name}」等待你的答复（权限确认/选择），请回电脑处理\n> ${when}`
+    const when = new Date(at).toLocaleString(this.language() === 'en' ? 'en-US' : 'zh-CN', {
+      hour12: false
+    })
+    const text = this.t('notify.awaiting', { name, when })
     void this.push(config, text)
   }
 
   /** 立即推送固定测试文案（设置面板「测试推送」）；错误显式返回不静默 */
   async sendTest(): Promise<{ ok: boolean; error?: string }> {
     const config = this.load()
-    if (config.url.length === 0) return { ok: false, error: '未配置 webhook URL' }
+    if (config.url.length === 0) return { ok: false, error: this.t('notify.needUrl') }
     try {
-      await this.postJson(config, '【Claude Workbench】测试推送：通知配置已生效')
+      await this.postJson(config, this.t('notify.test'))
       return { ok: true }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -154,7 +168,9 @@ export class NotifyService {
       } catch {
         // 无 body 忽略
       }
-      throw new Error(`webhook 响应 HTTP ${res.status}${snippet ? '：' + snippet : ''}`)
+      throw new Error(
+        `${this.t('notify.httpStatus', { status: res.status })}${snippet ? '：' + snippet : ''}`
+      )
     }
   }
 

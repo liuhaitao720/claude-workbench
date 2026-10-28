@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { IpcChannels } from '../shared/ipc-channels'
+import { translate } from '../shared/i18n'
 import type {
   AppSettings,
   CliOutputEvent,
@@ -20,9 +21,11 @@ import { AppSettingsStore } from './settings-store'
 import { FontScanner } from './font-scan'
 import { NotifyService } from './notify'
 import { ProjectStore } from './project-store'
+import { mainLanguage, setMainLanguage } from './language'
 import { PtyManager, buildNewSessionArgs, buildResumeArgs } from './pty-manager'
 import { importTasksFromSessionsImpl } from './session-import'
 import { SkillsStore } from './skills-store'
+import { SkillMarket, validateInstallTarget } from './skill-market'
 import { startTaskActivityServer, type TaskActivityHandle } from './task-activity'
 import { TaskStore } from './task-store'
 
@@ -64,6 +67,8 @@ export interface AppContext {
   readonly skills: SkillsStore
   /** v0.5③ CLI 命令执行器（独立隐藏 PTY，输出走 cwb:event:cli-output） */
   readonly cli: CliRunner
+  /** v1.2.0 skill 市场（读本机 marketplace 目录；联网由 CLI 自身完成） */
+  readonly skillMarket: SkillMarket
   /** v0.5④N webhook 推送（awaiting 防抖推送；配置 userData/notify.json） */
   readonly notify: NotifyService
   /** smoke:report 回执累积（S4：renderer→main 冒烟回执；编排侧轮询消费） */
@@ -97,6 +102,8 @@ export interface AppContextOptions {
   onPtyData?: (event: PtyDataEvent) => void
   /** 任务记录变更旁路（v0.5⑥ 托盘 tooltip 运行数刷新——同 onPtyData 注入缝先例） */
   onTaskUpdate?: (record: TaskRecord) => void
+  /** v1.2.0 应用设置变更旁路（托盘菜单/退出确认文案随语言切换刷新） */
+  onSettingsChange?: (settings: AppSettings) => void
 }
 
 /** 创建 app 上下文（含启动归一化 running→stopped）；registerIpcHandlers 默认调它 */
@@ -137,13 +144,20 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     process.env['CWB_HOOK_SETTINGS_DIR'] ??
     join(process.env['LOCALAPPDATA'] ?? app.getPath('userData'), 'cwb', 'cwb-settings')
 
+  // v1.2.0 语言变更：托盘菜单/退出确认文案随 AppSettings.language 刷新（onSettingsChange 旁路）
+  // 同时写入 main 进程级语言（language.ts）——其余 main 模块的错误文案/推送文案读它
+  const appSettings = new AppSettingsStore(settingsFile, (s) => {
+    setMainLanguage(s.language === 'en' ? 'en' : 'zh')
+    options.onSettingsChange?.(s)
+  })
+  setMainLanguage(appSettings.get().language === 'en' ? 'en' : 'zh')
+
   // v0.5④N webhook 推送：配置 userData/notify.json（URL 属凭据仅存本地）；推送文案带任务显示名
   const notify = new NotifyService({
     file: join(baseDir, 'notify.json'),
-    taskNameOf: (taskId) => tasks.get(taskId)?.name
+    taskNameOf: (taskId) => tasks.get(taskId)?.name,
+    language: mainLanguage
   })
-
-  const appSettings = new AppSettingsStore(settingsFile)
   const fontScanner = new FontScanner()
   // v1.1.0 应用自更新：落点 userData/updates；进度广播全部窗口（quit 走 app.quit 正常路径
   // ——before-quit 杀 PTY 树释放文件锁后更新器才动手，见 app-updater.ts 头注）
@@ -184,8 +198,14 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   const cli = new CliRunner({
     onData: (event: CliOutputEvent) => broadcast(IpcChannels.CliOutput, event),
     onExit: (commandId, exitCode) =>
-      broadcast(IpcChannels.CliOutput, { commandId, type: 'exit', exitCode })
+      broadcast(IpcChannels.CliOutput, { commandId, type: 'exit', exitCode }),
+    language: mainLanguage
   })
+
+  // v1.2.0 skill 市场：只读本机 marketplace 目录（搜索/过滤）；安装与刷新复用 CLI 受控执行面
+  // CWB_SKILL_MARKET_HOME 为测试注入缝（同 CWB_SKILLS_USER_ROOT 先例，防读真实 ~/.claude）
+  const skillMarketHome = process.env['CWB_SKILL_MARKET_HOME']
+  const skillMarket = new SkillMarket(skillMarketHome ? { home: skillMarketHome } : {})
 
   /**
    * v0.9 S13 会话导入：持久化经 importTasksFromSessionsImpl，广播在此（renameTask 先例）。
@@ -366,6 +386,7 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     activity,
     skills,
     cli,
+    skillMarket,
     notify,
     smokeReports,
     addProject,
@@ -424,6 +445,39 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       ctx.skills.importSkillFolder(fromDir, target)
   )
   ipcMain.handle(IpcChannels.SkillsRemove, (_e, skill: SkillInfo) => ctx.skills.removeSkill(skill))
+  // v1.2.0 skill 市场：搜索只读本机目录；安装/刷新走 CLI 受控执行面（输出经 CliOutput 广播）
+  ipcMain.handle(
+    IpcChannels.SkillSearch,
+    (_e, query: unknown, marketplace: unknown, limit: unknown) =>
+      ctx.skillMarket.search(
+        typeof query === 'string' ? query : '',
+        typeof marketplace === 'string' && marketplace !== '' ? marketplace : undefined,
+        typeof limit === 'number' && Number.isFinite(limit) ? limit : 50
+      )
+  )
+  ipcMain.handle(IpcChannels.SkillMarketplaces, () => ctx.skillMarket.listMarketplaces())
+  ipcMain.handle(IpcChannels.SkillMarketInstall, async (_e, installId: unknown) => {
+    const lang = mainLanguage()
+    if (typeof installId !== 'string') {
+      return { ok: false, error: translate(lang, 'skill.errParam') }
+    }
+    const invalid = validateInstallTarget(installId, lang)
+    if (invalid !== null) return { ok: false, error: invalid }
+    try {
+      const { commandId } = await ctx.cli.runPlugin(['plugin', 'install', installId, '-y'])
+      return { ok: true, commandId }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+  ipcMain.handle(IpcChannels.SkillMarketRefresh, async () => {
+    try {
+      const { commandId } = await ctx.cli.runPlugin(['plugin', 'marketplace', 'update'])
+      return { ok: true, commandId }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
   // v0.5③ CLI 执行（校验+spawn 即返 commandId；拒绝抛带原因 Error）
   ipcMain.handle(IpcChannels.CliRun, (_e, command: string) => ctx.cli.run(command))
   // v0.5⑤ 版本/更新/安装（安装为固定模板，完成钩子失效 claudePathCache）

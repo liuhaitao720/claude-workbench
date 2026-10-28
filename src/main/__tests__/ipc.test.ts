@@ -158,6 +158,8 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
     process.env['CWB_HOOK_SETTINGS_DIR'] = settingsDir()
     // v0.5③ skills 用户级根注入缝（防扫描真实 ~/.claude/skills）
     process.env['CWB_SKILLS_USER_ROOT'] = join(h.tempDir, 'skills-user')
+    // v1.2.0 skill 市场根注入缝（防读真实 ~/.claude/plugins）
+    process.env['CWB_SKILL_MARKET_HOME'] = join(h.tempDir, 'market-home')
     h.handleCalls.length = 0
     h.onCalls.length = 0
     h.sent.length = 0
@@ -169,6 +171,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
   afterEach(() => {
     delete process.env['CWB_HOOK_SETTINGS_DIR']
     delete process.env['CWB_SKILLS_USER_ROOT']
+    delete process.env['CWB_SKILL_MARKET_HOME']
     rmSync(h.tempDir, { recursive: true, force: true })
   })
 
@@ -517,6 +520,45 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
     )
     expect(saved).toEqual({ url: 'https://qyapi.weixin.qq.com/send?key=k', enabled: true, channel: 'wecom' })
     expect(await invoke<NotifyConfig>(IpcChannels.NotifyGet)).toEqual(saved)
+  })
+
+  it('v1.2.0 SkillSearch/SkillMarketplaces：读注入的 marketplace 根；安装目标非法时直接返回错误（不 spawn）', async () => {
+    // 注入根下无 known_marketplaces.json → 空结果不抛
+    expect(await invoke(IpcChannels.SkillSearch, '', undefined, 50)).toEqual([])
+    expect(await invoke(IpcChannels.SkillMarketplaces)).toEqual([])
+
+    // 造一个 marketplace 检出 + known_marketplaces.json
+    const marketDir = join(h.tempDir, 'market-home', 'marketplaces', 'official')
+    mkdirSync(join(marketDir, '.claude-plugin'), { recursive: true })
+    writeFileSync(
+      join(marketDir, '.claude-plugin', 'marketplace.json'),
+      JSON.stringify({
+        name: 'official',
+        plugins: [{ name: 'pdf-tools', description: 'PDF 处理', category: 'docs' }]
+      })
+    )
+    const pluginsRoot = join(h.tempDir, 'market-home', '.claude', 'plugins')
+    mkdirSync(pluginsRoot, { recursive: true })
+    writeFileSync(
+      join(pluginsRoot, 'known_marketplaces.json'),
+      JSON.stringify({ official: { installLocation: marketDir } })
+    )
+
+    const found = await invoke<Array<{ installId: string; name: string }>>(IpcChannels.SkillSearch, 'pdf')
+    expect(found.map((e) => e.installId)).toEqual(['pdf-tools@official'])
+    expect(await invoke(IpcChannels.SkillSearch, 'nope')).toEqual([])
+    expect(await invoke(IpcChannels.SkillMarketplaces)).toEqual([{ name: 'official', count: 1 }])
+
+    // 安装目标不可信（目录内容来自外部）→ 白名单拦下，返回错误且不启动进程
+    const bad = await invoke<{ ok: boolean; error?: string }>(
+      IpcChannels.SkillMarketInstall,
+      'pdf-tools@official&calc'
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.error).toBeTruthy()
+    const notString = await invoke<{ ok: boolean; error?: string }>(IpcChannels.SkillMarketInstall, 42)
+    expect(notString.ok).toBe(false)
+    expect(currentPty().spawnCalls).toHaveLength(0)
   })
 
   it('v0.5③ SkillsList：用户级+项目级合并（用户级根经注入缝指向 temp）', async () => {

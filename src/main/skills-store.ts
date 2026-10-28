@@ -3,6 +3,13 @@ import { homedir } from 'node:os'
 import { basename, join, sep } from 'node:path'
 import { shell } from 'electron'
 import type { SkillInfo } from '../shared/types'
+import { translate } from '../shared/i18n'
+import { mainLanguage } from './language'
+
+/** v1.2.0 错误文案按当前界面语言取（main 进程级语言，renderer 启动/切换时同步） */
+function tr(key: Parameters<typeof translate>[1], params: Record<string, string>): string {
+  return translate(mainLanguage(), key, params)
+}
 
 /**
  * v0.5③ skill 扫描/导入/移除（main 侧）。
@@ -91,16 +98,16 @@ export class SkillsStore {
     try {
       stat = statSync(fromDir)
     } catch {
-      throw new Error(`源文件夹不存在: ${fromDir}`)
+      throw new Error(tr('skills.errSrcMissing', { dir: fromDir }))
     }
-    if (!stat.isDirectory()) throw new Error(`源路径不是文件夹: ${fromDir}`)
+    if (!stat.isDirectory()) throw new Error(tr('skills.errSrcNotDir', { dir: fromDir }))
     if (!existsSync(join(fromDir, 'SKILL.md'))) {
-      throw new Error(`所选文件夹缺少 SKILL.md（不是有效 skill 目录）: ${fromDir}`)
+      throw new Error(tr('skills.errNoSkillMd', { dir: fromDir }))
     }
     const root = this.rootForScope(target.scope, target.projectId)
     const dest = join(root, basename(fromDir))
     if (existsSync(dest)) {
-      throw new Error(`同名 skill 已存在，导入取消（如需覆盖请先移除既有项）: ${basename(fromDir)}`)
+      throw new Error(tr('skills.errConflict', { name: basename(fromDir) }))
     }
     mkdirSync(root, { recursive: true })
     cpSync(fromDir, dest, { recursive: true })
@@ -120,10 +127,10 @@ export class SkillsStore {
       realDir = realpathSync(skill.dir)
       realRoot = realpathSync(root)
     } catch {
-      throw new Error(`skill 目录不存在或不可解析: ${skill.dir}`)
+      throw new Error(tr('skills.errDirGone', { dir: skill.dir }))
     }
     if (!isStrictlyUnder(realDir, realRoot)) {
-      throw new Error(`拒绝移除：目录不在对应 skills 根之下（越界防护）: ${skill.dir}`)
+      throw new Error(tr('skills.errOutOfRoot', { dir: skill.dir }))
     }
     await shell.trashItem(realDir)
   }

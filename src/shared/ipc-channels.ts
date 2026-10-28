@@ -44,7 +44,12 @@ const HANDLE = {
   AppUpdateDownload: 'cwb:app-update:download',
   AppUpdateInstall: 'cwb:app-update:install',
   // v1.1.0 claude CLI 更新说明（检查更新后拉取 GitHub CHANGELOG 区间）
-  ClaudeChangelogGet: 'cwb:claude-changelog:get'
+  ClaudeChangelogGet: 'cwb:claude-changelog:get',
+  // v1.2.0 skill 在线搜索/安装（读本机 marketplace 目录 + claude plugin install）
+  SkillSearch: 'cwb:skill:search',
+  SkillMarketplaces: 'cwb:skill:marketplaces',
+  SkillMarketInstall: 'cwb:skill:market-install',
+  SkillMarketRefresh: 'cwb:skill:market-refresh'
 } as const
 
 const SEND = {

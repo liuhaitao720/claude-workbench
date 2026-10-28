@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import { createAppContext, registerIpcHandlers, type AppContext } from './ipc'
 import { CrashLogger } from './crash-log'
 import { countLiveRunningTasks } from './running-count'
+import { mainLanguage } from './language'
 import { resolveClaudeCommand } from './pty-manager'
 import { initSingleInstance } from './single-instance'
 import { attachCloseToTray, setupTray, type TrayHandle } from './tray'
@@ -488,10 +489,17 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
   // v0.5⑥ 托盘 tooltip 刷新：任务记录每次变更（含状态迁移）旁路回调（同 onPtyData 注入缝先例）
   const refreshTrayCount = (): void => trayHandle?.setRunningCount(runningCountOf(currentCtx))
+  // v1.2.0 语言变更：托盘菜单/退出确认文案随 AppSettings.language 刷新
+  // （appSettings 变更已写入 language.ts 的进程级语言，这里只需令托盘重建菜单）
+  const syncTrayLanguage = (): void => trayHandle?.setLanguage(mainLanguage())
   currentCtx = registerIpcHandlers(
     isSmokeRun
-      ? createAppContext({ onPtyData: sink.onPtyData, onTaskUpdate: refreshTrayCount })
-      : createAppContext({ onTaskUpdate: refreshTrayCount })
+      ? createAppContext({
+          onPtyData: sink.onPtyData,
+          onTaskUpdate: refreshTrayCount,
+          onSettingsChange: syncTrayLanguage
+        })
+      : createAppContext({ onTaskUpdate: refreshTrayCount, onSettingsChange: syncTrayLanguage })
   )
   const win = createWindow()
   mainWindow = win // v1.0.7 second-instance 唤起锚点
@@ -528,7 +536,11 @@ app.whenReady().then(async () => {
   })
 
   void (async () => {
-    trayHandle = await setupTray({ win, runningCount: () => runningCountOf(currentCtx) })
+    trayHandle = await setupTray({
+      win,
+      runningCount: () => runningCountOf(currentCtx),
+      language: mainLanguage
+    })
     trayHandle.setRunningCount(runningCountOf(currentCtx))
   })()
 

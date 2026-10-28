@@ -6,6 +6,7 @@ import type { SkillInfo } from '../../shared/types'
 import { App } from './App'
 import { installCwbMock, makeProject } from './test-helpers'
 import { useAppStore } from './store'
+import { useLanguageStore } from './i18n'
 
 /** v0.5③：Skills 管理弹窗（分组列表/移除 confirm/导入双通道/CLI 输出区/安全提示/toast） */
 
@@ -28,6 +29,9 @@ const projectSkill: SkillInfo = {
 }
 
 beforeEach(() => {
+  // v1.2.0：语言 store 跨文件模块级共享——每个用例回到中文基线（英文用例自行切换）
+  localStorage.removeItem('cwb-language')
+  useLanguageStore.setState({ language: 'zh' })
   useAppStore.setState({
     projects: [],
     tasks: [],
@@ -189,6 +193,116 @@ describe('导入通道①：导入文件夹', () => {
     fireEvent.click(skills.getByRole('button', { name: '导入文件夹…' }))
     expect(await skills.findByText(/同名 skill 已存在：pdf/)).toBeDefined()
     expect(screen.queryByText(/对已运行会话不生效/)).toBeNull() // 失败不 toast
+  })
+})
+
+describe('v1.2.0 在线搜索与安装', () => {
+  const entry = {
+    name: 'pdf-tools',
+    marketplace: 'official',
+    description: 'PDF 处理',
+    category: 'docs',
+    author: 'alice',
+    installs: 120,
+    installId: 'pdf-tools@official'
+  }
+
+  async function openMarket(): Promise<ReturnType<typeof within>> {
+    const api = installCwbMock({ projects: [project] })
+    vi.mocked(api.listSkillMarketplaces).mockResolvedValue([
+      { name: 'official', count: 315 },
+      { name: 'superpowers', count: 10 }
+    ])
+    vi.mocked(api.searchSkillMarket).mockResolvedValue([entry])
+    render(<App />)
+    await waitFor(() => expect(document.querySelector('li[data-project-id="ps"]')).toBeDefined())
+    const skills = await openSkills()
+    await skills.findByText('在线搜索并安装')
+    return skills
+  }
+
+  it('打开即搜（空词）：渲染条目（marketplace/分类/作者/安装量）+ marketplace 过滤器', async () => {
+    const skills = await openMarket()
+    expect(await skills.findByText('pdf-tools')).toBeDefined()
+    expect(skills.getByText(/official · docs · alice · 120 次安装/)).toBeDefined()
+    expect(skills.getByText('PDF 处理')).toBeDefined()
+    // 过滤器含全部 marketplace 项（名 + 条目数）
+    expect(skills.getByRole('option', { name: 'official (315)' })).toBeDefined()
+    expect(skills.getByRole('option', { name: 'superpowers (10)' })).toBeDefined()
+    expect(skills.getByRole('option', { name: '全部 marketplace' })).toBeDefined()
+  })
+
+  it('输入关键词 → 带词搜索；切换 marketplace → 带过滤重查', async () => {
+    const api = await renderApp()
+    vi.mocked(api.listSkillMarketplaces).mockResolvedValue([{ name: 'official', count: 1 }])
+    vi.mocked(api.searchSkillMarket).mockResolvedValue([entry])
+    const skills = await openSkills()
+    await skills.findByText('pdf-tools')
+
+    fireEvent.change(skills.getByLabelText('搜索 skill 市场'), { target: { value: 'pdf' } })
+    await waitFor(() =>
+      expect(api.searchSkillMarket).toHaveBeenCalledWith('pdf', undefined, 100)
+    )
+
+    fireEvent.change(skills.getByLabelText('marketplace 过滤'), {
+      target: { value: 'official' }
+    })
+    await waitFor(() =>
+      expect(api.searchSkillMarket).toHaveBeenCalledWith('pdf', 'official', 100)
+    )
+  })
+
+  it('安装 → installMarketSkill(installId)，输出进共享输出区；退出后刷新已装列表与市场', async () => {
+    const api = installCwbMock({ projects: [project] })
+    vi.mocked(api.searchSkillMarket).mockResolvedValue([entry])
+    render(<App />)
+    await waitFor(() => expect(document.querySelector('li[data-project-id="ps"]')).toBeDefined())
+    const skills = await openSkills()
+    fireEvent.click(await skills.findByRole('button', { name: '安装' }))
+    await waitFor(() => expect(api.installMarketSkill).toHaveBeenCalledWith('pdf-tools@official'))
+    // 安装命令的 commandId 挂进 CliOutputView
+    await waitFor(() => expect(skills.getByRole('log')).toBeDefined())
+    fireCliOutput(api, { commandId: 'skill-install-test', data: 'Installing pdf-tools...\n' })
+    await waitFor(() =>
+      expect(skills.getByRole('log').textContent).toContain('Installing pdf-tools')
+    )
+    const listCallsBefore = vi.mocked(api.listSkills).mock.calls.length
+    fireCliOutput(api, { commandId: 'skill-install-test', type: 'exit', exitCode: 0 })
+    await waitFor(() =>
+      expect(vi.mocked(api.listSkills).mock.calls.length).toBeGreaterThan(listCallsBefore)
+    )
+  })
+
+  it('安装返回失败（非法目标/CLI 启动失败）→ 行内错误', async () => {
+    const api = installCwbMock({ projects: [project] })
+    vi.mocked(api.searchSkillMarket).mockResolvedValue([entry])
+    vi.mocked(api.installMarketSkill).mockResolvedValue({ ok: false, error: '插件名含非法字符' })
+    render(<App />)
+    await waitFor(() => expect(document.querySelector('li[data-project-id="ps"]')).toBeDefined())
+    const skills = await openSkills()
+    fireEvent.click(await skills.findByRole('button', { name: '安装' }))
+    expect(await skills.findByText(/安装失败：插件名含非法字符/)).toBeDefined()
+  })
+
+  it('刷新目录 → refreshSkillMarket()；未配置 marketplace 显示引导文案', async () => {
+    const api = await renderApp()
+    vi.mocked(api.searchSkillMarket).mockResolvedValue([])
+    vi.mocked(api.refreshSkillMarket).mockResolvedValue({ ok: true, commandId: 'skill-refresh-test' })
+    const skills = await openSkills()
+    expect(await skills.findByText(/未配置 marketplace/)).toBeDefined()
+    fireEvent.click(skills.getByRole('button', { name: '刷新' }))
+    await waitFor(() => expect(api.refreshSkillMarket).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(skills.getByRole('log')).toBeDefined()) // 刷新输出可见
+  })
+
+  it('英文界面：在线搜索区文案随语言切换', async () => {
+    useLanguageStore.setState({ language: 'en' })
+    const api = await renderApp()
+    vi.mocked(api.searchSkillMarket).mockResolvedValue([])
+    fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Manage skills' })
+    expect(within(dialog).getByText('Search and install online')).toBeDefined()
+    expect(within(dialog).getByPlaceholderText('Search skills (name / description / category)…')).toBeDefined()
   })
 })
 

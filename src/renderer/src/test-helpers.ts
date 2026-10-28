@@ -9,6 +9,8 @@ import type {
   ProjectRecord,
   PtyDataEvent,
   SkillInfo,
+  SkillMarketEntry,
+  SkillMarketplaceInfo,
   TaskActivityEvent,
   TaskRecord,
   TaskUpdateEvent
@@ -177,6 +179,11 @@ export function installCwbMock(opts: { projects?: ProjectRecord[]; tasks?: TaskR
     getNotifyConfig: vi.fn(async () => ({ url: '', enabled: false, channel: 'wecom' } as NotifyConfig)),
     setNotifyWebhook: vi.fn(async (url: string, enabled: boolean) => ({ url, enabled, channel: 'wecom' } as NotifyConfig)),
     sendTestNotify: vi.fn(async () => ({ ok: true })),
+    // v1.2.0 skill 市场（默认空结果；SkillsDialog 在线搜索用例覆写）
+    searchSkillMarket: vi.fn(async () => [] as SkillMarketEntry[]),
+    listSkillMarketplaces: vi.fn(async () => [] as SkillMarketplaceInfo[]),
+    installMarketSkill: vi.fn(async () => ({ ok: true, commandId: 'skill-install-test' })),
+    refreshSkillMarket: vi.fn(async () => ({ ok: true, commandId: 'skill-refresh-test' })),
     reportSmoke: vi.fn()
   }
 

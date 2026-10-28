@@ -222,4 +222,35 @@ describe('CliRunner（假 PTY 缝）', () => {
     expect(runner.isRunning(b.commandId)).toBe(false)
     expect(runner.isRunning(a.commandId)).toBe(true)
   })
+
+  // ── v1.2.0 skill 市场安装/刷新（固定模板 + 参数复核）────────────────────
+  it('runPlugin：受控 args 经 cmd.exe 包装（skill 安装/刷新走此路，不经用户命令面）', async () => {
+    const { commandId } = await runner.runPlugin(['plugin', 'install', 'pdf-tools@official', '-y'])
+    expect(fakePtyModule.spawns[0]).toMatchObject({
+      file: 'cmd.exe',
+      args: ['/c', 'chcp 65001>nul&&C:\\npm-global\\claude.cmd', 'plugin', 'install', 'pdf-tools@official', '-y']
+    })
+    expect(runner.isRunning(commandId)).toBe(true)
+  })
+
+  it('runPlugin：参数含 cmd 元字符 → 拒绝且不 spawn（目录内容属不可信输入）', async () => {
+    for (const bad of [
+      ['plugin', 'install', 'a&calc@m', '-y'],
+      ['plugin', 'install', 'a@m|whoami', '-y'],
+      ['plugin', 'install', 'a@m', '-y', '%PATH%']
+    ]) {
+      await expect(runner.runPlugin(bad)).rejects.toThrow(/元字符/)
+    }
+    expect(fakePtyModule.spawns).toHaveLength(0)
+  })
+
+  it('校验错误文案随语言（language 回调注入 en）', async () => {
+    const en = new CliRunner({
+      onData: () => {},
+      onExit: () => {},
+      language: () => 'en'
+    })
+    await expect(en.run('whoami')).rejects.toThrow(/must start with claude/)
+    await expect(en.run('claude x & calc')).rejects.toThrow(/whitelist/)
+  })
 })

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { TaskActivityEvent, TaskRecord } from '../../../shared/types'
+import type { MessageKey } from '../../../shared/i18n'
 import { getLastDataAt } from '../store'
 
 /**
@@ -34,13 +35,13 @@ export function visualStateOf(
   return lastDataAt !== undefined && now - lastDataAt < BYTE_ACTIVE_WINDOW_MS ? 'busy' : 'idle'
 }
 
-export const VISUAL_TITLES: Record<VisualState, string> = {
-  busy: '正在执行',
-  awaiting: '等待答复（权限/选项确认）',
-  idle: '空闲就绪',
-  stopped: '已停止（可恢复）',
-  exited: '已退出',
-  closed: '未打开终端'
+export const VISUAL_TITLE_KEYS: Record<VisualState, MessageKey> = {
+  busy: 'status.busy',
+  awaiting: 'status.awaiting',
+  idle: 'status.idle',
+  stopped: 'status.stopped',
+  exited: 'status.exited',
+  closed: 'status.closed'
 }
 
 /** 周期性自刷新的时钟（兜底字节启发的时间迁移：黄→绿）；activityMap 驱动的变迁

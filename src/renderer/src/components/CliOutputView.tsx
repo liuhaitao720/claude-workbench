@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { normalizeCliOutput } from '../cli-output-clean'
+import { useI18n } from '../i18n'
 
 /**
  * CLI 命令内嵌只读输出区（v0.5③/⑤）：非完整 xterm——<pre> 滚动区按 commandId
@@ -14,15 +15,16 @@ import { normalizeCliOutput } from '../cli-output-clean'
 export function CliOutputView({
   commandId,
   onExit,
-  exitHint = '新任务生效，旧任务恢复（resume）后生效'
+  exitHint
 }: {
   /** 运行中命令 id（null=无命令，不渲染） */
   commandId: string | null
   /** exit 事件回调（安装完成刷新版本信息/导入完成刷新列表等） */
   onExit?: (exitCode: number) => void
-  /** 完成态提示文案（默认 claude update/install 语义） */
+  /** 完成态提示文案（缺省用 cliOutput.exitHint：claude update/install 语义） */
   exitHint?: string
 }) {
+  const t = useI18n()
   /** 原始累积输出（清洗在渲染时做——流式分片可能截断控制序列，攒够再清洗） */
   const [raw, setRaw] = useState('')
   const [exitCode, setExitCode] = useState<number | null>(null)
@@ -59,12 +61,12 @@ export function CliOutputView({
 
   return (
     <div className="cli-output-wrap">
-      <pre className="cli-output" ref={preRef} role="log" aria-label="命令输出">
-        {chunks === '' ? '（等待输出…）' : chunks}
+      <pre className="cli-output" ref={preRef} role="log" aria-label={t('cliOutput.aria')}>
+        {chunks === '' ? t('cliOutput.waiting') : chunks}
       </pre>
       {exitCode !== null && (
         <p className="cli-output-exit">
-          已完成（退出码 {exitCode}）——{exitHint}
+          {t('cliOutput.done', { code: exitCode, hint: exitHint ?? t('cliOutput.exitHint') })}
         </p>
       )}
     </div>

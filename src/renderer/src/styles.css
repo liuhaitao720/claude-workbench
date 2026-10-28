@@ -1246,6 +1246,40 @@ button {
   font-size: 11px;
 }
 
+/* v1.2.0 skill 市场：搜索行（输入 + marketplace 过滤 + 刷新）与结果列表 */
+.market-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.market-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-3);
+  background: var(--bg-input);
+  color: inherit;
+}
+
+.market-filter {
+  flex: 0 0 auto;
+  max-width: 200px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-3);
+  background: var(--bg-input);
+  color: inherit;
+}
+
+.market-list {
+  max-height: 260px;
+  overflow-y: auto;
+  margin-top: 6px;
+}
+
 /* v0.5.2 Skills 独占一行 → v0.9 用户指令覆盖：Skills | 设置 并排（flex:1 平分一行；
  * 原 .skills-btn + .sidebar-actions .skills-btn 双定义合并沿革自 v0.5.2） */
 .skills-btn {

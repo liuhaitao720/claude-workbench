@@ -2,6 +2,7 @@ import { useRef } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { TaskRecord } from '../../../shared/types'
 import { useAppStore } from '../store'
+import { useI18n } from '../i18n'
 import { TaskStatusDot } from './TaskStatusDot'
 
 /**
@@ -12,6 +13,7 @@ import { TaskStatusDot } from './TaskStatusDot'
  * 切换相邻（wrap）；切换后焦点随 active 移动（rAF 等 DOM 更新后聚焦新 tab）。
  */
 export function TabBar() {
+  const tr = useI18n()
   const openTaskIds = useAppStore((s) => s.openTaskIds)
   const tasks = useAppStore((s) => s.tasks)
   const activeTaskId = useAppStore((s) => s.activeTaskId)
@@ -73,7 +75,7 @@ export function TabBar() {
           <button
             type="button"
             className="tab-close"
-            title={t.status === 'running' ? '关闭 tab 并停止任务' : '关闭 tab'}
+            title={tr(t.status === 'running' ? 'tab.closeStop' : 'tab.close')}
             onClick={(e) => {
               e.stopPropagation()
               closeTabAndStop(t)

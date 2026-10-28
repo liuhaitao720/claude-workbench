@@ -8,6 +8,8 @@ import type {
   CliOutputEvent,
   NotifyConfig,
   SkillInfo,
+  SkillMarketEntry,
+  SkillMarketplaceInfo,
   TaskActivityEvent,
   ProjectRecord,
   PtyDataEvent,
@@ -117,6 +119,25 @@ const api: CWBApi = {
     }>,
   importTasksFromSessions: (projectId) =>
     ipcRenderer.invoke(IpcChannels.TasksImportFromSessions, projectId) as Promise<TaskRecord[]>,
+  // v1.2.0 skill 市场（搜索本机 marketplace 目录；安装/刷新走 CLI 受控执行面）
+  searchSkillMarket: (query, marketplace, limit) =>
+    ipcRenderer.invoke(IpcChannels.SkillSearch, query, marketplace, limit) as Promise<
+      SkillMarketEntry[]
+    >,
+  listSkillMarketplaces: () =>
+    ipcRenderer.invoke(IpcChannels.SkillMarketplaces) as Promise<SkillMarketplaceInfo[]>,
+  installMarketSkill: (installId) =>
+    ipcRenderer.invoke(IpcChannels.SkillMarketInstall, installId) as Promise<{
+      ok: boolean
+      commandId?: string
+      error?: string
+    }>,
+  refreshSkillMarket: () =>
+    ipcRenderer.invoke(IpcChannels.SkillMarketRefresh) as Promise<{
+      ok: boolean
+      commandId?: string
+      error?: string
+    }>,
   setAppSettings: (patch) =>
     ipcRenderer.invoke(IpcChannels.SettingsSet, patch) as Promise<AppSettings>,
   // webhook 通知（v0.5④N）

@@ -7,6 +7,8 @@ import { changeFontFamily, changeFontSize } from './TerminalPanel'
 import { FONT_FAMILY_WHITELIST, loadFontFamily } from '../font-family'
 import { FONT_SIZE_MAX, FONT_SIZE_MIN, clampFontSize, loadFontSize } from '../font-size'
 import { APP_VERSION } from '../app-info'
+import { useI18n, useLanguageStore, LANGUAGE_LABELS } from '../i18n'
+import type { Language, MessageKey } from '../i18n'
 import type { AppChangelogEntry, AppUpdateInfo, AppUpdateProgressEvent } from '../../../shared/types'
 
 /** 5.1 安装方式展示模板（执行走 installClaudeCli 固定契约法，不经自由命令面；
@@ -16,18 +18,24 @@ const NATIVE_INSTALL_CMD =
 const NPM_INSTALL_CMD = 'npm install -g @anthropic-ai/claude-code'
 const CLAUDE_DOCS_URL = 'https://claude.ai/docs/setup'
 
-/** S14 双栏导航：五个分类（id 稳定作 activeSection 锚点；label 即左栏项名，
- * aria-label 同 label 保证测试按精确名可达）。顺序即左栏自上而下顺序 */
-const SETTINGS_SECTIONS = [
-  { id: 'appearance', label: '外观' },
-  { id: 'terminal', label: '终端' },
-  { id: 'notify', label: '通知' },
-  { id: 'cli', label: 'claude CLI' },
-  { id: 'update', label: '应用更新' },
-  { id: 'startup', label: '启动' }
-] as const
+/** S14 双栏导航：六个分类（id 稳定作 activeSection 锚点；label 经 i18n）。
+ * 顺序即左栏自上而下顺序 */
+const SETTINGS_SECTIONS: ReadonlyArray<{ id: string; labelKey: MessageKey }> = [
+  { id: 'appearance', labelKey: 'settings.sectionAppearance' },
+  { id: 'terminal', labelKey: 'settings.sectionTerminal' },
+  { id: 'notify', labelKey: 'settings.sectionNotify' },
+  { id: 'cli', labelKey: 'settings.sectionCli' },
+  { id: 'update', labelKey: 'settings.sectionUpdate' },
+  { id: 'startup', labelKey: 'settings.sectionStartup' }
+]
 
-type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]['id']
+type SettingsSectionId =
+  | 'appearance'
+  | 'terminal'
+  | 'notify'
+  | 'cli'
+  | 'update'
+  | 'startup'
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -46,6 +54,9 @@ function errMsg(err: unknown): string {
  * - Escape/遮罩关闭/useEscapeClose、底部「关闭」按钮（跨栏）全保留
  */
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
+  const t = useI18n()
+  const language = useLanguageStore((s) => s.language)
+  const setLanguage = useLanguageStore((s) => s.setLanguage)
   const theme = useAppStore((s) => s.theme)
   const setTheme = useAppStore((s) => s.setTheme)
   const termFollowsTheme = useAppStore((s) => s.termFollowsTheme)
@@ -117,14 +128,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     setAppUpdError('')
     setAppUpdReady(false)
     const r = await window.cwb.downloadAppUpdate()
-    if (!r.ok) setAppUpdError(r.error ?? '下载失败')
+    if (!r.ok) setAppUpdError(r.error ?? t('settings.appDownloadFailed'))
   }
 
   const installAppUpd = async (): Promise<void> => {
-    if (!window.confirm('将退出应用并升级到新版本（运行中的任务会被终止），完成后自动重启。\n\n确认继续？'))
-      return
+    if (!window.confirm(t('settings.appInstallConfirm'))) return
     const r = await window.cwb.installAppUpdate()
-    if (!r.ok) setAppUpdError(r.error ?? '启动升级失败')
+    if (!r.ok) setAppUpdError(r.error ?? t('settings.appInstallStartFailed'))
   }
 
   // npm 安装项禁用条件（S9 定夺）：S8 未提供 node 检测契约 → 暂用 false 默认可点；
@@ -181,9 +191,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   useEscapeClose(onClose)
 
   const themeChoices: ReadonlyArray<{ value: Theme; label: string }> = [
-    { value: 'system', label: '跟随系统' },
-    { value: 'dark', label: '深色' },
-    { value: 'light', label: '浅色' }
+    { value: 'system', label: t('settings.themeSystem') },
+    { value: 'dark', label: t('settings.themeDark') },
+    { value: 'light', label: t('settings.themeLight') }
   ]
 
   // S14 左栏当前值摘要：全部从既有 state 派生（字号输入清空的中间态回退到实际
@@ -191,15 +201,24 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const sectionSummaries: Record<SettingsSectionId, string> = {
     appearance: themeChoices.find((c) => c.value === theme)?.label ?? '',
     terminal: `${fontFamily} · ${fontSizeInput === '' ? String(loadFontSize()) : fontSizeInput}`,
-    notify: notifyUrl.trim() === '' ? '未配置' : notifyEnabled ? '已启用' : '未启用',
-    cli: installed ? cliInfo.version : cliInfo !== null || cliError !== '' ? '未安装' : '检测中…',
+    notify:
+      notifyUrl.trim() === ''
+        ? t('settings.notifyStateUnset')
+        : notifyEnabled
+          ? t('settings.notifyStateOn')
+          : t('settings.notifyStateOff'),
+    cli: installed
+      ? cliInfo.version
+      : cliInfo !== null || cliError !== ''
+        ? t('settings.cliStateNotInstalled')
+        : t('common.detecting'),
     update:
       appUpd === null
-        ? '未检测'
+        ? t('settings.updateStateUnchecked')
         : appUpd.upToDate
-          ? `最新 v${appUpd.current}`
-          : `可更新 v${appUpd.latest}`,
-    startup: closeToTray ? '托盘常驻' : '退出应用'
+          ? t('settings.updateStateLatest', { version: appUpd.current })
+          : t('settings.updateStateAvailable', { version: appUpd.latest }),
+    startup: closeToTray ? t('settings.closeToTraySummary') : t('settings.quitApp')
   }
 
   const checkUpdate = async () => {
@@ -239,7 +258,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   const runInstall = async () => {
     const cmd = installMethod === 'native' ? NATIVE_INSTALL_CMD : NPM_INSTALL_CMD
-    if (!window.confirm(`即将执行安装命令：\n\n  ${cmd}\n\n确认执行？（请确认来源可信）`)) return
+    if (!window.confirm(t('settings.installConfirm', { cmd }))) return
     setInstallError('')
     setStarting(true)
     try {
@@ -255,9 +274,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const saveNotify = async () => {
     try {
       await window.cwb.setNotifyWebhook(notifyUrl.trim(), notifyEnabled)
-      setNotifyMsg('已保存')
+      setNotifyMsg(t('settings.notifySaved'))
     } catch (err) {
-      setNotifyMsg(`保存失败：${errMsg(err)}`)
+      setNotifyMsg(t('settings.notifySaveFailed', { error: errMsg(err) }))
     }
   }
 
@@ -284,32 +303,35 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="dialog settings-dialog" role="dialog" aria-label="设置">
-        <p className="dialog-title">设置</p>
+      <div className="dialog settings-dialog" role="dialog" aria-label={t('settings.aria')}>
+        <p className="dialog-title">{t('settings.title')}</p>
         <div className="settings-layout">
-          <nav className="settings-nav" aria-label="设置分类">
-            {SETTINGS_SECTIONS.map((sec) => (
-              <button
-                key={sec.id}
-                type="button"
-                className={
-                  activeSection === sec.id ? 'settings-nav-item active' : 'settings-nav-item'
-                }
-                aria-label={sec.label}
-                aria-current={activeSection === sec.id ? 'true' : undefined}
-                onClick={() => setActiveSection(sec.id)}
-              >
-                <span className="settings-nav-label">{sec.label}</span>
-                <span className="settings-nav-summary">{sectionSummaries[sec.id]}</span>
-              </button>
-            ))}
+          <nav className="settings-nav" aria-label={t('settings.navAria')}>
+            {SETTINGS_SECTIONS.map((sec) => {
+              const id = sec.id as SettingsSectionId
+              const label = t(sec.labelKey)
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  className={activeSection === id ? 'settings-nav-item active' : 'settings-nav-item'}
+                  aria-label={label}
+                  aria-current={activeSection === id ? 'true' : undefined}
+                  onClick={() => setActiveSection(id)}
+                >
+                  <span className="settings-nav-label">{label}</span>
+                  <span className="settings-nav-summary">{sectionSummaries[id]}</span>
+                </button>
+              )
+            })}
           </nav>
           <div className="settings-body">
-            {/* 外观：主题三选（迁自 About）+ 终端跟随开关（默认关——ANSI 彩色浅底不可读） */}
+            {/* 外观：主题三选（迁自 About）+ 终端跟随开关（默认关——ANSI 彩色浅底不可读）
+                + 界面语言（v1.2.0 中英切换，即时生效并同步 main 侧托盘/退出文案） */}
             {activeSection === 'appearance' && (
               <div className="dialog-section">
-                <p className="section-title">外观</p>
-                <div className="theme-choice" role="radiogroup" aria-label="界面主题">
+                <p className="section-title">{t('settings.sectionAppearance')}</p>
+                <div className="theme-choice" role="radiogroup" aria-label={t('settings.themeAria')}>
                   {themeChoices.map((c) => (
                     <label key={c.value}>
                       <input
@@ -328,22 +350,35 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     checked={termFollowsTheme}
                     onChange={(e) => setTermFollowsTheme(e.target.checked)}
                   />
-                  终端跟随界面主题
+                  {t('settings.termFollow')}
                 </label>
-                <p className="hint-small">
-                  默认关闭——claude CLI 的 ANSI 彩色输出在浅色底上对比不足，终端保持深色更可读
-                </p>
+                <p className="hint-small">{t('settings.termFollowHint')}</p>
+                <div className="notify-row">
+                  <span>{t('settings.language')}</span>
+                  <select
+                    className="notify-url"
+                    aria-label={t('settings.language')}
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value as Language)}
+                  >
+                    {(Object.keys(LANGUAGE_LABELS) as Language[]).map((lang) => (
+                      <option key={lang} value={lang}>
+                        {LANGUAGE_LABELS[lang]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
             )}
 
             {/* 终端：字体族白名单 select + 字号 stepper（持久化 localStorage） */}
             {activeSection === 'terminal' && (
               <div className="dialog-section">
-                <p className="section-title">终端</p>
+                <p className="section-title">{t('settings.sectionTerminal')}</p>
                 <div className="notify-row">
                   <select
                     className="notify-url"
-                    aria-label="终端字体"
+                    aria-label={t('settings.fontAria')}
                     value={fontFamily}
                     onChange={(e) => {
                       const applied = changeFontFamily(e.target.value)
@@ -369,7 +404,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   <input
                     className="notify-url"
                     type="number"
-                    aria-label="终端字号"
+                    aria-label={t('settings.fontSizeAria')}
                     min={FONT_SIZE_MIN}
                     max={FONT_SIZE_MAX}
                     step={1}
@@ -378,7 +413,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     onChange={(e) => applyFontSize(e.target.value)}
                   />
                   <p className="hint-small" style={{ margin: 0 }}>
-                    字号 {FONT_SIZE_MIN}-{FONT_SIZE_MAX}，终端内 Ctrl+滚轮可即时调整
+                    {t('settings.fontSizeHint', { min: FONT_SIZE_MIN, max: FONT_SIZE_MAX })}
                   </p>
                 </div>
               </div>
@@ -387,12 +422,12 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             {/* 通知：webhook 推送（迁自 About） */}
             {activeSection === 'notify' && (
               <div className="dialog-section">
-                <p className="section-title">通知设置（webhook 推送）</p>
+                <p className="section-title">{t('settings.notifyTitle')}</p>
                 <div className="notify-row">
                   <input
                     className="notify-url"
                     type="text"
-                    placeholder="企业微信/钉钉群机器人 webhook URL"
+                    placeholder={t('settings.notifyPlaceholder')}
                     aria-label="webhook URL"
                     value={notifyUrl}
                     onChange={(e) => {
@@ -409,21 +444,21 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                         setNotifyMsg('')
                       }}
                     />
-                    启用
+                    {t('common.enable')}
                   </label>
                 </div>
                 <div className="dialog-actions">
                   <button type="button" className="btn" onClick={() => void saveNotify()}>
-                    保存
+                    {t('common.save')}
                   </button>
                   <button
                     type="button"
                     className="btn"
                     disabled={notifyUrl.trim() === ''}
-                    title={notifyUrl.trim() === '' ? '先填写 URL' : undefined}
+                    title={notifyUrl.trim() === '' ? t('settings.notifyNeedUrl') : undefined}
                     onClick={() => void sendTest()}
                   >
-                    测试推送
+                    {t('settings.notifyTest')}
                   </button>
                 </div>
                 {notifyMsg !== '' && (
@@ -433,32 +468,36 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 )}
                 {notifyTest !== null && (
                   <p className={notifyTest.ok ? 'muted ok' : 'inline-error'} role="status">
-                    {notifyTest.ok ? '测试推送成功' : `测试推送失败：${notifyTest.error ?? '未知错误'}`}
+                    {notifyTest.ok
+                      ? t('settings.notifyTestOk')
+                      : t('settings.notifyTestFailed', {
+                          error: notifyTest.error ?? t('settings.notifyUnknownError')
+                        })}
                   </p>
                 )}
-                <p className="hint-small">URL 属凭据，仅保存在本机（userData），不入仓库、不上传</p>
+                <p className="hint-small">{t('settings.notifyHint')}</p>
               </div>
             )}
 
             {/* claude CLI：版本/路径/更新/安装（迁自 About） */}
             {activeSection === 'cli' && (
               <div className="dialog-section">
-                <p className="section-title">claude CLI</p>
-                {cliInfo === null && cliError === '' && <p className="muted">检测中…</p>}
+                <p className="section-title">{t('settings.sectionCli')}</p>
+                {cliInfo === null && cliError === '' && <p className="muted">{t('common.detecting')}</p>}
                 {cliError !== '' && <p className="inline-error">{cliError}</p>}
                 {installed && (
                   <>
-                    <div className="kv">版本 {cliInfo.version}</div>
+                    <div className="kv">{t('settings.cliVersion', { version: cliInfo.version })}</div>
                     <div className="kv path" title={cliInfo.path}>
-                      路径 {cliInfo.path}
+                      {t('settings.cliPath', { path: cliInfo.path })}
                     </div>
                   </>
                 )}
                 {cliInfo !== null && !installed && (
                   <>
-                    <div className="kv warn">未安装 claude CLI</div>
+                    <div className="kv warn">{t('settings.cliNotInstalled')}</div>
                     {/* 5.1 下载安装区：方式选择 + 二次确认 + 固定模板契约法 */}
-                    <div className="install-methods" role="radiogroup" aria-label="安装方式">
+                    <div className="install-methods" role="radiogroup" aria-label={t('settings.installMethodsAria')}>
                       <label>
                         <input
                           type="radio"
@@ -466,9 +505,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                           checked={installMethod === 'native'}
                           onChange={() => setInstallMethod('native')}
                         />
-                        原生安装器（推荐，无需 Node）
+                        {t('settings.installNative')}
                       </label>
-                      <label title={npmInstallDisabled ? '未检测到 node/npm' : undefined}>
+                      <label title={npmInstallDisabled ? t('settings.installNpmNoNode') : undefined}>
                         <input
                           type="radio"
                           name="install-method"
@@ -476,15 +515,15 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                           disabled={npmInstallDisabled}
                           onChange={() => setInstallMethod('npm')}
                         />
-                        npm 安装（需本机已有 Node/npm）
+                        {t('settings.installNpm')}
                       </label>
                     </div>
                     <div className="dialog-actions">
                       <button type="button" className="btn primary" onClick={() => void runInstall()}>
-                        下载安装
+                        {t('settings.install')}
                       </button>
                       <a className="btn" href={CLAUDE_DOCS_URL} target="_blank" rel="noreferrer">
-                        打开官方文档手动安装
+                        {t('settings.installDocs')}
                       </a>
                     </div>
                     {installError !== '' && <p className="inline-error">{installError}</p>}
@@ -499,7 +538,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                         disabled={checking}
                         onClick={() => void checkUpdate()}
                       >
-                        {checking ? '检测中…' : '检查更新'}
+                        {checking ? t('common.detecting') : t('settings.checkUpdate')}
                       </button>
                       {updateInfo !== null && !updateInfo.upToDate && (
                         <button
@@ -508,19 +547,26 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                           disabled={commandId !== null || starting}
                           onClick={() => void runUpdate()}
                         >
-                          {starting ? '启动中…' : commandId !== null ? '更新中…' : '更新'}
+                          {starting
+                            ? t('settings.starting')
+                            : commandId !== null
+                              ? t('settings.updating')
+                              : t('settings.update')}
                         </button>
                       )}
                     </div>
                     {updateInfo !== null &&
                       (updateInfo.degraded === true ? (
-                        <p className="muted">
-                          无法查询最新版本（未检测到 node 环境）——可直接执行 claude update
-                        </p>
+                        <p className="muted">{t('settings.cliDegraded')}</p>
                       ) : (
                         <p className="muted">
-                          当前 {updateInfo.current} · 最新 {updateInfo.latest} ·{' '}
-                          {updateInfo.upToDate ? '已是最新' : '可更新'}
+                          {t('settings.cliVersionLine', {
+                            current: updateInfo.current,
+                            latest: updateInfo.latest,
+                            state: updateInfo.upToDate
+                              ? t('settings.cliUpToDate')
+                              : t('settings.cliUpdatable')
+                          })}
                         </p>
                       ))}
                     {updateError !== '' && <p className="inline-error">{updateError}</p>}
@@ -540,10 +586,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                       </div>
                     )}
                     {cliNotes !== null && cliNotes.notes.length === 0 && cliNotes.error === undefined && (
-                      <p className="muted">未找到该版本的更新说明</p>
+                      <p className="muted">{t('settings.notesNone')}</p>
                     )}
                     {cliNotes?.error !== undefined && (
-                      <p className="muted">更新说明获取失败：{cliNotes.error}</p>
+                      <p className="muted">{t('settings.notesFailed', { error: cliNotes.error })}</p>
                     )}
                   </>
                 )}
@@ -561,7 +607,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             {/* v1.1.0 应用自更新：检测 + 更新说明 + 一键升级 */}
             {activeSection === 'update' && (
               <div className="dialog-section">
-                <p className="section-title">应用更新</p>
+                <p className="section-title">{t('settings.appUpdateTitle')}</p>
                 <div className="dialog-actions">
                   <button
                     type="button"
@@ -569,7 +615,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     disabled={appUpdChecking}
                     onClick={() => void checkAppUpd()}
                   >
-                    {appUpdChecking ? '检测中…' : '检查更新'}
+                    {appUpdChecking ? t('common.detecting') : t('settings.checkUpdate')}
                   </button>
                   {appUpd !== null && !appUpd.upToDate && !appUpdReady && (
                     <button
@@ -581,23 +627,29 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                       onClick={() => void downloadAppUpd()}
                     >
                       {appUpdProgress?.phase === 'downloading'
-                        ? `下载中 ${appUpdProgress.percent}%`
+                        ? t('settings.appDownloading', { percent: appUpdProgress.percent })
                         : appUpdProgress?.phase === 'verifying'
-                          ? '校验中…'
-                          : '下载更新'}
+                          ? t('settings.appVerifying')
+                          : t('settings.appDownload')}
                     </button>
                   )}
                   {appUpdReady && (
                     <button type="button" className="btn primary" onClick={() => void installAppUpd()}>
-                      重启并升级
+                      {t('settings.appRestartInstall')}
                     </button>
                   )}
                 </div>
                 {appUpd !== null && (
                   <p className="muted">
-                    当前 v{appUpd.current} · 最新 v{appUpd.latest} ·{' '}
-                    {appUpd.upToDate ? '已是最新' : '可更新'}
-                    {appUpd.manifestError !== undefined && `（清单获取失败：${appUpd.manifestError}）`}
+                    {t('settings.appUpdateLine', {
+                      current: appUpd.current,
+                      latest: appUpd.latest,
+                      state: appUpd.upToDate
+                        ? t('settings.cliUpToDate')
+                        : t('settings.cliUpdatable')
+                    })}
+                    {appUpd.manifestError !== undefined &&
+                      t('settings.appManifestError', { error: appUpd.manifestError })}
                   </p>
                 )}
                 {appUpdProgress?.phase === 'downloading' && (
@@ -618,21 +670,18 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   </div>
                 )}
                 {appUpd !== null && appUpd.notesError !== undefined && (
-                  <p className="muted">更新说明获取失败：{appUpd.notesError}</p>
+                  <p className="muted">{t('settings.notesFailed', { error: appUpd.notesError })}</p>
                 )}
                 {appUpdError !== '' && <p className="inline-error">{appUpdError}</p>}
-                <p className="hint-small">
-                  当前 v{APP_VERSION}；升级包来自本仓 GitHub Releases（sha256 校验通过才安装），
-                  更新说明来自仓库 CHANGELOG.md
-                </p>
+                <p className="hint-small">{t('settings.appUpdateHint', { version: APP_VERSION })}</p>
               </div>
             )}
 
             {/* 启动与窗口：关闭行为 + 开机自启（第 31-32 法；main 接线后续落地） */}
             {activeSection === 'startup' && (
               <div className="dialog-section">
-                <p className="section-title">启动与窗口</p>
-                <div className="theme-choice" role="radiogroup" aria-label="关闭按钮行为">
+                <p className="section-title">{t('settings.startupTitle')}</p>
+                <div className="theme-choice" role="radiogroup" aria-label={t('settings.closeBehaviorAria')}>
                   <label>
                     <input
                       type="radio"
@@ -643,7 +692,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                         void window.cwb.setAppSettings({ closeToTray: true })
                       }}
                     />
-                    最小化到托盘（常驻）
+                    {t('settings.closeToTray')}
                   </label>
                   <label>
                     <input
@@ -655,7 +704,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                         void window.cwb.setAppSettings({ closeToTray: false })
                       }}
                     />
-                    退出应用
+                    {t('settings.quitApp')}
                   </label>
                 </div>
                 <label className="dialog-check">
@@ -667,18 +716,16 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                       void window.cwb.setAppSettings({ launchAtLogin: e.target.checked })
                     }}
                   />
-                  开机自启
+                  {t('settings.launchAtLogin')}
                 </label>
-                <p className="hint-small">
-                  退出应用时如有运行中任务仍会先确认；开机自启仅安装版实际生效
-                </p>
+                <p className="hint-small">{t('settings.startupHint')}</p>
               </div>
             )}
           </div>
         </div>
         <div className="dialog-actions">
           <button type="button" className="btn" onClick={onClose}>
-            关闭
+            {t('common.close')}
           </button>
         </div>
       </div>

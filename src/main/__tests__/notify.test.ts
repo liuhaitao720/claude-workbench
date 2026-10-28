@@ -220,4 +220,35 @@ describe('v0.5.4 validateWebhookUrl（误填管理页防护）', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  // ── v1.2.0 推送文案随语言 ──────────────────────────────────
+  it('language=en：推送正文/错误提示英文（任务名与 URL 仍原样）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cwb-notify-en-'))
+    const posts: string[] = []
+    const n = new NotifyService({
+      file: join(dir, 'n.json'),
+      language: () => 'en',
+      taskNameOf: () => 'refactor login',
+      fetchImpl: (async (_url: string, init: { body: string }) => {
+        posts.push(init.body)
+        return { ok: true, status: 200, text: async () => '' } as unknown as Response
+      }) as unknown as typeof fetch
+    })
+    try {
+      n.setWebhook('https://example.com/hook', true)
+      n.onActivityEvent({ taskId: 't1', activity: 'awaiting' })
+      await new Promise((r) => setTimeout(r, 10))
+      expect(posts).toHaveLength(1)
+      expect(posts[0]).toContain('waiting for your answer')
+      expect(posts[0]).toContain('refactor login')
+
+      const missing = await new NotifyService({ file: join(dir, 'n2.json'), language: () => 'en' }).sendTest()
+      expect(missing.ok).toBe(false)
+      expect(missing.error).toBe('No webhook URL configured')
+
+      expect(() => n.setWebhook('ftp://x', true)).toThrow(/must start with http/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

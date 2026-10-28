@@ -4,6 +4,7 @@ import { useAppStore } from '../store'
 import { APP_VERSION } from '../app-info'
 import { loadDefaultIsolation, persistDefaultIsolation } from '../default-isolation'
 import { useEscapeClose } from '../hooks/useEscapeClose'
+import { useI18n } from '../i18n'
 import { ProjectTree } from './ProjectTree'
 import { focusActiveTerminal } from './TerminalPanel'
 import { TaskStatusDot } from './TaskStatusDot'
@@ -24,6 +25,7 @@ const RECENT_LIMIT = 5
  *   顶部按钮 / 项目菜单 / Ctrl+N 三入口共用；入口触发时自动展开侧栏
  */
 export function ProjectSidebar() {
+  const t = useI18n()
   const projects = useAppStore((s) => s.projects)
   const tasks = useAppStore((s) => s.tasks)
   const selectedProjectId = useAppStore((s) => s.selectedProjectId)
@@ -110,14 +112,14 @@ export function ProjectSidebar() {
           Ctrl+B 折叠不再卸载整棵树丢草稿/组折叠态/菜单开合（对齐 v0.1.2 F5 保护） */}
       <aside
         className="sidebar-rail"
-        aria-label="侧栏（已折叠）"
+        aria-label={t('sidebar.collapsed')}
         aria-hidden={!railCollapsed}
         style={railCollapsed ? undefined : { display: 'none' }}
       >
           <button
             type="button"
             className="rail-btn"
-            title="搜索（展开侧栏）"
+            title={t('sidebar.searchExpand')}
             onClick={() => {
               setRailCollapsed(false)
               setPendingSearchFocus(true)
@@ -129,7 +131,7 @@ export function ProjectSidebar() {
           <button
             type="button"
             className="rail-btn"
-            title="打开目录"
+            title={t('sidebar.openDir')}
             onClick={() => void openProjectFlow()}
           >
             📂
@@ -148,7 +150,7 @@ export function ProjectSidebar() {
                 }}
               >
                 {initialsOf(p.name)}
-                {p.isGit && <span className="rail-git-dot" title="git 项目" />}
+                {p.isGit && <span className="rail-git-dot" title={t('sidebar.gitProject')} />}
               </button>
             ))}
           </div>
@@ -157,7 +159,7 @@ export function ProjectSidebar() {
           <button
             type="button"
             className="rail-btn"
-            title="Skills 管理"
+            title={t('sidebar.skills')}
             onClick={openSkills}
           >
             🧩
@@ -165,7 +167,7 @@ export function ProjectSidebar() {
           <button
             type="button"
             className="rail-btn"
-            title="设置"
+            title={t('sidebar.settings')}
             onClick={openSettings}
           >
             ⚙
@@ -173,7 +175,7 @@ export function ProjectSidebar() {
           <button
             type="button"
             className="rail-btn"
-            title="关于 Claude Workbench"
+            title={t('sidebar.about')}
             onClick={openAbout}
           >
             ⓘ
@@ -181,7 +183,7 @@ export function ProjectSidebar() {
           <button
             type="button"
             className="rail-btn rail-expand"
-            title="展开侧栏 (Ctrl+B)"
+            title={t('sidebar.expand')}
             onClick={() => setRailCollapsed(false)}
           >
             ☰
@@ -203,12 +205,15 @@ export function ProjectSidebar() {
                 type="button"
                 className="btn btn-header version-btn"
                 onClick={openAbout}
-                title="关于 Claude Workbench"
+                title={t('sidebar.about')}
               >
                 v{APP_VERSION}
                 {/* v1.1.0 有新版本角标（启动静默检查/手动检查落 store） */}
                 {hasUpdate && (
-                  <span className="ver-update-dot" title={`有新版本 v${appUpdateInfo.latest}`} />
+                  <span
+                    className="ver-update-dot"
+                    title={t('sidebar.newVersion', { version: appUpdateInfo.latest })}
+                  />
                 )}
               </button>
             </div>
@@ -219,15 +224,15 @@ export function ProjectSidebar() {
                 Skills
               </button>
               <button type="button" className="btn skills-btn" onClick={openSettings}>
-                设置
+                {t('sidebar.settings')}
               </button>
             </div>
             <div className="sidebar-dir-row">
               <button
                 type="button"
                 className="btn dir-icon-btn"
-                title="打开目录"
-                aria-label="打开目录"
+                title={t('sidebar.openDir')}
+                aria-label={t('sidebar.openDir')}
                 onClick={() => void openProjectFlow()}
               >
                 📁
@@ -236,8 +241,8 @@ export function ProjectSidebar() {
                 ref={searchRef}
                 className="search-input"
                 type="text"
-                placeholder="搜索任务/项目…"
-                aria-label="搜索任务/项目"
+                placeholder={t('sidebar.searchPlaceholder')}
+                aria-label={t('sidebar.searchAria')}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -246,11 +251,11 @@ export function ProjectSidebar() {
           {/* 搜索态隐藏「最近」（评审 F5）：搜索聚焦树内结果，最近区块与词无关属噪音 */}
           <ProjectTree query={query} onNewTask={openNewTask} />
           {projects.length === 0 && (
-            <div className="sidebar-empty">尚未注册项目，点击“打开目录”开始</div>
+            <div className="sidebar-empty">{t('sidebar.empty')}</div>
           )}
           {query.trim() === '' && recents.length > 0 && (
             <div className="recent-block">
-              <div className="recent-title">最近</div>
+              <div className="recent-title">{t('sidebar.recent')}</div>
               <ul className="recent-list">
                 {recents.map(({ task, project }) => (
                   <li key={task.id} data-recent-task-id={task.id}>
@@ -292,13 +297,11 @@ function initialsOf(name: string): string {
 
 /** 单任务"跳过权限确认"勾选（v0.3.1）——危险项琥珀色；默认关闭（安全默认） */
 function SkipPermsCheck({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  const t = useI18n()
   return (
-    <label
-      className="dialog-check dialog-check-danger"
-      title="该任务启动 claude 时附加 --dangerously-skip-permissions：跳过全部权限确认（含文件写入与命令执行）。仅建议在可信目录使用。"
-    >
+    <label className="dialog-check dialog-check-danger" title={t('sidebar.skipPermsTitle')}>
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      跳过权限确认（--dangerously-skip-permissions）
+      {t('sidebar.skipPermsLabel')}
     </label>
   )
 }
@@ -320,6 +323,7 @@ function NewTaskDialog({
   onCreated?: () => void
 }) {
   const createTaskFlow = useAppStore((s) => s.createTaskFlow)
+  const t = useI18n()
   const [name, setName] = useState('')
   /** git 三选阶段待确认的任务名（null=名称输入阶段） */
   const [pending, setPending] = useState<string | null>(null)
@@ -371,14 +375,14 @@ function NewTaskDialog({
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="dialog" role="dialog" aria-label="新建任务">
-        <p className="dialog-title">在 “{project.name}” 新建任务</p>
+      <div className="dialog" role="dialog" aria-label={t('newTask.aria')}>
+        <p className="dialog-title">{t('newTask.title', { project: project.name })}</p>
         {pending === null ? (
           <>
             <input
               className="new-task-input"
               autoFocus
-              placeholder="任务名"
+              placeholder={t('newTask.namePlaceholder')}
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
@@ -388,18 +392,16 @@ function NewTaskDialog({
             <SkipPermsCheck checked={skipPerms} onChange={setSkipPerms} />
             <div className="dialog-actions">
               <button type="button" className="btn primary" onClick={submit}>
-                新建任务
+                {t('newTask.create')}
               </button>
               <button type="button" className="btn" onClick={onClose}>
-                取消
+                {t('newTask.cancel')}
               </button>
             </div>
           </>
         ) : (
           <>
-            <p className="dialog-hint">
-              git 项目推荐使用 worktree 隔离，避免多任务互相覆盖工作区（主按钮为上次选择）
-            </p>
+            <p className="dialog-hint">{t('newTask.isolationHint')}</p>
             <SkipPermsCheck checked={skipPerms} onChange={setSkipPerms} />
             <div className="dialog-actions">
               <button
@@ -407,17 +409,17 @@ function NewTaskDialog({
                 className={lastIsolation === 'worktree' ? 'btn primary' : 'btn'}
                 onClick={() => confirmCreate('worktree')}
               >
-                创建隔离分支（git worktree，分支 cwb/&lt;新ID&gt;）
+                {t('newTask.worktree')}
               </button>
               <button
                 type="button"
                 className={lastIsolation === 'shared' ? 'btn primary' : 'btn'}
                 onClick={() => confirmCreate('shared')}
               >
-                改用共享目录
+                {t('newTask.shared')}
               </button>
               <button type="button" className="btn" onClick={() => setPending(null)}>
-                取消
+                {t('newTask.cancel')}
               </button>
             </div>
           </>
