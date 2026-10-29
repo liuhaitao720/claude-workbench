@@ -9,6 +9,7 @@ const trashItem = vi.hoisted(() => vi.fn(async (_path: string) => {}))
 vi.mock('electron', () => ({ shell: { trashItem } }))
 
 import { SkillsStore, parseSkillFrontmatter } from '../skills-store'
+import { activationOf, parseSkillActivation } from '../skill-files'
 import { PluginSkills } from '../plugin-skills'
 
 /** 建一个 skill 目录（frontmatter 可定制） */
@@ -46,6 +47,53 @@ describe('parseSkillFrontmatter（容忍缺字段/超长）', () => {
   it('未知字段忽略；缺闭合 --- 容忍（读到尾）', () => {
     const out = parseSkillFrontmatter('---\nname: x\nlicense: MIT\nfoo: bar')
     expect(out).toEqual({ name: 'x' })
+  })
+})
+
+describe('parseSkillActivation / activationOf（v1.2.1 生效方式）', () => {
+  it('无调用控制字段 → 默认生效（auto）：模型自动 + 用户可 /name', () => {
+    expect(parseSkillActivation('---\nname: a\ndescription: d\n---\n')).toEqual({
+      disableModelInvocation: false,
+      userInvocable: true,
+      hasPaths: false
+    })
+    expect(activationOf(parseSkillActivation('---\nname: a\n---\n'))).toBe('auto')
+    expect(activationOf(parseSkillActivation('no frontmatter'))).toBe('auto')
+  })
+
+  it('disable-model-invocation: true → manual（只有用户 /名称 才生效）', () => {
+    const flags = parseSkillActivation(
+      '---\nname: a\ndisable-model-invocation: true\n---\n'
+    )
+    expect(flags.disableModelInvocation).toBe(true)
+    expect(activationOf(flags)).toBe('manual')
+  })
+
+  it('user-invocable: false → modelOnly（用户看不到斜杠命令，模型自动调用）', () => {
+    expect(activationOf(parseSkillActivation('---\nname: a\nuser-invocable: false\n---\n'))).toBe(
+      'modelOnly'
+    )
+    // 显式 true 仍是默认
+    expect(activationOf(parseSkillActivation('---\nname: a\nuser-invocable: true\n---\n'))).toBe(
+      'auto'
+    )
+  })
+
+  it('paths → 按文件触发（自动，但只在模型碰到匹配文件时加载）；manual 优先', () => {
+    expect(activationOf(parseSkillActivation('---\nname: a\npaths:\n  - "src/**/*.ts"\n---\n'))).toBe(
+      'paths'
+    )
+    expect(
+      activationOf(
+        parseSkillActivation('---\nname: a\npaths: ["src/**"]\ndisable-model-invocation: true\n---\n')
+      )
+    ).toBe('manual')
+  })
+
+  it('值写在正文而非 frontmatter → 不误判', () => {
+    expect(activationOf(parseSkillActivation('---\nname: a\n---\n\ndisable-model-invocation: true\n'))).toBe(
+      'auto'
+    )
   })
 })
 

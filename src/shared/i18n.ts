@@ -116,6 +116,8 @@ export const zh = {
   'settings.sectionCli': 'claude CLI',
   'settings.sectionUpdate': '应用更新',
   'settings.sectionStartup': '启动',
+  'settings.sectionAbout': '关于',
+  'settings.aboutSummary': 'v{version}',
   'settings.language': '语言 / Language',
 
   // ── 设置：外观 ──────────────────────────────────────────
@@ -212,10 +214,22 @@ export const zh = {
   'skills.tabMarket': '在线搜索',
   'skills.tabImport': '导入',
   'skills.empty': '暂无已安装 skill——到「在线搜索」找现成的，或到「导入」添加本地文件夹',
-  'skills.userLevel': '用户级 · 全局生效',
-  'skills.userLevelSub': '（~/.claude/skills，本机所有 claude 会话可用）',
-  'skills.projectLevel': '项目级 · 仅该项目',
-  'skills.projectLevelSub': '（<项目>/.claude/skills）',
+  // v1.2.1：按「生效方式」分组（默认生效在前 / 需显式指定 / 停用）
+  'skills.groupEffective': '默认生效',
+  'skills.groupEffectiveSub': '（模型会按需自动调用；你也可以输入 /名称 手动触发）',
+  'skills.groupManual': '需手动指定',
+  'skills.groupManualSub': '（模型不会自动调用——只有你输入 /名称 时才生效）',
+  'skills.groupInactive': '已停用 · 不生效',
+  'skills.groupInactiveSub': '（插件已停用——点「启用」后新任务才生效）',
+  'skills.badgeDefault': '默认生效',
+  'skills.badgeManual': '需 /名称',
+  'skills.badgePaths': '按文件触发',
+  'skills.badgeModelOnly': '仅模型自动',
+  'skills.installedHint':
+    '按生效方式排序：默认生效的在前，需要你显式 /名称 的其次，停用的排最后。',
+  'skills.sourceUser': '用户级',
+  'skills.sourceProject': '项目级 · {name}',
+  'skills.sourcePlugin': '插件 · {id}',
   'skills.import': '导入',
   'skills.importHint': '仅安装可信来源——skill 可携带可执行脚本',
   'skills.importScopeAria': '导入目标',
@@ -255,8 +269,6 @@ export const zh = {
   'about.license': '许可证',
   'about.licenseTail': '（源码随仓库分发，见 LICENSE 文件）',
   'about.author': '作者 Liu Haitao',
-  'about.settingsEntry': 'claude CLI / 更多配置 →',
-  'about.openSettings': '打开设置',
 
   // ── CLI 输出区 ──────────────────────────────────────────
   'cliOutput.aria': '命令输出',
@@ -307,8 +319,6 @@ export const zh = {
   'skills.errPluginRemove': '插件 skill 由 claude 插件机制管理，请用「停用/卸载插件」处理（{id}）',
 
   // ── v1.2.1：插件 skill 来源 ────────────────────────────────
-  'skills.pluginLevel': '插件 · 由 marketplace 安装',
-  'skills.pluginLevelSub': '（~/.claude/plugins/cache，由插件机制加载）',
   'skills.pluginDisabled': '已停用——在该条目上点「启用」后新任务才生效',
   'skills.pluginDisabledShort': '已停用',
   'skills.pluginEnable': '启用',
@@ -438,6 +448,8 @@ export const en: Record<MessageKey, string> = {
   'settings.sectionCli': 'claude CLI',
   'settings.sectionUpdate': 'App updates',
   'settings.sectionStartup': 'Startup',
+  'settings.sectionAbout': 'About',
+  'settings.aboutSummary': 'v{version}',
   'settings.language': 'Language / 语言',
 
   'settings.themeAria': 'Interface theme',
@@ -533,10 +545,23 @@ export const en: Record<MessageKey, string> = {
   'skills.tabImport': 'Import',
   'skills.empty':
     'No skills installed yet — find one under “Find skills”, or add a local folder under “Import”',
-  'skills.userLevel': 'User level · global',
-  'skills.userLevelSub': '(~/.claude/skills, available to every claude session on this machine)',
-  'skills.projectLevel': 'Project level · this project only',
-  'skills.projectLevelSub': '(<project>/.claude/skills)',
+  'skills.groupEffective': 'Active by default',
+  'skills.groupEffectiveSub':
+    '(the model invokes these on its own; you can also type /name to trigger one)',
+  'skills.groupManual': 'Needs explicit invocation',
+  'skills.groupManualSub':
+    '(the model never invokes these — they only apply when you type /name)',
+  'skills.groupInactive': 'Disabled · not in effect',
+  'skills.groupInactiveSub': '(plugin is disabled — click “Enable”, then new tasks pick it up)',
+  'skills.badgeDefault': 'Default',
+  'skills.badgeManual': 'Needs /name',
+  'skills.badgePaths': 'File-triggered',
+  'skills.badgeModelOnly': 'Model-only',
+  'skills.installedHint':
+    'Sorted by how each skill takes effect: active-by-default first, then ones needing an explicit /name, disabled last.',
+  'skills.sourceUser': 'User',
+  'skills.sourceProject': 'Project · {name}',
+  'skills.sourcePlugin': 'Plugin · {id}',
   'skills.import': 'Import',
   'skills.importHint': 'Install from trusted sources only — skills can carry executable scripts',
   'skills.importScopeAria': 'Import target',
@@ -577,8 +602,6 @@ export const en: Record<MessageKey, string> = {
   'about.license': 'License',
   'about.licenseTail': ' (source ships with the repository, see LICENSE)',
   'about.author': 'Author: Liu Haitao',
-  'about.settingsEntry': 'claude CLI / more settings →',
-  'about.openSettings': 'Open settings',
 
   'cliOutput.aria': 'Command output',
   'cliOutput.waiting': '(waiting for output…)',
@@ -626,8 +649,6 @@ export const en: Record<MessageKey, string> = {
   'skills.errPluginRemove':
     'Plugin skills are managed by the claude plugin system — use “Disable / Uninstall plugin” instead ({id})',
 
-  'skills.pluginLevel': 'Plugins · installed from marketplaces',
-  'skills.pluginLevelSub': '(~/.claude/plugins/cache, loaded by the plugin system)',
   'skills.pluginDisabled': 'Disabled — click “Enable” on this entry; new tasks pick it up',
   'skills.pluginDisabledShort': 'Disabled',
   'skills.pluginEnable': 'Enable',

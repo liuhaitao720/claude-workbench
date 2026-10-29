@@ -4,7 +4,6 @@ import { ProjectSidebar } from './components/ProjectSidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalPanel, focusActiveTerminal } from './components/TerminalPanel'
 import { SmokeBridge } from './components/SmokeBridge'
-import { AboutDialog } from './components/AboutDialog'
 import { SkillsDialog } from './components/SkillsDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { useI18n, syncLanguageToMain } from './i18n'
@@ -19,6 +18,8 @@ const isSmokeMode = new URLSearchParams(window.location.search).get('smoke') ===
  * v0.5①③：底部状态栏（仅版本号，点击开 About）；About/Skills 弹窗状态在 store
  * （StatusBar、折叠 rail、侧栏按钮多入口），onClose 统一关弹窗+焦点还终端。
  * v0.9：Settings 设置中心弹窗同族（About 瘦身为身份页 + 「打开设置」入口）。
+ * v1.2.1：关于并入设置中心（左栏末项分类）——独立 AboutDialog 下线，ⓘ 入口直达
+ * 「关于」分类；store 里只有 skillsOpen / settingsOpen 两个弹窗开关。
  */
 export function App() {
   const t = useI18n()
@@ -46,7 +47,6 @@ export function App() {
 
   const projects = useAppStore((s) => s.projects)
   const openTaskIds = useAppStore((s) => s.openTaskIds)
-  const aboutOpen = useAppStore((s) => s.aboutOpen)
   const skillsOpen = useAppStore((s) => s.skillsOpen)
   const settingsOpen = useAppStore((s) => s.settingsOpen)
 
@@ -63,15 +63,6 @@ export function App() {
         <TabBar />
         <TerminalPanel />
       </div>
-      {aboutOpen && (
-        <AboutDialog
-          onClose={() => {
-            useAppStore.getState().closeAbout()
-            // v0.4.3 焦点管理③：弹窗关闭把键盘焦点还给活跃终端（NewTaskDialog 先例）
-            focusActiveTerminal()
-          }}
-        />
-      )}
       {skillsOpen && (
         <SkillsDialog
           onClose={() => {

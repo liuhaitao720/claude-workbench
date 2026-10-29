@@ -25,7 +25,6 @@ beforeEach(() => {
     selectedProjectId: null,
     openTaskIds: [],
     activeTaskId: null,
-    aboutOpen: false,
     skillsOpen: false
   })
   window.localStorage.removeItem('cwb-font-size')

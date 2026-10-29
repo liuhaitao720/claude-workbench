@@ -30,7 +30,6 @@ beforeEach(() => {
     openTaskIds: [],
     activeTaskId: null,
     activityMap: {},
-    aboutOpen: false,
     skillsOpen: false,
     settingsOpen: false,
     theme: 'dark',

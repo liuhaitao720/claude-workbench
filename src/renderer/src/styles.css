@@ -1253,6 +1253,22 @@ button {
   white-space: nowrap;
 }
 
+/* v1.2.1 调用方式徽标（需 /名称 · 按文件触发 · 仅模型自动）——默认生效一档不挂标签 */
+.skill-badge-activation {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 9px;
+  border: 1px dashed var(--border-3);
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.skills-installed-hint {
+  margin: 0 0 6px;
+}
+
 .btn-mini {
   padding: 2px 8px;
   font-size: 11px;

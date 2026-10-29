@@ -19,6 +19,27 @@ import {
 } from './theme'
 import type { EffectiveTheme, Theme } from './theme'
 
+/** 设置中心分类 id（v1.2.1：'about' 把原「关于」弹窗并进来；见 SettingsDialog） */
+export type SettingsSectionId =
+  | 'appearance'
+  | 'terminal'
+  | 'notify'
+  | 'cli'
+  | 'update'
+  | 'startup'
+  | 'about'
+
+/** 合法分类集合（openSettings 运行期校验——防事件对象被当参数传进来） */
+const SETTINGS_SECTION_IDS: ReadonlySet<string> = new Set<SettingsSectionId>([
+  'appearance',
+  'terminal',
+  'notify',
+  'cli',
+  'update',
+  'startup',
+  'about'
+])
+
 // ── PTY 数据轻量 pub-sub（高频流，不进 zustand）────────────────────────
 // App mount 时经 initListeners 把 window.cwb.onPtyData 一次性接到 emitTaskData，
 // TerminalPanel 按任务订阅 subscribeTaskData，避免每帧触发 React 渲染。
@@ -72,10 +93,12 @@ interface AppState {
    */
   activityMap: Partial<Record<string, TaskActivityEvent['activity']>>
 
-  /** v0.5①/③：About / Skills 弹窗开合 + v0.9 设置中心——StatusBar、折叠 rail、侧栏按钮多入口共用 */
-  aboutOpen: boolean
+  /** v0.5①/③：About / Skills 弹窗开合 + v0.9 设置中心——StatusBar、折叠 rail、侧栏按钮多入口共用。
+   *  v1.2.1：关于并入设置中心（同一弹窗的「关于」分类），不再有独立 aboutOpen。 */
   skillsOpen: boolean
   settingsOpen: boolean
+  /** 打开设置时直接落到哪一分类（ⓘ → 'about'；默认 'appearance'） */
+  settingsSection: SettingsSectionId
   /** v1.0.8 面板内搜索浮层（作用于 activeTaskId 终端） */
   searchOpen: boolean
 
@@ -116,11 +139,10 @@ interface AppState {
   /** onTaskActivity 推送落地（v3.2） */
   applyTaskActivity: (taskId: string, activity: TaskActivityEvent['activity']) => void
 
-  openAbout: () => void
-  closeAbout: () => void
   openSkills: () => void
   closeSkills: () => void
-  openSettings: () => void
+  /** 打开设置中心；section 缺省落到「外观」，ⓘ 入口传 'about'（v1.2.1 关于并入设置） */
+  openSettings: (section?: SettingsSectionId) => void
   closeSettings: () => void
   /** v1.0.8 面板内搜索浮层（作用于当前活跃终端；切换 tab 自动关） */
   openSearch: () => void
@@ -146,9 +168,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   openTaskIds: [],
   activeTaskId: null,
   activityMap: {},
-  aboutOpen: false,
   skillsOpen: false,
   settingsOpen: false,
+  settingsSection: 'appearance',
   searchOpen: false,
   appUpdateInfo: null,
   theme: initialTheme,
@@ -341,11 +363,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
   applyTaskActivity: (taskId, activity) =>
     set((s) => ({ activityMap: { ...s.activityMap, [taskId]: activity } })),
 
-  openAbout: () => set({ aboutOpen: true }),
-  closeAbout: () => set({ aboutOpen: false }),
   openSkills: () => set({ skillsOpen: true }),
   closeSkills: () => set({ skillsOpen: false }),
-  openSettings: () => set({ settingsOpen: true }),
+  openSettings: (section = 'appearance') =>
+    set({
+      settingsOpen: true,
+      // 防误传：onClick={openSettings} 会把 MouseEvent 当 section 传进来（已修调用点，
+      // 这里再兜一层——非法值一律回退「外观」）
+      settingsSection: SETTINGS_SECTION_IDS.has(section) ? section : 'appearance'
+    }),
   closeSettings: () => set({ settingsOpen: false }),
   openSearch: () => set({ searchOpen: true }),
   closeSearch: () => set({ searchOpen: false }),

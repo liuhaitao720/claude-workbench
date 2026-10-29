@@ -26,7 +26,6 @@ beforeEach(() => {
     selectedProjectId: null,
     openTaskIds: [],
     activeTaskId: null,
-    aboutOpen: false,
     skillsOpen: false,
     settingsOpen: false,
     searchOpen: false,

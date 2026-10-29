@@ -228,10 +228,25 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
   const projectNameOf = (projectId?: string): string =>
     projects.find((p) => p.id === projectId)?.name ?? ''
 
-  const userSkills = (skills ?? []).filter((s) => s.source === 'user')
-  const projectSkills = (skills ?? []).filter((s) => s.source === 'project')
-  const pluginSkills = (skills ?? []).filter((s) => s.source === 'plugin')
   const installedCount = skills?.length ?? 0
+
+  /**
+   * v1.2.1 用户指令：按「生效方式」分组，默认生效的排前面、需要显式指定的其次、
+   * 停用的最后。同一技能在哪个根（用户级/项目级/插件）不再决定顺序——那是来源
+   * 信息，写在行内 meta；这里排序的唯一依据是「你在会话里到底会不会自动用上它」。
+   */
+  const isInactive = (s: SkillInfo): boolean => s.source === 'plugin' && s.pluginEnabled === false
+  const isManual = (s: SkillInfo): boolean => s.activation === 'manual'
+  const effectiveSkills = (skills ?? []).filter((s) => !isInactive(s) && !isManual(s))
+  const manualSkills = (skills ?? []).filter((s) => !isInactive(s) && isManual(s))
+  const inactiveSkills = (skills ?? []).filter(isInactive)
+
+  /** 行内来源标签（替代原按根分组的组头信息） */
+  const sourceTag = (s: SkillInfo): string => {
+    if (s.source === 'plugin') return t('skills.sourcePlugin', { id: s.pluginId ?? '' })
+    if (s.source === 'project') return t('skills.sourceProject', { name: projectNameOf(s.projectId) })
+    return t('skills.sourceUser')
+  }
 
   const tabs: ReadonlyArray<{ id: SkillsTab; label: string; count?: number }> = [
     { id: 'installed', label: t('skills.tabInstalled'), count: installedCount },
@@ -296,49 +311,63 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
                   </div>
                 </div>
               )}
-              {userSkills.length > 0 && (
-                <>
-                  <p className="skill-group-title">
-                    {t('skills.userLevel')}
-                    <span className="skill-group-sub">{t('skills.userLevelSub')}</span>
-                  </p>
-                  <ul className="skill-list">
-                    {userSkills.map((s) => (
-                      <SkillRow key={s.dir} skill={s} onRemove={removeSkill} />
-                    ))}
-                  </ul>
-                </>
+              {skills !== null && skills.length > 0 && (
+                <p className="hint-small skills-installed-hint">{t('skills.installedHint')}</p>
               )}
-              {projectSkills.length > 0 && (
+              {effectiveSkills.length > 0 && (
                 <>
                   <p className="skill-group-title">
-                    {t('skills.projectLevel')}
-                    <span className="skill-group-sub">{t('skills.projectLevelSub')}</span>
+                    {t('skills.groupEffective')}
+                    <span className="skill-group-sub">{t('skills.groupEffectiveSub')}</span>
                   </p>
                   <ul className="skill-list">
-                    {projectSkills.map((s) => (
+                    {effectiveSkills.map((s) => (
                       <SkillRow
                         key={s.dir}
                         skill={s}
-                        projectName={projectNameOf(s.projectId)}
+                        sourceTag={sourceTag(s)}
+                        toggling={togglingPluginId === s.pluginId}
                         onRemove={removeSkill}
+                        onTogglePlugin={togglePlugin}
                       />
                     ))}
                   </ul>
                 </>
               )}
-              {pluginSkills.length > 0 && (
+              {manualSkills.length > 0 && (
                 <>
                   <p className="skill-group-title">
-                    {t('skills.pluginLevel')}
-                    <span className="skill-group-sub">{t('skills.pluginLevelSub')}</span>
+                    {t('skills.groupManual')}
+                    <span className="skill-group-sub">{t('skills.groupManualSub')}</span>
                   </p>
                   <ul className="skill-list">
-                    {pluginSkills.map((s) => (
+                    {manualSkills.map((s) => (
                       <SkillRow
                         key={s.dir}
                         skill={s}
+                        sourceTag={sourceTag(s)}
                         toggling={togglingPluginId === s.pluginId}
+                        onRemove={removeSkill}
+                        onTogglePlugin={togglePlugin}
+                      />
+                    ))}
+                  </ul>
+                </>
+              )}
+              {inactiveSkills.length > 0 && (
+                <>
+                  <p className="skill-group-title">
+                    {t('skills.groupInactive')}
+                    <span className="skill-group-sub">{t('skills.groupInactiveSub')}</span>
+                  </p>
+                  <ul className="skill-list">
+                    {inactiveSkills.map((s) => (
+                      <SkillRow
+                        key={s.dir}
+                        skill={s}
+                        sourceTag={sourceTag(s)}
+                        toggling={togglingPluginId === s.pluginId}
+                        onRemove={removeSkill}
                         onTogglePlugin={togglePlugin}
                       />
                     ))}
@@ -521,13 +550,14 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
 
 function SkillRow({
   skill,
-  projectName,
+  sourceTag,
   toggling,
   onRemove,
   onTogglePlugin
 }: {
   skill: SkillInfo
-  projectName?: string
+  /** 来源标签（用户级 / 项目级 · 名称 / 插件 · id）——v1.2.1 不再按来源分组 */
+  sourceTag?: string
   /** 该插件正在切换启用状态（按钮禁用 + 文案） */
   toggling?: boolean
   onRemove?: (s: SkillInfo) => void
@@ -537,16 +567,31 @@ function SkillRow({
   const meta = [
     skill.version !== undefined ? `v${skill.version}` : '',
     skill.author ?? '',
-    projectName ?? '',
-    skill.source === 'plugin' ? (skill.pluginId ?? '') : ''
+    sourceTag ?? ''
   ]
     .filter((x) => x !== '')
     .join(' · ')
   const isPlugin = skill.source === 'plugin'
+
+  /** 生效方式徽标（默认生效不挂标签——列表默认项，标签只标「需要注意的」） */
+  const activationBadge = ((): { cls: string; text: string; title: string } | null => {
+    switch (skill.activation) {
+      case 'manual':
+        return { cls: 'skill-badge-activation', text: t('skills.badgeManual'), title: t('skills.groupManualSub') }
+      case 'paths':
+        return { cls: 'skill-badge-activation', text: t('skills.badgePaths'), title: t('skills.groupEffectiveSub') }
+      case 'modelOnly':
+        return { cls: 'skill-badge-activation', text: t('skills.badgeModelOnly'), title: t('skills.groupEffectiveSub') }
+      default:
+        return null
+    }
+  })()
+
   return (
     <li
       className="skill-row"
       data-skill-name={skill.name}
+      data-activation={skill.activation ?? 'auto'}
       {...(isPlugin ? { 'data-plugin-id': skill.pluginId ?? '' } : {})}
       data-plugin-enabled={isPlugin ? String(skill.pluginEnabled === true) : undefined}
     >
@@ -555,6 +600,11 @@ function SkillRow({
           {skill.name}
         </span>
         {meta !== '' && <span className="skill-meta">{meta}</span>}
+        {activationBadge !== null && (
+          <span className={activationBadge.cls} title={activationBadge.title}>
+            {activationBadge.text}
+          </span>
+        )}
         {isPlugin && skill.pluginEnabled === false && (
           <span className="skill-badge-off" title={t('skills.pluginDisabled')}>
             {t('skills.pluginDisabledShort')}

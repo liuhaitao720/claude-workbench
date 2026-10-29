@@ -32,12 +32,13 @@ export function ProjectSidebar() {
   const openProjectFlow = useAppStore((s) => s.openProjectFlow)
   const selectProject = useAppStore((s) => s.selectProject)
   const openTaskAutoResume = useAppStore((s) => s.openTaskAutoResume)
-  const openAbout = useAppStore((s) => s.openAbout)
   const openSkills = useAppStore((s) => s.openSkills)
   // v1.1.0 更新角标数据源（null=未检查/已是最新/检查失败）
   const appUpdateInfo = useAppStore((s) => s.appUpdateInfo)
   const hasUpdate = appUpdateInfo !== null && !appUpdateInfo.upToDate
   const openSettings = useAppStore((s) => s.openSettings)
+  /** v1.2.1：关于并入设置中心——ⓘ 保留为直达「关于」分类的快捷入口（仍只有一个弹窗） */
+  const openAbout = () => openSettings('about')
 
   const [railCollapsed, setRailCollapsed] = useState(false)
   const [query, setQuery] = useState('')
@@ -168,7 +169,7 @@ export function ProjectSidebar() {
             type="button"
             className="rail-btn"
             title={t('sidebar.settings')}
-            onClick={openSettings}
+            onClick={() => openSettings()}
           >
             ⚙
           </button>
@@ -226,7 +227,7 @@ export function ProjectSidebar() {
                   className="btn-icon"
                   title={t('sidebar.settings')}
                   aria-label={t('sidebar.settings')}
-                  onClick={openSettings}
+                  onClick={() => openSettings()}
                 >
                   ⚙
                 </button>

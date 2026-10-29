@@ -78,6 +78,14 @@ export interface SkillInfo {
   pluginId?: string
   /** v1.2.1 插件是否在 claude settings.json 的 enabledPlugins 中启用（停用=会话里不生效） */
   pluginEnabled?: boolean
+  /**
+   * v1.2.1 调用方式（由 SKILL.md frontmatter 推导，见 main/skill-files 的 activationOf）：
+   * - auto：默认生效——模型按需自动调用，用户也可 /name 手动触发
+   * - paths：默认生效，但只在模型碰到匹配 files 时加载（frontmatter `paths`）
+   * - modelOnly：模型自动调用，用户看不到斜杠命令（`user-invocable: false`）
+   * - manual：模型不会自动用，必须用户输入 /name（`disable-model-invocation: true`）
+   */
+  activation?: 'auto' | 'paths' | 'modelOnly' | 'manual'
 }
 
 /** Skill 市场条目【v1.2.0：来自本机已配置 marketplace 目录】 */

@@ -6,9 +6,10 @@ import { CliOutputView } from './CliOutputView'
 import { changeFontFamily, changeFontSize } from './TerminalPanel'
 import { FONT_FAMILY_WHITELIST, loadFontFamily } from '../font-family'
 import { FONT_SIZE_MAX, FONT_SIZE_MIN, clampFontSize, loadFontSize } from '../font-size'
-import { APP_VERSION } from '../app-info'
+import { APP_VERSION, BUILD_DATE } from '../app-info'
 import { useI18n, useLanguageStore, LANGUAGE_LABELS } from '../i18n'
 import type { Language, MessageKey } from '../i18n'
+import type { SettingsSectionId } from '../store'
 import type { AppChangelogEntry, AppUpdateInfo, AppUpdateProgressEvent } from '../../../shared/types'
 
 /** 5.1 安装方式展示模板（执行走 installClaudeCli 固定契约法，不经自由命令面；
@@ -18,24 +19,17 @@ const NATIVE_INSTALL_CMD =
 const NPM_INSTALL_CMD = 'npm install -g @anthropic-ai/claude-code'
 const CLAUDE_DOCS_URL = 'https://claude.ai/docs/setup'
 
-/** S14 双栏导航：六个分类（id 稳定作 activeSection 锚点；label 经 i18n）。
- * 顺序即左栏自上而下顺序 */
-const SETTINGS_SECTIONS: ReadonlyArray<{ id: string; labelKey: MessageKey }> = [
+/** 设置中心导航（id 稳定作 activeSection 锚点；label 经 i18n）。
+ *  顺序即左栏自上而下顺序；v1.2.1 把原独立「关于」弹窗并作末项分类。 */
+const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; labelKey: MessageKey }> = [
   { id: 'appearance', labelKey: 'settings.sectionAppearance' },
   { id: 'terminal', labelKey: 'settings.sectionTerminal' },
   { id: 'notify', labelKey: 'settings.sectionNotify' },
   { id: 'cli', labelKey: 'settings.sectionCli' },
   { id: 'update', labelKey: 'settings.sectionUpdate' },
-  { id: 'startup', labelKey: 'settings.sectionStartup' }
+  { id: 'startup', labelKey: 'settings.sectionStartup' },
+  { id: 'about', labelKey: 'settings.sectionAbout' }
 ]
-
-type SettingsSectionId =
-  | 'appearance'
-  | 'terminal'
-  | 'notify'
-  | 'cli'
-  | 'update'
-  | 'startup'
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -100,8 +94,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [appUpdReady, setAppUpdReady] = useState(false)
   /** v1.2.1 自动升级开关（main settings.json 持久化；缺省开） */
   const [autoUpdate, setAutoUpdate] = useState(true)
-  /** S14：当前展示的分类（默认首项「外观」） */
-  const [activeSection, setActiveSection] = useState<SettingsSectionId>('appearance')
+  /** S14：当前展示的分类（初值取 store.settingsSection——ⓘ 入口直达「关于」） */
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>(
+    () => useAppStore.getState().settingsSection
+  )
 
   // v1.1.0 下载进度订阅（main 经 cwb:event:app-update-progress 推送；v1.2.1 增加
   // available=自动检查结果 / waiting-tasks=等任务结束）
@@ -230,7 +226,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         : appUpd.upToDate
           ? t('settings.updateStateLatest', { version: appUpd.current })
           : t('settings.updateStateAvailable', { version: appUpd.latest }),
-    startup: closeToTray ? t('settings.closeToTraySummary') : t('settings.quitApp')
+    startup: closeToTray ? t('settings.closeToTraySummary') : t('settings.quitApp'),
+    about: t('settings.aboutSummary', { version: APP_VERSION })
   }
 
   const checkUpdate = async () => {
@@ -755,6 +752,27 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   {t('settings.launchAtLogin')}
                 </label>
                 <p className="hint-small">{t('settings.startupHint')}</p>
+              </div>
+            )}
+
+            {/* 关于（v1.2.1 由独立 AboutDialog 并入）：应用身份 + 许可证 + 作者。
+                纯静态只读——不发任何异步请求、不启 CLI */}
+            {activeSection === 'about' && (
+              <div className="dialog-section">
+                <p className="section-title">{t('settings.sectionAbout')}</p>
+                <div className="kv about-app-name">Claude Workbench</div>
+                <div className="kv">
+                  {t('about.version', { version: APP_VERSION })}
+                  {BUILD_DATE !== '' && t('about.build', { date: BUILD_DATE })}
+                </div>
+                <div className="kv">
+                  {t('about.license')}{' '}
+                  <a href="https://opensource.org/licenses/MIT" target="_blank" rel="noreferrer">
+                    MIT
+                  </a>
+                  {t('about.licenseTail')}
+                </div>
+                <div className="kv">{t('about.author')}</div>
               </div>
             )}
           </div>

@@ -7,9 +7,9 @@ import { installCwbMock, makeProject } from './test-helpers'
 import { useAppStore } from './store'
 
 /**
- * v0.5①⑤④N：About 弹窗入口与身份信息。v0.9 瘦身：主题/通知/CLI/更新/安装
- * 断言平移至 settings.test.tsx（经设置弹窗交互）；本文件只测身份页 +
- * 「打开设置」入口。
+ * v1.2.1：关于并入设置中心（用户指令「合并关于和设置这 2 个弹窗」）。
+ * 独立 AboutDialog 下线——应用身份信息成为设置中心左栏末项「关于」分类，
+ * ⓘ 图标保留为直达该分类的快捷入口（不再是另一个弹窗）。
  */
 
 const project = makeProject({ id: 'pa', name: 'AboutProj' })
@@ -21,9 +21,9 @@ beforeEach(() => {
     selectedProjectId: null,
     openTaskIds: [],
     activeTaskId: null,
-    aboutOpen: false,
     skillsOpen: false,
-    settingsOpen: false
+    settingsOpen: false,
+    settingsSection: 'appearance'
   })
 })
 afterEach(() => {
@@ -38,61 +38,67 @@ async function renderApp(): Promise<CwbApiMock> {
   return api
 }
 
-/**
- * 打开 About：点侧栏头部 ⓘ 图标按钮（v1.2.1 起版本号是纯文本，不再是入口；
- * 折叠态 rail 的 ⓘ 另有专门用例）
- */
+/** ⓘ 图标入口（侧栏头部）→ 设置弹窗，直接落在「关于」分类 */
 async function openAbout(): Promise<ReturnType<typeof within>> {
   const header = document.querySelector('.sidebar-header') as HTMLElement
   fireEvent.click(within(header).getByRole('button', { name: '关于 Claude Workbench' }))
-  const dialog = await screen.findByRole('dialog', { name: '关于' })
+  const dialog = await screen.findByRole('dialog', { name: '设置' })
   return within(dialog)
 }
 
-describe('About 渲染（v1.2.1：侧栏头部 ⓘ 图标入口；v0.9 瘦身为身份页）', () => {
-  it('侧栏显示 v1.2.1 文本（不可点击）；ⓘ 开 About：应用名/版本/作者/许可证 MIT', async () => {
+describe('关于并入设置中心（v1.2.1）', () => {
+  it('ⓘ 打开的是设置弹窗（唯一弹窗），且直接停在「关于」分类', async () => {
+    await renderApp()
+    const s = await openAbout()
+    const nav = s.getByRole('button', { name: /^关于/ })
+    expect(nav.getAttribute('aria-current')).toBe('true')
+    // 身份信息在右栏
+    expect(s.getByText('Claude Workbench')).toBeDefined()
+    expect(s.getByText(/版本 v1\.2\.1/)).toBeDefined()
+    expect(s.getByText('作者 Liu Haitao')).toBeDefined()
+    expect(s.getByText('MIT')).toBeDefined() // 许可证链接锚点
+    // 只有一个 dialog（不存在并列的两个弹窗）
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+  })
+
+  it('侧栏显示 v1.2.1 纯文本版本号（仍不可点）', async () => {
     await renderApp()
     expect(document.querySelector('.version-text')?.textContent).toContain('v1.2.1')
-    const about = await openAbout()
-    expect(about.getByText('Claude Workbench')).toBeDefined()
-    expect(about.getByText(/版本 v1.2.1/)).toBeDefined()
-    expect(about.getByText('作者 Liu Haitao')).toBeDefined()
-    expect(about.getByText('MIT')).toBeDefined() // 许可证链接锚点
+    expect(screen.queryByRole('button', { name: /^v1\./ })).toBeNull()
   })
 
-  it('折叠态 rail 底部 ⓘ 同开 About', async () => {
+  it('折叠态 rail 底部 ⓘ 同样落到设置弹窗的「关于」分类', async () => {
     await renderApp()
-    fireEvent.keyDown(window, { key: 'b', ctrlKey: true }) // v0.5.1：顶部 ☰ 已移除，折叠走 Ctrl+B
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true }) // 折叠走 Ctrl+B
     const rail = document.querySelector('.sidebar-rail') as HTMLElement
     fireEvent.click(within(rail).getByTitle('关于 Claude Workbench'))
-    expect(await screen.findByRole('dialog', { name: '关于' })).toBeDefined()
+    const dialog = await screen.findByRole('dialog', { name: '设置' })
+    expect(within(dialog).getByRole('button', { name: /^关于/ }).getAttribute('aria-current')).toBe(
+      'true'
+    )
   })
 
-  it('关闭：点「关闭」按钮弹窗消失', async () => {
+  it('⚙ 仍从「外观」进；左栏可按分类切换（关于 ↔ 外观 同一弹窗）', async () => {
     await renderApp()
-    const about = await openAbout()
-    fireEvent.click(about.getByRole('button', { name: '关闭' }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: '关于' })).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+    const dialog = await screen.findByRole('dialog', { name: '设置' })
+    const s = within(dialog)
+    expect(s.getByRole('button', { name: /^外观/ }).getAttribute('aria-current')).toBe('true')
+
+    fireEvent.click(s.getByRole('button', { name: /^关于/ }))
+    expect(s.getByText(/版本 v1\.2\.1/)).toBeDefined()
+    expect(s.getByRole('button', { name: /^关于/ }).getAttribute('aria-current')).toBe('true')
+
+    fireEvent.click(s.getByRole('button', { name: /^外观/ }))
+    expect(s.queryByText(/版本 v1\.2\.1/)).toBeNull() // 关于分类内容随切换卸载
+    expect(s.getByRole('radiogroup', { name: '界面主题' })).toBeDefined()
   })
-})
 
-describe('About 瘦身（v0.9：配置项迁往设置中心）', () => {
-  it('无主题/通知/CLI 区（不发任何异步获取）；「打开设置」开 Settings 且关闭自身', async () => {
-    const api = await renderApp()
-    const about = await openAbout()
-    // 迁出断言：主题三选、终端跟随、webhook、CLI 版本/更新区均不存在
-    expect(about.queryByRole('radiogroup', { name: '界面主题' })).toBeNull()
-    expect(about.queryByRole('checkbox', { name: '终端跟随界面主题' })).toBeNull()
-    expect(about.queryByLabelText('webhook URL')).toBeNull()
-    expect(about.queryByRole('button', { name: '检查更新' })).toBeNull()
-    expect(api.getClaudeVersionInfo).not.toHaveBeenCalled()
-    expect(api.getNotifyConfig).not.toHaveBeenCalled()
-    expect(api.getAppSettings).not.toHaveBeenCalled()
-
-    // 「打开设置」入口：开 Settings 并关闭 About（等价于用户从 About 跳转）
-    fireEvent.click(about.getByRole('button', { name: '打开设置' }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: '关于' })).toBeNull())
-    expect(await screen.findByRole('dialog', { name: '设置' })).toBeDefined()
-    await waitFor(() => expect(api.getClaudeVersionInfo).toHaveBeenCalledTimes(1)) // 设置侧实调
+  it('关闭按钮收掉整个设置弹窗（关于页不再有「打开设置」这种内部跳转）', async () => {
+    await renderApp()
+    const s = await openAbout()
+    expect(s.queryByRole('button', { name: '打开设置' })).toBeNull()
+    fireEvent.click(s.getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '设置' })).toBeNull())
   })
 })

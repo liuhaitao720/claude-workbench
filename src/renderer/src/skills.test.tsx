@@ -48,7 +48,6 @@ beforeEach(() => {
     selectedProjectId: null,
     openTaskIds: [],
     activeTaskId: null,
-    aboutOpen: false,
     skillsOpen: false
   })
 })
@@ -105,16 +104,17 @@ describe('入口与列表', () => {
     expect(await screen.findByRole('dialog', { name: 'Skills 管理' })).toBeDefined()
   })
 
-  it('listSkills 分组渲染：用户级/项目级组头；行=名称+描述+版本/作者+项目名', async () => {
+  it('listSkills 按生效方式分组：默认生效组头；行=名称+描述+版本/作者+来源标签', async () => {
     await renderApp([userSkill, projectSkill])
     const skills = await openSkills()
     expect(await skills.findByText('pdf')).toBeDefined()
     const titles = groupTitles()
-    expect(titles.some((t) => t.includes('用户级 · 全局生效'))).toBe(true)
-    expect(titles.some((t) => t.includes('项目级 · 仅该项目'))).toBe(true)
+    // v1.2.1：组头从「来源」（用户级/项目级）改成「生效方式」——默认生效在前
+    expect(titles.some((t) => t.includes('默认生效'))).toBe(true)
+    expect(titles.some((t) => t.includes('用户级 · 全局生效'))).toBe(false)
     expect(skills.getByText('PDF 文档处理与提取')).toBeDefined() // 描述
-    expect(skills.getByText('v1.2.0 · Alice')).toBeDefined() // 版本/作者 meta
-    expect(skills.getByText('SkillProj')).toBeDefined() // 项目级行带所属项目名
+    expect(skills.getByText('v1.2.0 · Alice · 用户级')).toBeDefined() // 版本/作者/来源
+    expect(skills.getByText(/项目级 · SkillProj/)).toBeDefined() // 项目级行带所属项目名
   })
 
   it('安全提示常驻：仅安装可信来源——skill 可携带可执行脚本', async () => {
@@ -132,7 +132,7 @@ describe('入口与列表', () => {
 
     gotoTab(skills, '在线搜索')
     expect(skills.getByLabelText('搜索 skill 市场')).toBeDefined()
-    expect(skills.queryByText('用户级 · 全局生效')).toBeNull()
+    expect(skills.queryByText('默认生效', { exact: false })).toBeNull()
 
     gotoTab(skills, '导入')
     expect(skills.getByLabelText('claude CLI 命令')).toBeDefined()
@@ -231,7 +231,7 @@ describe('导入通道①：导入文件夹', () => {
 })
 
 describe('v1.2.1 插件 skill（市场装完要能在已安装列表看到）', () => {
-  it('已安装页出现「插件」分组：行显示 pluginId，已停用的标「已停用」并给「启用」按钮', async () => {
+  it('已安装页按生效方式分组：启用的插件 skill 进「默认生效」，停用的进「已停用」组', async () => {
     await renderApp([
       pluginSkill(),
       pluginSkill({ name: 'ai-readiness', pluginId: 'postman@official', pluginEnabled: false })
@@ -239,7 +239,8 @@ describe('v1.2.1 插件 skill（市场装完要能在已安装列表看到）', 
     const skills = await openSkills()
     expect(await skills.findByText('skill-creator')).toBeDefined()
     const titles = groupTitles()
-    expect(titles.some((t) => t.includes('插件 · 由 marketplace 安装'))).toBe(true)
+    expect(titles.some((t) => t.includes('默认生效'))).toBe(true)
+    expect(titles.some((t) => t.includes('已停用'))).toBe(true)
 
     const enabledRow = document.querySelector('[data-skill-name="skill-creator"]') as HTMLElement
     expect(enabledRow.textContent).toContain('skill-creator@official')
@@ -286,6 +287,56 @@ describe('v1.2.1 插件 skill（市场装完要能在已安装列表看到）', 
     await skills.findByText('skill-creator')
     fireEvent.click(skills.getByRole('button', { name: '启用' }))
     expect(await skills.findByText(/插件未安装/)).toBeDefined()
+  })
+})
+
+describe('v1.2.1 生效方式分组与标注', () => {
+  it('默认生效在前、需显式 /名称 的其次、停用的最后；行内标出各自方式', async () => {
+    await renderApp([
+      // 需要显式 /名称 的 skill（disable-model-invocation: true）
+      { ...userSkill, name: 'zc-manual', dir: 'C:\\s\\zc-manual', activation: 'manual' },
+      // 默认生效
+      { ...userSkill, name: 'zc-auto', dir: 'C:\\s\\zc-auto', activation: 'auto' },
+      // 已停用插件
+      pluginSkill({ name: 'zc-off', pluginId: 'postman@official', pluginEnabled: false })
+    ])
+    const skills = await openSkills()
+    await skills.findByText('zc-auto')
+
+    const order = groupTitles()
+    expect(order[0]).toContain('默认生效')
+    expect(order[1]).toContain('需手动指定')
+    expect(order[2]).toContain('已停用')
+
+    const autoRow = document.querySelector('[data-skill-name="zc-auto"]') as HTMLElement
+    expect(autoRow.dataset.activation).toBe('auto')
+    expect(autoRow.textContent).not.toContain('需 /名称') // 默认项不挂标签
+
+    const manualRow = document.querySelector('[data-skill-name="zc-manual"]') as HTMLElement
+    expect(manualRow.dataset.activation).toBe('manual')
+    expect(manualRow.textContent).toContain('需 /名称')
+    // 手动组内仍是普通 skill：可移除
+    expect(manualRow.querySelector('button')?.textContent).toBe('移除')
+
+    // 组头说明文案（哪一档要显式指定）
+    expect(skills.getByText(/模型不会自动调用——只有你输入 \/名称 时才生效/)).toBeDefined()
+    expect(skills.getByText(/模型会按需自动调用；你也可以输入 \/名称 手动触发/)).toBeDefined()
+  })
+
+  it('paths（按文件触发）与 user-invocable:false（仅模型自动）也各有标注', async () => {
+    await renderApp([
+      { ...userSkill, name: 'zc-paths', dir: 'C:\\s\\zc-paths', activation: 'paths' },
+      { ...userSkill, name: 'zc-model', dir: 'C:\\s\\zc-model', activation: 'modelOnly' }
+    ])
+    const skills = await openSkills()
+    await skills.findByText('zc-paths')
+    const pathsRow = document.querySelector('[data-skill-name="zc-paths"]') as HTMLElement
+    const modelRow = document.querySelector('[data-skill-name="zc-model"]') as HTMLElement
+    expect(pathsRow.textContent).toContain('按文件触发')
+    expect(modelRow.textContent).toContain('仅模型自动')
+    // 两者都属于「默认生效」组（模型会自己用到）
+    expect(groupTitles().some((t) => t.includes('默认生效'))).toBe(true)
+    expect(groupTitles().some((t) => t.includes('需手动指定'))).toBe(false)
   })
 })
 
