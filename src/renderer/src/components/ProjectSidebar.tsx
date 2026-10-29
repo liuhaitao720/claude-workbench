@@ -37,8 +37,6 @@ export function ProjectSidebar() {
   const appUpdateInfo = useAppStore((s) => s.appUpdateInfo)
   const hasUpdate = appUpdateInfo !== null && !appUpdateInfo.upToDate
   const openSettings = useAppStore((s) => s.openSettings)
-  /** v1.2.1：关于并入设置中心——ⓘ 保留为直达「关于」分类的快捷入口（仍只有一个弹窗） */
-  const openAbout = () => openSettings('about')
 
   const [railCollapsed, setRailCollapsed] = useState(false)
   const [query, setQuery] = useState('')
@@ -155,8 +153,8 @@ export function ProjectSidebar() {
               </button>
             ))}
           </div>
-          {/* v0.5③ Skills（🧩——勿用 ⚡，与 skipPermissions 徽标撞形）；v0.9 设置
-              （⚙）；v0.5① 关于（ⓘ）——均置 ☰ 上方，⚙ 在 🧩 与 ⓘ 之间 */}
+          {/* v0.5③ Skills（🧩——勿用 ⚡，与 skipPermissions 徽标撞形）；v0.9 设置（⚙）
+              ——置 ☰ 上方；v1.2.1 起删除 ⓘ（关于并入设置中心左栏，无需独立入口） */}
           <button
             type="button"
             className="rail-btn"
@@ -175,14 +173,6 @@ export function ProjectSidebar() {
           </button>
           <button
             type="button"
-            className="rail-btn"
-            title={t('sidebar.about')}
-            onClick={openAbout}
-          >
-            ⓘ
-          </button>
-          <button
-            type="button"
             className="rail-btn rail-expand"
             title={t('sidebar.expand')}
             onClick={() => setRailCollapsed(false)}
@@ -196,9 +186,10 @@ export function ProjectSidebar() {
           aria-hidden={railCollapsed}
           style={railCollapsed ? { display: 'none' } : undefined}
         >
-          {/* v1.2.1 用户指令：版本号改为纯文本（不再开弹窗）；Skills / 设置 / 关于
-              三个入口收敛为图标按钮，紧跟版本号之后——头部一行解决，不再单独占
-              「Skills | 设置」一整行（腾出的空间给项目树）。 */}
+          {/* v1.2.1 用户指令：版本号改为纯文本（不再开弹窗）；Skills / 设置
+              两个入口收敛为图标按钮，紧跟版本号之后——头部一行解决，不再单独占
+              「Skills | 设置」一整行（腾出的空间给项目树）。
+              ⓘ 已删除（用户指令：只保留 Skills 和设置两个）——关于仍在设置左栏末项。 */}
           <div className="sidebar-header">
             <div className="sidebar-title-row">
               <h1>Claude Workbench</h1>
@@ -230,15 +221,6 @@ export function ProjectSidebar() {
                   onClick={() => openSettings()}
                 >
                   ⚙
-                </button>
-                <button
-                  type="button"
-                  className="btn-icon"
-                  title={t('sidebar.about')}
-                  aria-label={t('sidebar.about')}
-                  onClick={openAbout}
-                >
-                  ⓘ
                 </button>
               </span>
             </div>

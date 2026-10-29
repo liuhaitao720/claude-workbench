@@ -32,7 +32,6 @@ export const zh = {
   'sidebar.skills': 'Skills 管理',
   'sidebar.skillsLabel': 'Skills',
   'sidebar.settings': '设置',
-  'sidebar.about': '关于 Claude Workbench',
   'sidebar.expand': '展开侧栏 (Ctrl+B)',
   'sidebar.searchPlaceholder': '搜索任务/项目…',
   'sidebar.searchAria': '搜索任务/项目',
@@ -262,8 +261,7 @@ export const zh = {
   'skills.marketInstallFailed': '安装失败：{error}',
   'skills.marketCount': '共 {count} 条',
 
-  // ── About ───────────────────────────────────────────────
-  'about.aria': '关于',
+  // ── About（v1.2.2：只剩设置左栏「关于」分类在用，弹窗 aria 键已随 ⓘ 删除）──
   'about.version': '版本 v{version}',
   'about.build': ' · 构建 {date}',
   'about.license': '许可证',
@@ -368,7 +366,6 @@ export const en: Record<MessageKey, string> = {
   'sidebar.skills': 'Manage skills',
   'sidebar.skillsLabel': 'Skills',
   'sidebar.settings': 'Settings',
-  'sidebar.about': 'About Claude Workbench',
   'sidebar.expand': 'Expand sidebar (Ctrl+B)',
   'sidebar.searchPlaceholder': 'Search tasks / projects…',
   'sidebar.searchAria': 'Search tasks and projects',
@@ -596,7 +593,6 @@ export const en: Record<MessageKey, string> = {
   'skills.marketInstallFailed': 'Install failed: {error}',
   'skills.marketCount': '{count} results',
 
-  'about.aria': 'About',
   'about.version': 'Version v{version}',
   'about.build': ' · built {date}',
   'about.license': 'License',

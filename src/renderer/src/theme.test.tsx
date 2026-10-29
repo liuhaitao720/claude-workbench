@@ -61,10 +61,9 @@ async function renderApp() {
   return api
 }
 
-/** 打开「关于」（v1.2.1 并入设置中心：点侧栏头部 ⓘ → 设置弹窗的「关于」分类） */
+/** 打开设置（v1.2.2：侧栏 ⓘ 已删——统一点头部 ⚙ 进设置弹窗） */
 async function openAbout(): Promise<ReturnType<typeof within>> {
-  const header = document.querySelector('.sidebar-header') as HTMLElement
-  fireEvent.click(within(header).getByRole('button', { name: '关于 Claude Workbench' }))
+  fireEvent.click(screen.getByRole('button', { name: '设置' }))
   const dialog = await screen.findByRole('dialog', { name: '设置' })
   return within(dialog)
 }
@@ -169,7 +168,7 @@ describe('终端主题与 UI 主题解耦（评审④-1：浅 UI 下终端默认
 })
 
 describe('A1：Escape 统一修复（document 级——焦点不在弹窗内也关闭）', () => {
-  it('关于（并入设置后）：Escape 关闭（焦点留在弹窗外的触发按钮场景）', async () => {
+  it('设置弹窗：Escape 关闭（焦点留在弹窗外的触发按钮场景）', async () => {
     await renderApp()
     await openAbout()
     expect(screen.getByRole('dialog', { name: '设置' })).toBeDefined()

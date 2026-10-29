@@ -9,7 +9,6 @@ import { FONT_SIZE_MAX, FONT_SIZE_MIN, clampFontSize, loadFontSize } from '../fo
 import { APP_VERSION, BUILD_DATE } from '../app-info'
 import { useI18n, useLanguageStore, LANGUAGE_LABELS } from '../i18n'
 import type { Language, MessageKey } from '../i18n'
-import type { SettingsSectionId } from '../store'
 import type { AppChangelogEntry, AppUpdateInfo, AppUpdateProgressEvent } from '../../../shared/types'
 
 /** 5.1 安装方式展示模板（执行走 installClaudeCli 固定契约法，不经自由命令面；
@@ -18,6 +17,16 @@ const NATIVE_INSTALL_CMD =
   'powershell.exe -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"'
 const NPM_INSTALL_CMD = 'npm install -g @anthropic-ai/claude-code'
 const CLAUDE_DOCS_URL = 'https://claude.ai/docs/setup'
+
+/** 设置中心分类 id（左栏锚点；v1.2.1 把原独立「关于」弹窗并作末项） */
+type SettingsSectionId =
+  | 'appearance'
+  | 'terminal'
+  | 'notify'
+  | 'cli'
+  | 'update'
+  | 'startup'
+  | 'about'
 
 /** 设置中心导航（id 稳定作 activeSection 锚点；label 经 i18n）。
  *  顺序即左栏自上而下顺序；v1.2.1 把原独立「关于」弹窗并作末项分类。 */
@@ -94,10 +103,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [appUpdReady, setAppUpdReady] = useState(false)
   /** v1.2.1 自动升级开关（main settings.json 持久化；缺省开） */
   const [autoUpdate, setAutoUpdate] = useState(true)
-  /** S14：当前展示的分类（初值取 store.settingsSection——ⓘ 入口直达「关于」） */
-  const [activeSection, setActiveSection] = useState<SettingsSectionId>(
-    () => useAppStore.getState().settingsSection
-  )
+  /** S14：当前展示的分类（默认首项「外观」；v1.2.2 起无 ⓘ 直达入口） */
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>('appearance')
 
   // v1.1.0 下载进度订阅（main 经 cwb:event:app-update-progress 推送；v1.2.1 增加
   // available=自动检查结果 / waiting-tasks=等任务结束）

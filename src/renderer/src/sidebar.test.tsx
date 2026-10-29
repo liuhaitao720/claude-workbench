@@ -360,12 +360,13 @@ describe('快捷键（S6-F：Ctrl+N/F/B，焦点守卫）', () => {
 })
 
 // ── v1.2.1 设置入口：展开态头部图标组（版本号后）+ 折叠 rail ⚙ ─────────────
+// v1.2.2：ⓘ 入口删除（用户指令「版本后面只保留 Skills 和设置」）
 
-describe('设置入口（v1.2.1 图标化）', () => {
+describe('设置入口（v1.2.2 图标化：只留 🧩 ⚙）', () => {
   const pg = makeProject({ id: 'pg', name: 'GitProj' })
   const runner = makeTask({ id: 'tr', projectId: 'pg', name: 'runner', status: 'running' })
 
-  it('展开态：版本号后依次 🧩 ⚙ ⓘ 三个图标按钮；点 ⚙ 开设置弹窗', async () => {
+  it('展开态：版本号后依次 🧩 ⚙ 两个图标按钮（无 ⓘ）；点 ⚙ 开设置弹窗', async () => {
     await renderApp([pg], [runner])
     const header = document.querySelector('.sidebar-header') as HTMLElement
     expect(header.querySelector('.version-text')?.textContent).toContain('v1.2.1')
@@ -373,24 +374,24 @@ describe('设置入口（v1.2.1 图标化）', () => {
     const group = header.querySelector('.sidebar-icon-group') as HTMLElement
     expect(group).not.toBeNull()
     const buttons = Array.from(group.querySelectorAll('button')) as HTMLElement[]
-    expect(buttons.map((b) => b.textContent)).toEqual(['🧩', '⚙', 'ⓘ'])
+    expect(buttons.map((b) => b.textContent)).toEqual(['🧩', '⚙'])
 
     const settingsBtn = within(group).getByRole('button', { name: '设置' })
     fireEvent.click(settingsBtn)
     expect(await screen.findByRole('dialog', { name: '设置' })).toBeDefined()
   })
 
-  it('折叠态 rail ⚙（🧩 与 ⓘ 之间）：点击开设置弹窗', async () => {
+  it('折叠态 rail ⚙ 紧跟 🧩，其后无 ⓘ；点击开设置弹窗', async () => {
     await renderApp([pg], [runner])
     fireEvent.keyDown(window, { key: 'b', ctrlKey: true }) // 折叠
     const rail = document.querySelector('.sidebar-rail') as HTMLElement
     const gear = within(rail).getByTitle('设置')
-    // 顺序：⚙ 紧跟 🧩 之后、ⓘ 之前（rail-btn 先例）
+    // 顺序：⚙ 紧跟 🧩 之后；rail 里不再有关于入口
     const btns = Array.from(rail.querySelectorAll('.rail-btn')) as HTMLElement[]
     const idx = btns.indexOf(gear)
     expect(idx).toBeGreaterThan(0)
     expect(btns[idx - 1].textContent).toBe('🧩')
-    expect(btns[idx + 1].textContent).toBe('ⓘ')
+    expect(btns.map((b) => b.textContent)).not.toContain('ⓘ')
 
     fireEvent.click(gear)
     expect(await screen.findByRole('dialog', { name: '设置' })).toBeDefined()

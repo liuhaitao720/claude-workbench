@@ -18,8 +18,9 @@ const isSmokeMode = new URLSearchParams(window.location.search).get('smoke') ===
  * v0.5①③：底部状态栏（仅版本号，点击开 About）；About/Skills 弹窗状态在 store
  * （StatusBar、折叠 rail、侧栏按钮多入口），onClose 统一关弹窗+焦点还终端。
  * v0.9：Settings 设置中心弹窗同族（About 瘦身为身份页 + 「打开设置」入口）。
- * v1.2.1：关于并入设置中心（左栏末项分类）——独立 AboutDialog 下线，ⓘ 入口直达
- * 「关于」分类；store 里只有 skillsOpen / settingsOpen 两个弹窗开关。
+ * v1.2.1：关于并入设置中心（左栏末项分类）——独立 AboutDialog 下线；
+ * store 里只有 skillsOpen / settingsOpen 两个弹窗开关。
+ * v1.2.2：侧栏 ⓘ 入口删除（版本号后只留 Skills / 设置两个图标），关于仍从设置左栏进。
  */
 export function App() {
   const t = useI18n()
