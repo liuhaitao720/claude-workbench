@@ -113,10 +113,8 @@ export const zh = {
   'settings.sectionTerminal': '终端',
   'settings.sectionNotify': '通知',
   'settings.sectionCli': 'claude CLI',
-  'settings.sectionUpdate': '应用更新',
   'settings.sectionStartup': '启动',
   'settings.sectionAbout': '关于',
-  'settings.aboutSummary': 'v{version}',
   'settings.language': '语言 / Language',
 
   // ── 设置：外观 ──────────────────────────────────────────
@@ -173,7 +171,7 @@ export const zh = {
   'settings.notesFailed': '更新说明获取失败：{error}',
   'settings.installConfirm': '即将执行安装命令：\n\n  {cmd}\n\n确认执行？（请确认来源可信）',
 
-  // ── 设置：应用更新 ──────────────────────────────────────
+  // ── 设置：应用更新（v1.2.2 起渲染在「关于」分类内） ─────────
   'settings.appUpdateTitle': '应用更新',
   'settings.appDownload': '下载更新',
   'settings.appDownloading': '下载中 {percent}%',
@@ -261,7 +259,7 @@ export const zh = {
   'skills.marketInstallFailed': '安装失败：{error}',
   'skills.marketCount': '共 {count} 条',
 
-  // ── About（v1.2.2：只剩设置左栏「关于」分类在用，弹窗 aria 键已随 ⓘ 删除）──
+  // ── About（v1.2.2：渲染在设置左栏「关于」分类内，与「应用更新」同页）──
   'about.version': '版本 v{version}',
   'about.build': ' · 构建 {date}',
   'about.license': '许可证',
@@ -443,10 +441,8 @@ export const en: Record<MessageKey, string> = {
   'settings.sectionTerminal': 'Terminal',
   'settings.sectionNotify': 'Notifications',
   'settings.sectionCli': 'claude CLI',
-  'settings.sectionUpdate': 'App updates',
   'settings.sectionStartup': 'Startup',
   'settings.sectionAbout': 'About',
-  'settings.aboutSummary': 'v{version}',
   'settings.language': 'Language / 语言',
 
   'settings.themeAria': 'Interface theme',

@@ -1056,6 +1056,21 @@ button {
   font-weight: 600;
 }
 
+/* v1.2.2「关于」分类内「应用更新」分组小标题：与上方身份信息拉开间距，
+   以分隔线区分"应用本身的信息"与"更新操作"两个子区 */
+.about-update-title {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* 关于页应用名（v1.2.1 由独立弹窗并入）：比普通 kv 行更醒目 */
+.kv.about-app-name {
+  color: var(--text-1);
+  font-weight: 600;
+  font-size: 13px;
+}
+
 .kv {
   margin: 2px 0;
   color: var(--text-2);

@@ -365,9 +365,10 @@ describe('claude CLI（迁自 About）', () => {
   })
 })
 
-// ── 应用更新（v1.1.0：检测/changelog 展示/下载升级 + 侧栏角标） ────────────
+// ── 应用更新（v1.1.0：检测/changelog 展示/下载升级 + 侧栏角标；
+//    v1.2.2 并入「关于」分类——身份与更新同页） ─────────────────────────────
 
-describe('应用更新', () => {
+describe('应用更新（「关于」分类内）', () => {
   it('检查更新 → 可更新：版本对比 + CHANGELOG 区间展示 + 下载→就绪→重启并升级链路', async () => {
     const api = installCwbMock({ projects: [project], tasks: [taskA] })
     vi.mocked(api.checkAppUpdate).mockResolvedValue({
@@ -381,7 +382,7 @@ describe('应用更新', () => {
     })
     render(<App />)
     const s = await openSettings()
-    gotoSection(s, '应用更新')
+    gotoSection(s, '关于')
     fireEvent.click(s.getByRole('button', { name: '检查更新' }))
     expect(await s.findByText(/最新 v1.2.0 · 可更新/)).toBeDefined()
     expect(s.getByText('v1.2.0')).toBeDefined()
@@ -413,7 +414,7 @@ describe('应用更新', () => {
     })
     render(<App />)
     const s = await openSettings()
-    gotoSection(s, '应用更新')
+    gotoSection(s, '关于')
     fireEvent.click(s.getByRole('button', { name: '检查更新' }))
     expect(await s.findByText(/已是最新/)).toBeDefined()
     expect(s.getByText('自更新上线')).toBeDefined()
@@ -436,7 +437,7 @@ describe('应用更新', () => {
   it('v1.2.1 自动升级：开关缺省勾选、关闭写 settings；available 事件落 store；waiting-tasks 显示等待态', async () => {
     const api = await renderApp()
     const s = await openSettings()
-    gotoSection(s, '应用更新')
+    gotoSection(s, '关于')
     // 缺省开（main settings 缺字段时视为 true）
     const auto = s.getByRole('checkbox', { name: '有新版本时自动升级' }) as HTMLInputElement
     expect(auto.checked).toBe(true)

@@ -18,24 +18,23 @@ const NATIVE_INSTALL_CMD =
 const NPM_INSTALL_CMD = 'npm install -g @anthropic-ai/claude-code'
 const CLAUDE_DOCS_URL = 'https://claude.ai/docs/setup'
 
-/** 设置中心分类 id（左栏锚点；v1.2.1 把原独立「关于」弹窗并作末项） */
+/** 设置中心分类 id（左栏锚点；v1.2.2「应用更新」并入末项「关于」——身份+更新同一分类） */
 type SettingsSectionId =
   | 'appearance'
   | 'terminal'
   | 'notify'
   | 'cli'
-  | 'update'
   | 'startup'
   | 'about'
 
 /** 设置中心导航（id 稳定作 activeSection 锚点；label 经 i18n）。
- *  顺序即左栏自上而下顺序；v1.2.1 把原独立「关于」弹窗并作末项分类。 */
+ *  顺序即左栏自上而下顺序；v1.2.2 把「关于」与「应用更新」合并为一个末项分类
+ *  （应用身份在上、更新检测/升级在下——同属"这个应用本身"的信息与操作）。 */
 const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; labelKey: MessageKey }> = [
   { id: 'appearance', labelKey: 'settings.sectionAppearance' },
   { id: 'terminal', labelKey: 'settings.sectionTerminal' },
   { id: 'notify', labelKey: 'settings.sectionNotify' },
   { id: 'cli', labelKey: 'settings.sectionCli' },
-  { id: 'update', labelKey: 'settings.sectionUpdate' },
   { id: 'startup', labelKey: 'settings.sectionStartup' },
   { id: 'about', labelKey: 'settings.sectionAbout' }
 ]
@@ -47,13 +46,14 @@ function errMsg(err: unknown): string {
 /**
  * 设置中心弹窗（v0.9 9 项设置 + S14 双栏重设计，/frontend-design 定稿）：
  * macOS 系统设置式左导航 + 右内容——
- * - 左栏 5 分类导航项，每项附当前值摘要（主题 / 字体·字号 / 通知 / CLI 版本 /
- *   启动行为），全部从既有 state 派生——不打开分类也能扫出当前值
+ * - 左栏分类导航项，每项附当前值摘要（主题 / 字体·字号 / 通知 / CLI 版本 /
+ *   启动行为 / 应用更新状态），全部从既有 state 派生——不打开分类也能扫出当前值
  * - 右栏按 activeSection 条件渲染（默认「外观」；非当前 section 不渲染）；
- *   五个 section 内部 JSX 沿 v0.9 原样（交互/测试锚点不动，只重新分区布局）
+ *   各 section 内部 JSX 沿 v0.9 原样（交互/测试锚点不动，只重新分区布局）
  * - v0.9 全部保留项不动：外观 主题三选+终端跟随；终端 字体族+字号 stepper；
  *   通知 webhook；claude CLI 版本/更新/安装（CliOutputView 含 commandIdRef
  *   卸载 kill）；启动与窗口 关闭行为+开机自启
+ * - v1.2.2：左栏 6 分类——「应用更新」并入末项「关于」（身份+更新同页）
  * - Escape/遮罩关闭/useEscapeClose、底部「关闭」按钮（跨栏）全保留
  */
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
@@ -212,7 +212,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   ]
 
   // S14 左栏当前值摘要：全部从既有 state 派生（字号输入清空的中间态回退到实际
-  // 生效值；CLI 检测中/失败均不属于「已装」——失败与未装同示「未安装」）
+  // 生效值；CLI 检测中/失败均不属于「已装」——失败与未装同示「未安装」；
+  // v1.2.2「关于」摘要改为应用更新状态——分类里更新是主要动态信息，版本号在内容区首行）
   const sectionSummaries: Record<SettingsSectionId, string> = {
     appearance: themeChoices.find((c) => c.value === theme)?.label ?? '',
     terminal: `${fontFamily} · ${fontSizeInput === '' ? String(loadFontSize()) : fontSizeInput}`,
@@ -227,14 +228,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       : cliInfo !== null || cliError !== ''
         ? t('settings.cliStateNotInstalled')
         : t('common.detecting'),
-    update:
+    startup: closeToTray ? t('settings.closeToTraySummary') : t('settings.quitApp'),
+    about:
       appUpd === null
         ? t('settings.updateStateUnchecked')
         : appUpd.upToDate
           ? t('settings.updateStateLatest', { version: appUpd.current })
-          : t('settings.updateStateAvailable', { version: appUpd.latest }),
-    startup: closeToTray ? t('settings.closeToTraySummary') : t('settings.quitApp'),
-    about: t('settings.aboutSummary', { version: APP_VERSION })
+          : t('settings.updateStateAvailable', { version: appUpd.latest })
   }
 
   const checkUpdate = async () => {
@@ -620,10 +620,26 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               </div>
             )}
 
-            {/* v1.1.0 应用自更新：检测 + 更新说明 + 一键升级 */}
-            {activeSection === 'update' && (
+            {/* 关于（v1.2.1 并入设置；v1.2.2 再把「应用更新」并进来）：应用身份在上
+                （纯静态只读），更新检测/升级链路在下——同属"这个应用本身"的信息与操作 */}
+            {activeSection === 'about' && (
               <div className="dialog-section">
-                <p className="section-title">{t('settings.appUpdateTitle')}</p>
+                <p className="section-title">{t('settings.sectionAbout')}</p>
+                <div className="kv about-app-name">Claude Workbench</div>
+                <div className="kv">
+                  {t('about.version', { version: APP_VERSION })}
+                  {BUILD_DATE !== '' && t('about.build', { date: BUILD_DATE })}
+                </div>
+                <div className="kv">
+                  {t('about.license')}{' '}
+                  <a href="https://opensource.org/licenses/MIT" target="_blank" rel="noreferrer">
+                    MIT
+                  </a>
+                  {t('about.licenseTail')}
+                </div>
+                <div className="kv">{t('about.author')}</div>
+
+                <p className="section-title about-update-title">{t('settings.appUpdateTitle')}</p>
                 {/* v1.2.1 自动升级开关（缺省开）：无需点按钮——下载就绪且无运行任务即自动重启升级 */}
                 <label className="dialog-check">
                   <input
@@ -759,27 +775,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   {t('settings.launchAtLogin')}
                 </label>
                 <p className="hint-small">{t('settings.startupHint')}</p>
-              </div>
-            )}
-
-            {/* 关于（v1.2.1 由独立 AboutDialog 并入）：应用身份 + 许可证 + 作者。
-                纯静态只读——不发任何异步请求、不启 CLI */}
-            {activeSection === 'about' && (
-              <div className="dialog-section">
-                <p className="section-title">{t('settings.sectionAbout')}</p>
-                <div className="kv about-app-name">Claude Workbench</div>
-                <div className="kv">
-                  {t('about.version', { version: APP_VERSION })}
-                  {BUILD_DATE !== '' && t('about.build', { date: BUILD_DATE })}
-                </div>
-                <div className="kv">
-                  {t('about.license')}{' '}
-                  <a href="https://opensource.org/licenses/MIT" target="_blank" rel="noreferrer">
-                    MIT
-                  </a>
-                  {t('about.licenseTail')}
-                </div>
-                <div className="kv">{t('about.author')}</div>
               </div>
             )}
           </div>

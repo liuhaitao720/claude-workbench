@@ -10,7 +10,7 @@ import { useAppStore } from './store'
  * v1.2.1：关于并入设置中心（用户指令「合并关于和设置这 2 个弹窗」）。
  * 独立 AboutDialog 下线——应用身份信息成为设置中心左栏末项「关于」分类。
  * v1.2.2：侧栏 ⓘ 入口删除（用户指令「版本后面只保留 Skills 和设置」）——
- * 「关于」现在唯一入口是设置左栏。
+ * 「关于」现在唯一入口是设置左栏；「应用更新」也并进同一分类（身份+更新同页）。
  */
 
 const project = makeProject({ id: 'pa', name: 'AboutProj' })
@@ -66,7 +66,7 @@ describe('关于并入设置中心（v1.2.2：侧栏只留 Skills / 设置）', 
     expect(within(rail).getByTitle('设置')).toBeDefined()
   })
 
-  it('设置左栏「关于」分类：应用名 / 版本 / 作者 / MIT，且是唯一弹窗', async () => {
+  it('设置左栏「关于」分类：应用名 / 版本 / 作者 / MIT + 应用更新区，且是唯一弹窗', async () => {
     await renderApp()
     const s = await openAbout()
     expect(s.getByRole('button', { name: /^关于/ }).getAttribute('aria-current')).toBe('true')
@@ -74,6 +74,11 @@ describe('关于并入设置中心（v1.2.2：侧栏只留 Skills / 设置）', 
     expect(s.getByText(/版本 v1\.2\.1/)).toBeDefined()
     expect(s.getByText('作者 Liu Haitao')).toBeDefined()
     expect(s.getByText('MIT')).toBeDefined() // 许可证链接锚点
+    // v1.2.2：应用更新并进来（左栏不再有单独的「应用更新」导航项）
+    expect(s.getByText('应用更新')).toBeDefined() // 内容区的分组小标题
+    expect(s.getByRole('button', { name: '检查更新' })).toBeDefined()
+    expect(s.getByRole('checkbox', { name: '有新版本时自动升级' })).toBeDefined()
+    expect(s.queryByRole('button', { name: /^应用更新/ })).toBeNull() // 左栏导航项已合并
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
   })
 
