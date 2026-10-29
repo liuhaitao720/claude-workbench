@@ -89,17 +89,17 @@ const groupTitles = (): string[] =>
   Array.from(document.querySelectorAll('.skill-group-title')).map((el) => el.textContent ?? '')
 
 describe('入口与列表', () => {
-  it('侧栏「Skills」按钮 + 折叠态 rail 🧩 均开弹窗', async () => {
+  it('侧栏「Skills」按钮 + 折叠态 rail skills 图标（v1.2.2 内联 SVG）均开弹窗', async () => {
     await renderApp()
     const skills = await openSkills()
     expect(skills.getByText('Skills 管理')).toBeDefined()
 
-    // rail 折叠态入口（注意勿用 ⚡——与 skipPermissions 徽标撞形）
+    // rail 折叠态入口（SVG 拼图图标，无文本——data-icon 锚点）
     fireEvent.click(skills.getByRole('button', { name: '关闭' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Skills 管理' })).toBeNull())
     fireEvent.keyDown(window, { key: 'b', ctrlKey: true }) // v0.5.1：顶部 ☰ 移除
     const rail = document.querySelector('.sidebar-rail') as HTMLElement
-    expect(rail.textContent).toContain('🧩')
+    expect(rail.querySelector('button[data-icon="skills"] svg')).not.toBeNull()
     fireEvent.click(within(rail).getByTitle('Skills 管理'))
     expect(await screen.findByRole('dialog', { name: 'Skills 管理' })).toBeDefined()
   })

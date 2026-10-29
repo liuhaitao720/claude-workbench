@@ -159,14 +159,22 @@ button {
 
 .btn-icon {
   min-width: 26px;
-  padding: 3px 6px;
+  padding: 3px 5px;
   border-radius: 6px;
   border: none;
   background: none;
-  color: var(--text-3);
+  /* v1.2.2：text-3 → text-2——SVG 线型图标比 emoji 视觉更细，提一档保证显眼 */
+  color: var(--text-2);
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-icon svg {
+  display: block;
 }
 
 .btn-icon:hover {
@@ -755,6 +763,14 @@ button {
   color: var(--text-2);
   font-size: 15px;
   cursor: pointer;
+  /* v1.2.2：rail 内 SVG 图标与 emoji 混用时基线统一 */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rail-btn svg {
+  display: block;
 }
 
 .rail-btn:hover {

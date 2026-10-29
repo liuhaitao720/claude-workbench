@@ -153,23 +153,27 @@ export function ProjectSidebar() {
               </button>
             ))}
           </div>
-          {/* v0.5③ Skills（🧩——勿用 ⚡，与 skipPermissions 徽标撞形）；v0.9 设置（⚙）
-              ——置 ☰ 上方；v1.2.1 起删除 ⓘ（关于并入设置中心左栏，无需独立入口） */}
+          {/* v0.5③ Skills；v0.9 设置——置 ☰ 上方；v1.2.1 起删除 ⓘ（关于并入设置中心左栏，
+              无需独立入口）。v1.2.2 图标改为内联 SVG（用户指令：常用风格、易识别、
+              比原先的 emoji 大）——线宽 1.8 的 stroke 图标对齐主流 UI 图标观感，
+              双主题经 currentColor 自动适配 */}
           <button
             type="button"
             className="rail-btn"
             title={t('sidebar.skills')}
+            data-icon="skills"
             onClick={openSkills}
           >
-            🧩
+            <IconSkills />
           </button>
           <button
             type="button"
             className="rail-btn"
             title={t('sidebar.settings')}
+            data-icon="settings"
             onClick={() => openSettings()}
           >
-            ⚙
+            <IconSettings />
           </button>
           <button
             type="button"
@@ -209,18 +213,20 @@ export function ProjectSidebar() {
                   className="btn-icon"
                   title={t('sidebar.skills')}
                   aria-label={t('sidebar.skillsLabel')}
+                  data-icon="skills"
                   onClick={openSkills}
                 >
-                  🧩
+                  <IconSkills />
                 </button>
                 <button
                   type="button"
                   className="btn-icon"
                   title={t('sidebar.settings')}
                   aria-label={t('sidebar.settings')}
+                  data-icon="settings"
                   onClick={() => openSettings()}
                 >
-                  ⚙
+                  <IconSettings />
                 </button>
               </span>
             </div>
@@ -302,6 +308,33 @@ function SkipPermsCheck({ checked, onChange }: { checked: boolean; onChange: (v:
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
       {t('sidebar.skipPermsLabel')}
     </label>
+  )
+}
+
+// ── v1.2.2 侧栏图标（内联 SVG，stroke=currentColor 双主题自适配） ──────────
+// 用户指令：简单、显眼、常用风格、易识别。取 Lucide/Feather 线型图标（业界通用形）：
+// Skills=拼图块（沿用"skill=能力模块"的既有心智）；Settings=齿轮（全球通用语义）。
+// 原 emoji（🧩⚙）在各平台渲染大小不一、Windows 下偏小且彩色抢焦点——统一线型更稳。
+
+/** 拼图块（Lucide puzzle 图形，尺寸 16px、线宽 1.8） */
+function IconSkills() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.077.877.528 1.073 1.01a2.5 2.5 0 1 0 3.259-3.259c-.482-.196-.933-.558-1.01-1.073-.05-.336.062-.676.303-.917l1.525-1.525A2.402 2.402 0 0 1 12 1.998c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.878.289z" />
+      <path d="M13.5 6.5 9.5 10.5" />
+    </svg>
+  )
+}
+
+/** 齿轮（Lucide settings 形，尺寸 16px、线宽 1.8） */
+function IconSettings() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
   )
 }
 

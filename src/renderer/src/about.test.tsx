@@ -48,12 +48,15 @@ async function openAbout(): Promise<ReturnType<typeof within>> {
 }
 
 describe('关于并入设置中心（v1.2.2：侧栏只留 Skills / 设置）', () => {
-  it('侧栏头部只有 🧩 ⚙ 两个图标按钮（ⓘ 已删除）', async () => {
+  it('侧栏头部只有 Skills / 设置两个图标按钮（无关于入口；v1.2.2 图标为内联 SVG）', async () => {
     await renderApp()
     const header = document.querySelector('.sidebar-header') as HTMLElement
     const group = header.querySelector('.sidebar-icon-group') as HTMLElement
     const buttons = Array.from(group.querySelectorAll('button')) as HTMLElement[]
-    expect(buttons.map((b) => b.textContent)).toEqual(['🧩', '⚙'])
+    expect(buttons.map((b) => b.dataset.icon)).toEqual(['skills', 'settings'])
+    // SVG 真实渲染（常用线型图标：拼图 / 齿轮）
+    expect(buttons[0]!.querySelector('svg')).not.toBeNull()
+    expect(buttons[1]!.querySelector('svg')).not.toBeNull()
     expect(screen.queryByRole('button', { name: /关于 Claude Workbench/ })).toBeNull()
   })
 

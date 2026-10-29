@@ -360,38 +360,44 @@ describe('快捷键（S6-F：Ctrl+N/F/B，焦点守卫）', () => {
 })
 
 // ── v1.2.1 设置入口：展开态头部图标组（版本号后）+ 折叠 rail ⚙ ─────────────
-// v1.2.2：ⓘ 入口删除（用户指令「版本后面只保留 Skills 和设置」）
+// v1.2.2：ⓘ 入口删除（用户指令「版本后面只保留 Skills 和设置」）；
+//        图标改内联 SVG（用户指令：常用风格、易识别、比 emoji 大）——按钮无文本，
+//        以 data-icon 锚点断言
 
-describe('设置入口（v1.2.2 图标化：只留 🧩 ⚙）', () => {
+describe('设置入口（v1.2.2：Skills / 设置两个 SVG 图标按钮）', () => {
   const pg = makeProject({ id: 'pg', name: 'GitProj' })
   const runner = makeTask({ id: 'tr', projectId: 'pg', name: 'runner', status: 'running' })
 
-  it('展开态：版本号后依次 🧩 ⚙ 两个图标按钮（无 ⓘ）；点 ⚙ 开设置弹窗', async () => {
+  it('展开态：版本号后依次 skills/settings 两个图标按钮（无关于入口）；点 ⚙ 开设置弹窗', async () => {
     await renderApp([pg], [runner])
     const header = document.querySelector('.sidebar-header') as HTMLElement
     expect(header.querySelector('.version-text')?.textContent).toContain('v1.2.1')
-    // 图标组紧跟版本号（DOM 顺序即视觉顺序）
+    // 图标组紧跟版本号（DOM 顺序即视觉顺序）；data-icon=svg 图形锚点
     const group = header.querySelector('.sidebar-icon-group') as HTMLElement
     expect(group).not.toBeNull()
     const buttons = Array.from(group.querySelectorAll('button')) as HTMLElement[]
-    expect(buttons.map((b) => b.textContent)).toEqual(['🧩', '⚙'])
+    expect(buttons.map((b) => b.dataset.icon)).toEqual(['skills', 'settings'])
+    // SVG 线型图标真实渲染（非空 emoji 占位）
+    expect(buttons[0]!.querySelector('svg')).not.toBeNull()
+    expect(buttons[1]!.querySelector('svg')).not.toBeNull()
 
     const settingsBtn = within(group).getByRole('button', { name: '设置' })
     fireEvent.click(settingsBtn)
     expect(await screen.findByRole('dialog', { name: '设置' })).toBeDefined()
   })
 
-  it('折叠态 rail ⚙ 紧跟 🧩，其后无 ⓘ；点击开设置弹窗', async () => {
+  it('折叠态 rail ⚙ 紧跟 🧩，其后无关于入口；点击开设置弹窗', async () => {
     await renderApp([pg], [runner])
     fireEvent.keyDown(window, { key: 'b', ctrlKey: true }) // 折叠
     const rail = document.querySelector('.sidebar-rail') as HTMLElement
     const gear = within(rail).getByTitle('设置')
-    // 顺序：⚙ 紧跟 🧩 之后；rail 里不再有关于入口
+    // 顺序：settings 紧跟 skills 之后；rail 里不再有关于入口
     const btns = Array.from(rail.querySelectorAll('.rail-btn')) as HTMLElement[]
     const idx = btns.indexOf(gear)
     expect(idx).toBeGreaterThan(0)
-    expect(btns[idx - 1].textContent).toBe('🧩')
-    expect(btns.map((b) => b.textContent)).not.toContain('ⓘ')
+    expect(btns[idx - 1].dataset.icon).toBe('skills')
+    expect(btns.map((b) => b.dataset.icon)).not.toContain('about')
+    expect(gear.querySelector('svg')).not.toBeNull()
 
     fireEvent.click(gear)
     expect(await screen.findByRole('dialog', { name: '设置' })).toBeDefined()
