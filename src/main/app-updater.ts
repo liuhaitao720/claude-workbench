@@ -5,6 +5,7 @@ import { basename, dirname, join } from 'node:path'
 import { compareSemver } from './claude-version'
 import { translate } from '../shared/i18n'
 import { mainLanguage } from './language'
+import { IS_WIN } from './platform'
 
 /** v1.2.0 错误文案按当前界面语言（main 进程级语言） */
 function tr(key: Parameters<typeof translate>[1], params?: Record<string, string | number>): string {
@@ -59,6 +60,9 @@ export interface AppUpdateCheckResult {
   notes: AppChangelogEntry[]
   manifestError?: string
   notesError?: string
+  /** v1.3：当前平台是否支持自动升级（win=true；linux 检查更新可用但下载/安装被
+   *  门禁拒绝——替换链路 updater.cmd/.vbs/robocopy 为 Windows 专属，Linux 手动更新） */
+  platformSupported: boolean
 }
 
 export type AppUpdateProgressEvent =
@@ -243,6 +247,7 @@ export class AppUpdater {
    */
   async runAutoUpdate(): Promise<void> {
     if (this.autoRunning || this.installStarted) return
+    if (!IS_WIN) return // v1.3 Linux 门禁：替换链路（updater.cmd/.vbs/robocopy）为 Windows 专属
     if (!this.deps.isPackaged) return // 开发运行不自升级
     if (this.deps.autoUpdate !== undefined && !this.deps.autoUpdate()) return
     this.autoRunning = true
@@ -268,6 +273,7 @@ export class AppUpdater {
    * 任务记录变更（onTaskUpdate）也会调用本方法，所以最后一条任务停下能立即续上。
    */
   tryAutoInstall(): void {
+    if (!IS_WIN) return // v1.3 Linux 门禁（冗余防线：pendingInstall 在 linux 下不可能置位）
     if (!this.pendingInstall || this.installStarted) return
     const running = this.deps.runningCount?.() ?? 0
     const graceLeft = this.graceRemaining()
@@ -324,6 +330,7 @@ export class AppUpdater {
    * 自动升级关闭时不接管（尊重「我要手动决定何时重启」的选择）。
    */
   continueAfterManualDownload(): void {
+    if (!IS_WIN) return // v1.3 Linux 门禁
     if (this.installStarted) return
     if (this.deps.autoUpdate !== undefined && !this.deps.autoUpdate()) return
     if (this.deps.runningCount === undefined) return
@@ -372,6 +379,7 @@ export class AppUpdater {
       latest,
       upToDate,
       notes,
+      platformSupported: IS_WIN,
       ...(manifestError !== '' ? { manifestError } : {}),
       ...(notesError !== '' ? { notesError } : {})
     }
@@ -408,6 +416,7 @@ export class AppUpdater {
   /** 下载安装包到 updateDir 并做 sha256 校验；进度经 onProgress 推送。
    *  v1.2.1：已下载并校验过的包直接复用（自动升级已下好，用户手动点下载不再重复拉 185MB）。 */
   async download(): Promise<{ ok: boolean; error?: string }> {
+    if (!IS_WIN) return { ok: false, error: tr('appUpd.errUnsupportedPlatform') } // v1.3 Linux 门禁
     if (this.downloadedZip !== null && existsSync(this.downloadedZip)) return { ok: true }
     this.downloadedZip = null
     if (!this.manifest) return { ok: false, error: tr('appUpd.errNoManifest') }
@@ -471,6 +480,7 @@ export class AppUpdater {
    * 2) 更新器脚本收尾自删 .cmd/.vbs，不留下可再次误触的脚本。
    */
   async install(): Promise<{ ok: boolean; error?: string }> {
+    if (!IS_WIN) return { ok: false, error: tr('appUpd.errUnsupportedPlatform') } // v1.3 Linux 门禁
     if (!this.deps.isPackaged) return { ok: false, error: tr('appUpd.errDevMode') }
     if (this.downloadedZip === null || !existsSync(this.downloadedZip)) {
       return { ok: false, error: tr('appUpd.errPackageMissing') }

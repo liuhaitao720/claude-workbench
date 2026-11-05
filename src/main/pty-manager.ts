@@ -1,9 +1,16 @@
-import { execFile, execFileSync } from 'node:child_process'
-import { promisify } from 'node:util'
 import { spawn as ptySpawn, type IPty } from 'node-pty'
 import type { PtyDataEvent } from '../shared/types'
+import {
+  IS_WIN,
+  invalidatePlatformDiscovery,
+  killTreeSync,
+  listClaudeCandidates,
+  mergeAugmentedPath,
+  pickClaudePaths
+} from './platform'
 
-const execFileAsync = promisify(execFile)
+// v1.3：pickClaudePaths 迁至 platform.ts（平台收敛缝），此处 re-export 保既有 import 面
+export { pickClaudePaths }
 
 /** 新会话 args 附加项（可选） */
 export interface SessionArgsOptions {
@@ -55,7 +62,11 @@ export function buildResumeArgs(
  * 只设 TERM 时 CLI 按 256 色降级，24 位色需显式声明——Windows Terminal 同款约定），
  * 并剥离本进程可能继承的 claude 会话身份标记——工作台终端是面向用户的独立会话，
  * 不应继承父级 claude 会话的身份（CLAUDECODE/SESSION_ID 等——子 claude 检测到
- * 会跳过首启对话框、关闭转写保存等）。偏好类变量（EFFORT/模型映射）保留透传。
+ * 会话跳过首启对话框、关闭转写保存等）。偏好类变量（EFFORT/模型映射）保留透传。
+ *
+ * v1.4 providerEnv（每任务 API 配置注入）：传入时先剥离继承的 ANTHROPIC_* 端点/
+ * 鉴权/模型变量（防系统级配置与任务配置串扰）再覆写；不传（无任何 provider 配置）
+ * 时行为与 v1.3 前逐字节一致——继承 env 原样透传（含用户手设的 ANTHROPIC_*）。
  */
 const SESSION_MARKER_VARS = [
   'CLAUDECODE',
@@ -68,38 +79,38 @@ const SESSION_MARKER_VARS = [
   'CLAUDE_PID'
 ] as const
 
-export function buildClaudeEnv(): Record<string, string> {
+/** provider 注入前须剥离的继承变量（ANTHROPIC 端点/鉴权/模型四件套） */
+export const PROVIDER_ENV_KEYS = [
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_MODEL'
+] as const
+
+export function buildClaudeEnv(providerEnv?: Record<string, string>): Record<string, string> {
   const env = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } as Record<
     string,
     string
   >
   for (const name of SESSION_MARKER_VARS) delete env[name]
+  // v1.3 Linux：前置合并登录 PATH/常见安装目录（无壳 execvp 找得到 claude 与 node）；
+  // Windows 无增量时 no-op——env 逐字节不变
+  mergeAugmentedPath(env)
+  if (providerEnv !== undefined) {
+    for (const name of PROVIDER_ENV_KEYS) delete env[name]
+    Object.assign(env, providerEnv)
+  }
   return env
-}
-
-/**
- * v1.0.6 where 多命中 → cmd 可执行候选列表（npm claude.cmd 优先，其余
- * .cmd/.exe/.bat 按 where 顺序，去重）：本机 where 实测会同时命中 npm 垫片、
- * WinGet Links 的 claude.exe 等；探测/回退需要整个有序列表而非单个。
- * 无扩展名的 npm\claude（sh 垫片）与 .ps1 不入列——cmd.exe 跑不了。
- */
-export function pickClaudePaths(candidates: string[]): string[] {
-  const lines = candidates.map((l) => l.trim()).filter((l) => l.length > 0)
-  const runnables = lines.filter((l) => /claude\.(cmd|exe|bat)$/i.test(l))
-  const npmCmd = runnables.find((l) => /npm[/\\]claude\.cmd$/i.test(l))
-  const ordered = [...(npmCmd !== undefined ? [npmCmd] : []), ...runnables.filter((l) => l !== npmCmd)]
-  return [...new Set(ordered)]
 }
 
 let claudePathCache: string | null = null
 
-/** claude 启动命令解析（缓存结果；失败回退 'claude'，交由 cmd.exe 按 PATH 语义解析） */
+/** claude 启动命令解析（缓存结果；失败回退 'claude'，win 由 cmd.exe / linux 由 execvp 按 PATH 语义解析） */
 export async function resolveClaudeCommand(): Promise<string> {
   if (claudePathCache !== null) return claudePathCache
   let resolved = 'claude'
   try {
-    const { stdout } = await execFileAsync('where', ['claude'])
-    resolved = pickClaudePaths(stdout.split(/\r?\n/))[0] ?? 'claude'
+    resolved = (await listClaudeCandidates())[0] ?? 'claude'
   } catch {
     resolved = 'claude'
   }
@@ -109,14 +120,13 @@ export async function resolveClaudeCommand(): Promise<string> {
 
 /**
  * v1.0.6 候选列表解析（不走 claudePathCache——版本探测每次要新鲜列表以便回退）：
- * where 命中的可执行候选 + 末尾 'claude' PATH 兜底（where 被过滤空/垫片瞬时
- * 失效时 cmd.exe 仍可按 PATH 解析）。
+ * where/which 命中的可执行候选 + 末尾 'claude' PATH 兜底（被过滤空/垫片瞬时
+ * 失效时壳层/execvp 仍可按 PATH 解析）。
  */
 export async function resolveClaudeCandidates(): Promise<string[]> {
   let list: string[] = []
   try {
-    const { stdout } = await execFileAsync('where', ['claude'])
-    list = pickClaudePaths(stdout.split(/\r?\n/))
+    list = await listClaudeCandidates()
   } catch {
     list = []
   }
@@ -125,10 +135,12 @@ export async function resolveClaudeCandidates(): Promise<string[]> {
 
 /**
  * 失效 claude 路径缓存（v0.5⑤ installClaudeCli 完成回调：安装后立即刷新 About 的
- * 版本/路径信息，否则 resolveClaudeCommand 仍返回旧解析或未安装回退值）
+ * 版本/路径信息，否则 resolveClaudeCommand 仍返回旧解析或未安装回退值）；
+ * v1.3 一并失效 platform 侧 Linux PATH 发现缓存
  */
 export function invalidateClaudePathCache(): void {
   claudePathCache = null
+  invalidatePlatformDiscovery()
 }
 
 export interface PtyManagerCallbacks {
@@ -150,14 +162,34 @@ export class PtyManager {
 
   constructor(private readonly callbacks: PtyManagerCallbacks) {}
 
-  /** 解析 claude 并统一经 cmd.exe /c <claude.cmd 全路径> 包装 spawn（.cmd 无法被 CreateProcess 直接解析） */
-  async spawnClaude(taskId: string, claudeArgs: string[], cwd: string): Promise<void> {
+  /**
+   * 解析 claude 并 spawn：win 经 cmd.exe /c <claude.cmd 全路径> 包装（.cmd 无法被
+   * CreateProcess 直接解析）；linux 直 spawn 二进制（execvp 语义，npm 装的
+   * `#!/usr/bin/env node` shebang 脚本可直接执行——env 经 buildClaudeEnv 已含增强 PATH）。
+   * v1.4 providerEnv：任务/默认 provider 的 ANTHROPIC_* 注入（见 buildClaudeEnv）。
+   */
+  async spawnClaude(
+    taskId: string,
+    claudeArgs: string[],
+    cwd: string,
+    providerEnv?: Record<string, string>
+  ): Promise<void> {
     const claudeCmd = await resolveClaudeCommand()
-    this.spawn(taskId, 'cmd.exe', ['/c', claudeCmd, ...claudeArgs], cwd)
+    if (IS_WIN) {
+      this.spawn(taskId, 'cmd.exe', ['/c', claudeCmd, ...claudeArgs], cwd, providerEnv)
+      return
+    }
+    this.spawn(taskId, claudeCmd, claudeArgs, cwd, providerEnv)
   }
 
   /** 通用 PTY spawn（首启 80x24，重开沿用记忆尺寸；TERM=xterm-256color，PATH/HOME 经 process.env 自然透传） */
-  spawn(taskId: string, file: string, args: string[], cwd: string): void {
+  spawn(
+    taskId: string,
+    file: string,
+    args: string[],
+    cwd: string,
+    providerEnv?: Record<string, string>
+  ): void {
     if (this.ptys.has(taskId)) throw new Error(`PTY already running for task ${taskId}`)
     const size = this.lastSize.get(taskId) ?? { cols: 80, rows: 24 }
     const pty = ptySpawn(file, args, {
@@ -165,7 +197,7 @@ export class PtyManager {
       cols: size.cols,
       rows: size.rows,
       cwd,
-      env: buildClaudeEnv()
+      env: buildClaudeEnv(providerEnv)
     })
     this.ptys.set(taskId, pty)
     pty.onData((data) => this.callbacks.onData({ taskId, data }))
@@ -204,17 +236,13 @@ export class PtyManager {
   }
 
   /**
-   * v1.0.3 退出目录锁修复：定点杀全部 PTY 进程树（taskkill /T /F——按记录的 pid，
-   * 非枚举）。ConPTY 子孙（cmd.exe→claude→node、OpenConsole.exe）持 exe 目录与项目
-   * 目录的 CWD/句柄，不杀则退出后目录无法删除（实测）。同步执行——before-quit 路径。
+   * v1.0.3 退出目录锁修复：定点杀全部 PTY 进程树（win：taskkill /T /F——ConPTY 子孙
+   * 持 exe 目录与项目目录的 CWD/句柄；linux：负 pid 杀进程组，见 platform.killTreeSync）。
+   * 按记录的 pid 非枚举；同步执行——before-quit 路径。
    */
   killAllTrees(): void {
     for (const pty of this.ptys.values()) {
-      try {
-        execFileSync('taskkill', ['/PID', String(pty.pid), '/T', '/F'], { stdio: 'ignore' })
-      } catch {
-        // 进程已死/杀失败——尽力而为，不阻断退出
-      }
+      killTreeSync(pty.pid)
     }
   }
 

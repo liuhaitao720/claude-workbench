@@ -35,7 +35,9 @@ export class AppSettingsStore {
           launchAtLogin: typeof rec['launchAtLogin'] === 'boolean' ? rec['launchAtLogin'] : false,
           language: rec['language'] === 'en' ? 'en' : 'zh',
           // v1.2.1 缺省开启（用户要求升级无需手动点按钮；想要手动的人可在设置里关）
-          autoUpdate: typeof rec['autoUpdate'] === 'boolean' ? rec['autoUpdate'] : true
+          autoUpdate: typeof rec['autoUpdate'] === 'boolean' ? rec['autoUpdate'] : true,
+          // v1.4 本地代理随应用启动（缺省不开）
+          ...(typeof rec['proxyAutoStart'] === 'boolean' ? { proxyAutoStart: rec['proxyAutoStart'] } : {})
         }
       }
     } catch {

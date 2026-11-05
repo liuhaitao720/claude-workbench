@@ -8,6 +8,7 @@ import { CrashLogger } from './crash-log'
 import { countLiveRunningTasks } from './running-count'
 import { mainLanguage } from './language'
 import { resolveClaudeCommand } from './pty-manager'
+import { versionProbeCommand } from './platform'
 import { initSingleInstance } from './single-instance'
 import { attachCloseToTray, setupTray, type TrayHandle } from './tray'
 
@@ -311,7 +312,9 @@ async function runSmoke(ctx: AppContext): Promise<void> {
   const claudeCmd = await resolveClaudeCommand()
   console.log(`[smoke] resolveClaudeCommand() -> ${claudeCmd}`)
   try {
-    const { stdout } = await execFileAsync('cmd.exe', ['/c', claudeCmd, '--version'], { timeout: 20_000 })
+    // v1.3：探测命令形态按平台分流（win cmd.exe /c 包装、linux 直跑）——失败不致命
+    const probe = versionProbeCommand(claudeCmd)
+    const { stdout } = await execFileAsync(probe.file, probe.args, { timeout: 20_000 })
     console.log(`[smoke] claude --version -> ${stdout.trim()}`)
   } catch (err) {
     // 版本探测失败不让 smoke 失败——PTY 内真 spawn claude 才是功能断言

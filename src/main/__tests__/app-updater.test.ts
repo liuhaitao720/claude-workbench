@@ -154,7 +154,20 @@ describe('AppUpdater（注入式：假网络/假 spawn/临时目录）', () => {
     expect(r.notes).toEqual([])
   })
 
-  it('download：sha256 不符 → 删除并报错，不进入就绪', async () => {
+  it('v1.3 Linux 门禁：非 win 平台 download/install 直接拒绝（替换链路 Windows 专属）；win 宿主跳过', async () => {
+    if (process.platform === 'win32') return
+    const u = new AppUpdater(makeDeps({ fetchImpl: fetchManifest({ version: '9.9.9', url: 'x', sha256: 'y' }) }))
+    await u.check()
+    const dl = await u.download()
+    expect(dl.ok).toBe(false)
+    const inst = await u.install()
+    expect(inst.ok).toBe(false)
+    await u.runAutoUpdate() // 门禁早退：不下载不广播
+  })
+
+  // v1.3：download/install/自动升级链路为 Windows 专属（Linux 被 platformSupported 门禁
+  // 拒绝）——win 语义用例在非 win 宿主跳过；Linux 门禁行为由下方专属用例覆盖
+  it.skipIf(process.platform !== 'win32')('download：sha256 不符 → 删除并报错，不进入就绪', async () => {
     const chunks = [new Uint8Array([1, 2, 3])]
     const dl = vi.fn(async (url: string | URL | Request) => {
       if (String(url).includes('latest.json')) {
@@ -173,7 +186,7 @@ describe('AppUpdater（注入式：假网络/假 spawn/临时目录）', () => {
     expect(existsSync(join(dir, 'updates', 'Claude-Workbench-1.2.0-portable.zip'))).toBe(false)
   })
 
-  it('install：未打包/未下载先拒绝；就绪后写脚本+detached 启动+quit', async () => {
+  it.skipIf(process.platform !== 'win32')('install：未打包/未下载先拒绝；就绪后写脚本+detached 启动+quit', async () => {
     const u0 = new AppUpdater(makeDeps({ isPackaged: false }))
     expect((await u0.install()).error).toContain('开发模式')
 
@@ -241,7 +254,7 @@ describe('AppUpdater（注入式：假网络/假 spawn/临时目录）', () => {
     return { updater: new AppUpdater(deps), deps, progress }
   }
 
-  it('自动升级：无运行任务且过宽限期 → 直接下载并退出替换（不点任何按钮）', async () => {
+  it.skipIf(process.platform !== 'win32')('自动升级：无运行任务且过宽限期 → 直接下载并退出替换（不点任何按钮）', async () => {
     const { updater, deps, progress } = await readyUpdater({ autoInstallGraceMs: 0 })
     await updater.runAutoUpdate()
     await vi.waitFor(() => expect(deps.quit).toHaveBeenCalledTimes(1))
@@ -250,7 +263,7 @@ describe('AppUpdater（注入式：假网络/假 spawn/临时目录）', () => {
     expect(progress.some((e) => e.phase === 'installing')).toBe(true)
   })
 
-  it('自动升级：有运行任务 → 不退出，广播 waiting-tasks；任务结束后自动续上升级', async () => {
+  it.skipIf(process.platform !== 'win32')('自动升级：有运行任务 → 不退出，广播 waiting-tasks；任务结束后自动续上升级', async () => {
     let running = 2
     const { updater, deps, progress } = await readyUpdater({
       autoInstallGraceMs: 0,
@@ -267,7 +280,7 @@ describe('AppUpdater（注入式：假网络/假 spawn/临时目录）', () => {
     await vi.waitFor(() => expect(deps.quit).toHaveBeenCalledTimes(1))
   })
 
-  it('任务结束后只剩宽限期 → 广播 ready（界面从「等待 N 个任务」退回已就绪）', async () => {
+  it.skipIf(process.platform !== 'win32')('任务结束后只剩宽限期 → 广播 ready（界面从「等待 N 个任务」退回已就绪）', async () => {
     let running = 1
     const { updater, deps, progress } = await readyUpdater({
       autoInstallGraceMs: 60_000,

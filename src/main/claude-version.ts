@@ -1,11 +1,24 @@
-import { execFile, execFileSync, spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { CliRunner } from './cli-runner'
-import { invalidateClaudePathCache, resolveClaudeCandidates } from './pty-manager'
+import { buildClaudeEnv, invalidateClaudePathCache, resolveClaudeCandidates } from './pty-manager'
 import { parseChangelog } from './app-updater'
 import type { AppChangelogEntry } from '../shared/types'
 import { translate, type Language } from '../shared/i18n'
 import { mainLanguage } from './language'
+import {
+  NATIVE_INSTALL_ARGS,
+  NATIVE_INSTALL_FILE,
+  NPM_INSTALL_ARGS,
+  NPM_INSTALL_FILE,
+  IS_WIN,
+  killTreeSync,
+  npmViewCommand,
+  versionProbeCommand
+} from './platform'
+
+// v1.3：安装模板常量迁至 platform.ts（win 值与原常量逐字节一致），re-export 保既有 import 面
+export { NATIVE_INSTALL_FILE, NATIVE_INSTALL_ARGS, NPM_INSTALL_FILE, NPM_INSTALL_ARGS }
 
 const execFileAsync = promisify(execFile)
 
@@ -23,8 +36,9 @@ const execFileAsync = promisify(execFile)
  * 每候选 8s 超时（实测热跑 ~0.7s；原 20s 单候选在多候选下总时长失控）。
  *
  * 安装为固定模板（编译期常量，不经 runCliCommand 白名单面——评审 R4/T9）：
- * - native：官方安装器（PowerShell 内存执行，不写盘；不加 -ExecutionPolicy Bypass）
- * - npm：npm.cmd 经 cmd.exe 包装（npm 在 Windows 是 npm.cmd，CreateProcess 不能直接解析）
+ * - native：win=官方安装器 PowerShell 内存执行（不写盘；不加 -ExecutionPolicy Bypass）；
+ *   linux=bash -lc 'curl -fsSL https://claude.ai/install.sh | bash'（v1.3）
+ * - npm：win=npm.cmd 经 cmd.exe 包装（CreateProcess 不能直接解析）；linux=直呼 npm
  * 完成后失效 claudePathCache 刷新 About（onceExit 钩子）。
  */
 
@@ -40,21 +54,6 @@ export interface ClaudeUpdateInfo {
   /** true=无 npm 环境/探测失败（渲染层提示走 claude update） */
   degraded?: boolean
 }
-
-/** 官方原生安装器模板（v0.5⑤ 评审 R5/S2：域名硬编码白名单仅 claude.ai；-NoProfile 不加 ExecutionPolicy Bypass） */
-export const NATIVE_INSTALL_FILE = 'powershell.exe'
-export const NATIVE_INSTALL_ARGS: readonly string[] = [
-  '-NoProfile',
-  '-Command',
-  'irm https://claude.ai/install.ps1 | iex'
-]
-
-/** npm 安装模板（npm 是 npm.cmd，须经 cmd.exe /c 包装） */
-export const NPM_INSTALL_FILE = 'cmd.exe'
-export const NPM_INSTALL_ARGS: readonly string[] = ['/c', 'npm', 'install', '-g', '@anthropic-ai/claude-code']
-
-/** npm registry 查询模板 */
-const NPM_VIEW_ARGS: readonly string[] = ['/c', 'npm', 'view', '@anthropic-ai/claude-code', 'version']
 
 const PROBE_TIMEOUT_MS = 20_000
 /** v1.0.6 每候选 --version 超时（热跑 ~0.7s；多候选循环下 20s 单值总时长失控） */
@@ -98,13 +97,10 @@ export interface VersionProbeDeps {
 /** 拿到版本串后的静默窗口：期间再无输出即认定「版本已完整」，立即收尾 */
 const PROBE_QUIET_MS = 800
 
-/** 定点杀进程树（no-process-detect：只按记录的 pid 杀，不做进程枚举） */
+/** 定点杀进程树（no-process-detect：只按记录的 pid 杀，不做进程枚举；
+ *  v1.3 委托 platform.killTreeSync——win taskkill /T /F、linux 进程组） */
 function killTreeDefault(pid: number): void {
-  try {
-    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
-  } catch {
-    // 进程已退出/权限不足——尽力而为，不阻断探测结果
-  }
+  killTreeSync(pid)
 }
 
 /**
@@ -145,10 +141,16 @@ export function probeClaudeVersion(candidate: string, deps: VersionProbeDeps = {
     }
 
     try {
-      child = spawnImpl('cmd.exe', ['/c', candidate, '--version'], {
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
-      })
+      // v1.3：win 保持 cmd.exe /c 包装（.cmd 不能被 CreateProcess 直接解析）；
+      // linux 直跑二进制（execvp 语义，shebang 可执行），env 含增强 PATH——
+      // 裸名 'claude' 兜底候选也要找得到 nvm 等登录 PATH 里的 node/claude
+      const probeCmd = versionProbeCommand(candidate)
+      child = IS_WIN
+        ? spawnImpl(probeCmd.file, probeCmd.args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+        : spawnImpl(probeCmd.file, probeCmd.args, {
+            env: buildClaudeEnv(),
+            stdio: ['ignore', 'pipe', 'pipe']
+          })
     } catch {
       resolve('')
       return
@@ -244,7 +246,8 @@ export async function checkClaudeUpdate(): Promise<ClaudeUpdateInfo> {
   } catch {
     // HTTP 直连失败（代理/网络策略）→ 回退 npm view CLI（慢但可能走通代理链）
     try {
-      const { stdout } = await execFileAsync('cmd.exe', [...NPM_VIEW_ARGS], { timeout: PROBE_TIMEOUT_MS })
+      const npmView = npmViewCommand()
+      const { stdout } = await execFileAsync(npmView.file, npmView.args, { timeout: PROBE_TIMEOUT_MS })
       latest = extractSemver(stdout.replace(/^﻿/, '').trim())
     } catch {
       degraded = true

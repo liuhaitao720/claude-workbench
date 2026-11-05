@@ -5,7 +5,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { HANDLE_CHANNELS, IpcChannels, SEND_CHANNELS } from '../../shared/ipc-channels'
-import type { NotifyConfig, ProjectRecord, SkillInfo, TaskActivityEvent, TaskRecord } from '../../shared/types'
+import type {
+  NotifyConfig,
+  ProjectRecord,
+  ProviderConfig,
+  ProviderRegistryState,
+  SkillInfo,
+  TaskActivityEvent,
+  TaskRecord
+} from '../../shared/types'
 
 const execFileAsync = promisify(execFile)
 
@@ -20,7 +28,7 @@ const h = vi.hoisted(() => {
     dialogResult: { canceled: false, filePaths: [] as string[] },
     openExternalCalls: [] as string[],
     ptyInstances: [] as Array<{
-      spawnCalls: Array<{ taskId: string; args: string[]; cwd: string }>
+      spawnCalls: Array<{ taskId: string; args: string[]; cwd: string; providerEnv?: Record<string, string> }>
       writes: Array<{ taskId: string; data: string }>
       resizes: Array<{ taskId: string; cols: number; rows: number }>
       callbacks: { onData: (e: { taskId: string; data: string }) => void; onExit: (taskId: string) => void }
@@ -61,7 +69,12 @@ vi.mock('electron', () => ({
 vi.mock('../pty-manager', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../pty-manager')>()
   class FakePtyManager {
-    readonly spawnCalls: Array<{ taskId: string; args: string[]; cwd: string }> = []
+    readonly spawnCalls: Array<{
+      taskId: string
+      args: string[]
+      cwd: string
+      providerEnv?: Record<string, string>
+    }> = []
     readonly writes: Array<{ taskId: string; data: string }> = []
     readonly resizes: Array<{ taskId: string; cols: number; rows: number }> = []
     readonly runningIds = new Set<string>()
@@ -73,8 +86,14 @@ vi.mock('../pty-manager', async (importOriginal) => {
     ) {
       h.ptyInstances.push(this)
     }
-    async spawnClaude(taskId: string, args: string[], cwd: string): Promise<void> {
-      this.spawnCalls.push({ taskId, args, cwd })
+    async spawnClaude(
+      taskId: string,
+      args: string[],
+      cwd: string,
+      providerEnv?: Record<string, string>
+    ): Promise<void> {
+      // v1.4：条件记录 providerEnv（未指定时不落键——既有 toEqual 断言零改动）
+      this.spawnCalls.push({ taskId, args, cwd, ...(providerEnv !== undefined ? { providerEnv } : {}) })
       this.runningIds.add(taskId)
     }
     write(taskId: string, data: string): void {
@@ -521,6 +540,285 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
     )
     expect(saved).toEqual({ url: 'https://qyapi.weixin.qq.com/send?key=k', enabled: true, channel: 'wecom' })
     expect(await invoke<NotifyConfig>(IpcChannels.NotifyGet)).toEqual(saved)
+  })
+
+  // ── v1.4 模型服务 provider ─────────────────────────────────────────────
+  it('v1.4 Providers CRUD：默认空；保存（校验+归一+uuid）/设默认/删除（默认清空）；非法入参拒绝', async () => {
+    expect(await invoke(IpcChannels.ProvidersList)).toEqual({ providers: [] })
+
+    const saved = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+      id: '',
+      name: '  GLM  ',
+      format: 'anthropic',
+      baseUrl: 'https://open.bigmodel.cn/api/anthropic///',
+      apiKey: 'sk-test',
+      models: [' glm-4.6 ', 'glm-4.5-air'],
+      defaultModel: 'glm-4.6'
+    })
+    expect(saved).toMatchObject({
+      name: 'GLM',
+      baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+      models: ['glm-4.6', 'glm-4.5-air']
+    })
+    expect(saved.id).toMatch(/^[0-9a-f-]{36}$/)
+
+    await invoke(IpcChannels.ProvidersSetDefault, saved.id)
+    expect(await invoke<ProviderRegistryState>(IpcChannels.ProvidersList)).toEqual({
+      providers: [saved],
+      defaultProviderId: saved.id
+    })
+
+    // 非法入参逐项拒绝（i18n 文案；invoke reject）
+    await expect(invoke(IpcChannels.ProvidersSave, { ...saved, id: '', name: '' })).rejects.toThrow(
+      /名称/
+    )
+    await expect(
+      invoke(IpcChannels.ProvidersSave, { ...saved, id: '', format: 'bogus' })
+    ).rejects.toThrow(/anthropic 或 openai/)
+    await expect(
+      invoke(IpcChannels.ProvidersSave, { ...saved, id: '', baseUrl: 'ftp://x' })
+    ).rejects.toThrow(/http\(s\)/)
+    await expect(
+      invoke(IpcChannels.ProvidersSave, { ...saved, id: '', proxyUrl: 'socks5://x' })
+    ).rejects.toThrow(/代理/)
+
+    await invoke(IpcChannels.ProvidersRemove, saved.id)
+    expect(await invoke(IpcChannels.ProvidersList)).toEqual({ providers: [] }) // 默认随删除清空
+    await expect(invoke(IpcChannels.ProvidersRemove, 'ghost')).rejects.toThrow(/不存在/)
+    await expect(invoke(IpcChannels.ProvidersSetDefault, 'ghost')).rejects.toThrow(/不存在/)
+
+    // 空白 proxyUrl 归一为未设置（放末尾——save 会新增档案，不干扰上方列表断言）
+    const blankProxy = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+      ...saved,
+      id: '',
+      proxyUrl: '  '
+    })
+    expect(blankProxy.proxyUrl).toBeUndefined()
+  })
+
+  it('v1.4 createTask 带 provider/model：spawnClaude 收到注入 env、记录落 providerId/model', async () => {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+      id: '',
+      name: 'GLM',
+      format: 'anthropic',
+      baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+      apiKey: 'sk-test',
+      apiKeyType: 'api_key',
+      models: ['glm-4.6'],
+      defaultModel: 'glm-4.6'
+    })
+    const projDir = join(h.tempDir, 'work', 'prov')
+    mkdirSync(projDir, { recursive: true })
+    const proj = await invoke<ProjectRecord>(IpcChannels.ProjectsAdd, projDir)
+
+    const task = await invoke<TaskRecord>(IpcChannels.TasksCreate, proj.id, '联调', {
+      isolation: 'shared',
+      providerId: provider.id,
+      model: 'glm-4.6'
+    })
+    expect(currentPty().spawnCalls[0]).toMatchObject({
+      providerEnv: {
+        ANTHROPIC_BASE_URL: 'https://open.bigmodel.cn/api/anthropic',
+        ANTHROPIC_API_KEY: 'sk-test', // apiKeyType=api_key → x-api-key 形态
+        ANTHROPIC_MODEL: 'glm-4.6'
+      }
+    })
+    expect(task.providerId).toBe(provider.id)
+    expect(task.model).toBe('glm-4.6')
+  })
+
+  it('v1.4 默认 provider 兜底：任务未指定时用默认 provider 的 defaultModel；无任何配置不注入', async () => {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+      id: '',
+      name: '默认网关',
+      format: 'openai',
+      baseUrl: 'https://gw.example/anthropic',
+      apiKey: 'k',
+      models: ['m1'],
+      defaultModel: 'm1'
+    })
+    await invoke(IpcChannels.ProvidersSetDefault, provider.id)
+
+    const projDir = join(h.tempDir, 'work', 'def')
+    mkdirSync(projDir, { recursive: true })
+    const proj = await invoke<ProjectRecord>(IpcChannels.ProjectsAdd, projDir)
+
+    // 任务未指定 → 默认 provider + 其 defaultModel
+    await invoke(IpcChannels.TasksCreate, proj.id, '默认链', { isolation: 'shared' })
+    expect(currentPty().spawnCalls[0]).toMatchObject({
+      providerEnv: { ANTHROPIC_BASE_URL: 'https://gw.example/anthropic', ANTHROPIC_AUTH_TOKEN: 'k', ANTHROPIC_MODEL: 'm1' }
+    })
+
+    // TasksSetProvider 事后清除 → 回退默认链（下次 spawn 生效——此处只验元数据）
+    const task = (await invoke<TaskRecord[]>(IpcChannels.TasksList, proj.id))[0]
+    const updated = await invoke<TaskRecord>(IpcChannels.TasksSetProvider, task.id, {
+      providerId: '',
+      model: 'custom-x'
+    })
+    expect(updated.providerId).toBeUndefined()
+    expect(updated.model).toBe('custom-x')
+    expect(taskUpdates()).toContainEqual(updated)
+
+    // 取消默认 → 不再有任何注入（TasksSetProvider 只改元数据不 spawn；此为第 2 次 spawn）
+    await invoke(IpcChannels.ProvidersSetDefault, '')
+    await invoke(IpcChannels.TasksCreate, proj.id, '无注入', { isolation: 'shared' })
+    expect(currentPty().spawnCalls[1].providerEnv).toBeUndefined()
+  })
+
+  it('v1.4 档位映射 + CLI 自主：slotModels 注入 ANTHROPIC_DEFAULT_*_MODEL；modelMode:auto 跳过 ANTHROPIC_MODEL', async () => {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+      id: '',
+      name: '档位网关',
+      format: 'anthropic',
+      baseUrl: 'https://slots.example/anthropic',
+      apiKey: 'k',
+      models: ['glm-4.6'],
+      defaultModel: 'glm-4.6',
+      slotModels: { sonnet: 'glm-4.6', haiku: 'glm-4.5-air' }
+    })
+    const projDir = join(h.tempDir, 'work', 'slots')
+    mkdirSync(projDir, { recursive: true })
+    const proj = await invoke<ProjectRecord>(IpcChannels.ProjectsAdd, projDir)
+
+    // CLI 自主：无 ANTHROPIC_MODEL，档位映射照常
+    await invoke(IpcChannels.TasksCreate, proj.id, '自主', {
+      isolation: 'shared',
+      providerId: provider.id,
+      modelMode: 'auto'
+    })
+    expect(currentPty().spawnCalls[0].providerEnv).toMatchObject({
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-4.6',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-4.5-air'
+    })
+    expect(currentPty().spawnCalls[0].providerEnv).not.toHaveProperty('ANTHROPIC_MODEL')
+    const autoTask = (await invoke<TaskRecord[]>(IpcChannels.TasksList, proj.id))[0]
+    expect(autoTask.modelMode).toBe('auto')
+
+    // 固定模型：ANTHROPIC_MODEL 与档位映射共存
+    await invoke(IpcChannels.TasksCreate, proj.id, '固定', {
+      isolation: 'shared',
+      providerId: provider.id,
+      model: 'glm-5'
+    })
+    expect(currentPty().spawnCalls[1].providerEnv).toMatchObject({
+      ANTHROPIC_MODEL: 'glm-5',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-4.6'
+    })
+  })
+
+  it('v1.4 模型探测：按 id 取档案请求 /v1/models（端点拼装+鉴权头+去重）；未知 id 报错', async () => {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+      id: '',
+      name: 'GW',
+      format: 'anthropic',
+      baseUrl: 'https://gw.example/api',
+      apiKey: 'k',
+      apiKeyType: 'api_key',
+      models: ['m0']
+    })
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL, init?: RequestInit) => {
+        calls.push({ url: String(url), init })
+        return new Response(JSON.stringify({ data: [{ id: 'm-2' }, { id: 'm-1' }, { id: 'm-2' }] }), {
+          status: 200
+        })
+      })
+    )
+    try {
+      const r = await invoke<{ ok: boolean; models?: string[] }>(
+        IpcChannels.ProvidersProbeModels,
+        provider.id
+      )
+      expect(r.ok).toBe(true)
+      expect(r.models).toEqual(['m-2', 'm-1']) // 去重保序
+      expect(calls[0].url).toBe('https://gw.example/api/v1/models')
+      const headers = calls[0].init?.headers as Record<string, string>
+      expect(headers['x-api-key']).toBe('k') // apiKeyType=api_key → x-api-key
+      expect(headers['anthropic-version']).toBe('2023-06-01')
+      // 探测按结果对象返回（不抛）：未知 id → ok:false + 错误文案
+      const ghost = await invoke<{ ok: boolean; error?: string }>(
+        IpcChannels.ProvidersProbeModels,
+        'ghost'
+      )
+      expect(ghost.ok).toBe(false)
+      expect(ghost.error).toContain('不存在')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('v1.4 网络代理（照搬 cc-switch）：proxyUrl 注入 HTTP(S)_PROXY 大小写双写 + NO_PROXY 本机豁免', async () => {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+      id: '',
+      name: '官方',
+      format: 'anthropic',
+      baseUrl: 'https://api.anthropic.com',
+      apiKey: 'sk-official',
+      models: [],
+      proxyUrl: 'http://127.0.0.1:7890'
+    })
+    const projDir = join(h.tempDir, 'work', 'proxy')
+    mkdirSync(projDir, { recursive: true })
+    const proj = await invoke<ProjectRecord>(IpcChannels.ProjectsAdd, projDir)
+    await invoke(IpcChannels.TasksCreate, proj.id, '官方直连', { isolation: 'shared', providerId: provider.id })
+    expect(currentPty().spawnCalls[0].providerEnv).toMatchObject({
+      ANTHROPIC_BASE_URL: 'https://api.anthropic.com',
+      HTTP_PROXY: 'http://127.0.0.1:7890',
+      HTTPS_PROXY: 'http://127.0.0.1:7890',
+      http_proxy: 'http://127.0.0.1:7890',
+      https_proxy: 'http://127.0.0.1:7890',
+      NO_PROXY: '127.0.0.1,localhost',
+      no_proxy: '127.0.0.1,localhost'
+    })
+  })
+
+  it('v1.4 本地代理：start/status/stop + env 联动（运行中统一指本地代理，停止回退直注 provider 代理）', async () => {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+      id: '',
+      name: '官方',
+      format: 'anthropic',
+      baseUrl: 'https://api.anthropic.com',
+      apiKey: 'k',
+      models: [],
+      proxyUrl: 'http://127.0.0.1:7890'
+    })
+    const projDir = join(h.tempDir, 'work', 'lproxy')
+    mkdirSync(projDir, { recursive: true })
+    const proj = await invoke<ProjectRecord>(IpcChannels.ProjectsAdd, projDir)
+
+    // 初始 stopped（autoStart 缺省不开——测试环境零副作用）
+    expect(await invoke<{ running: boolean }>(IpcChannels.ProxyStatus)).toMatchObject({ running: false })
+
+    // 启动（真实隧道 server；12700 被占自动 +1）
+    const started = await invoke<{ running: boolean; port: number; startedAt: string }>(
+      IpcChannels.ProxyStart
+    )
+    expect(started.running).toBe(true)
+    expect(started.port).toBeGreaterThanOrEqual(12700)
+    expect(started.port).toBeLessThan(12700 + 20)
+
+    // 运行中：env 统一指向本地代理（不再直注 7890）
+    await invoke(IpcChannels.TasksCreate, proj.id, '经本地代理', { isolation: 'shared', providerId: provider.id })
+    expect(currentPty().spawnCalls[0].providerEnv).toMatchObject({
+      HTTP_PROXY: `http://127.0.0.1:${started.port}`,
+      HTTPS_PROXY: `http://127.0.0.1:${started.port}`,
+      NO_PROXY: '127.0.0.1,localhost'
+    })
+
+    // 停止 → 回退直注 provider 代理
+    const stopped = await invoke<{ running: boolean }>(IpcChannels.ProxyStop)
+    expect(stopped.running).toBe(false)
+    await invoke(IpcChannels.TasksCreate, proj.id, '回退直注', { isolation: 'shared', providerId: provider.id })
+    expect(currentPty().spawnCalls[1].providerEnv).toMatchObject({
+      HTTP_PROXY: 'http://127.0.0.1:7890'
+    })
+
+    // proxyAutoStart 设置读写（settings.json 白名单字段）
+    await invoke(IpcChannels.SettingsSet, { proxyAutoStart: true })
+    const s = await invoke<{ proxyAutoStart?: boolean }>(IpcChannels.SettingsGet)
+    expect(s.proxyAutoStart).toBe(true)
   })
 
   it('v1.2.0 SkillSearch/SkillMarketplaces：读注入的 marketplace 根；安装目标非法时直接返回错误（不 spawn）', async () => {

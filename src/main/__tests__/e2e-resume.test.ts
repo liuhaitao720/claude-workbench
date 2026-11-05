@@ -19,7 +19,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe('S4 e2e ③：真实 claude --resume <uuid>（无历史会话，形态可执行性验证）', () => {
-  it(
+  // v1.3 守卫：win 形态断言语料；linux 走 --smoke 冒烟
+  it.skipIf(process.platform !== 'win32')(
     'spawnClaude(buildResumeArgs(固定uuid))：进程启动、产生输出字节、kill 后 isRunning=false；记录 CLI 对不存在会话的实际行为',
     { timeout: 30_000 },
     async () => {

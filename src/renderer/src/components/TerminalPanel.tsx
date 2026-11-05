@@ -180,7 +180,12 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
         // ── v1.0.8 终端保真三项 ──────────────────────────────────────────
         scrollback: 8000, // xterm 默认 1000 行太小——长会话回滚被截（WT 默认 9001 量级）
         rescaleOverlappingGlyphs: true, // GB18030：歧义宽度字形溢出相邻格时横向缩放
-        windowsPty: { backend: 'conpty' }, // 后端是 ConPTY——行数增加时 scrollback 补行启发式（防内容丢失）
+        // v1.3：ConPTY 补行启发式仅 win 传（后端才是 ConPTY）——linux PTY 上启用会改
+        // resize 行增长行为（xterm 按 windowsPty 存在与否走补行/滚动两套分支）
+        windowsPty:
+          (window as unknown as { cwb?: { platform?: string } }).cwb?.platform === 'win32'
+            ? { backend: 'conpty' }
+            : undefined,
         // OSC 8 超链接出口：xterm 默认无 handler 时弹原生 confirm 警告框——统一走
         // openExternal（main 侧 http/https 白名单 → 系统浏览器）
         linkHandler: {

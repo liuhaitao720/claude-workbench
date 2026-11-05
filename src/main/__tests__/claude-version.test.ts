@@ -56,10 +56,11 @@ const state = vi.hoisted(() => {
 })
 
 vi.mock('node:child_process', () => ({
-  /** v1.1.0 版本探测改用 spawn 流式读（拿到输出即收尾，不等壳退出） */
+  /** v1.1.0 版本探测改用 spawn 流式读（拿到输出即收尾，不等壳退出）。
+   *  v1.3：候选路径 win 在 args[1]（cmd.exe /c <cand>）、linux 在 cmd（直跑）——两者都取 */
   spawn: vi.fn((cmd: string, args: readonly string[], opts: unknown) => {
     state.spawnCalls.push({ cmd, args, opts })
-    const cand = String(args[1] ?? '')
+    const cand = String(args[1] ?? cmd)
     const fail = state.execFails || (state.failVersionFor !== '' && cand.includes(state.failVersionFor))
     const stdoutCbs: Array<(d: Buffer) => void> = []
     const closeCbs: Array<() => void> = []
@@ -100,7 +101,8 @@ vi.mock('node:child_process', () => ({
       callback(new Error('spawn ENOENT'), undefined)
       return
     }
-    if (args.join(' ').includes('npm view')) callback(null, { stdout: state.npmOut })
+    // v1.3：npm view 识别兼容两形态——win（cmd.exe /c npm view…）与 linux（cmd=npm, args=[view,…]）
+    if (`${cmd} ${args.join(' ')}`.includes('npm view')) callback(null, { stdout: state.npmOut })
     else callback(null, { stdout: '' })
   })
 }))
@@ -135,6 +137,12 @@ import {
 } from '../claude-version'
 import { invalidateClaudePathCache } from '../pty-manager'
 import { CliRunner } from '../cli-runner'
+import {
+  nativeInstallTemplateFor,
+  npmInstallTemplateFor,
+  npmViewCommand,
+  versionProbeCommand
+} from '../platform'
 import { execFile } from 'node:child_process'
 
 const execFileMock = vi.mocked(execFile)
@@ -169,11 +177,13 @@ describe('extractSemver', () => {
 describe('getClaudeVersionInfo（v1.1.0：spawn 流式探测，拿到输即收尾）', () => {
   const fast = { quietMs: 5, timeoutMs: 500 }
 
-  it('cmd.exe /c <claudeCmd> --version（stdio stdin=ignore）；返回版本与解析路径', async () => {
+  it('<平台探测命令> <claudeCmd> --version（stdio stdin=ignore）；返回版本与解析路径', async () => {
     const info = await getClaudeVersionInfo(fast)
-    const call = state.spawnCalls.find((c) => c.args[2] === '--version')
-    expect(call).toMatchObject({ cmd: 'cmd.exe' })
-    expect(call?.args).toEqual(['/c', 'C:\\npm-global\\claude.cmd', '--version'])
+    // v1.3：探测命令形态按平台分流（win cmd.exe /c 包装、linux 直跑）——期望值与实现同源
+    const call = state.spawnCalls.find((c) => c.args[c.args.length - 1] === '--version')
+    const expected = versionProbeCommand('C:\\npm-global\\claude.cmd')
+    expect(call).toMatchObject({ cmd: expected.file })
+    expect(call?.args).toEqual(expected.args)
     expect((call?.opts as { stdio?: string[] }).stdio?.[0]).toBe('ignore')
     expect(info).toEqual({ version: '2.1.301', path: 'C:\\npm-global\\claude.cmd' })
   })
@@ -181,9 +191,12 @@ describe('getClaudeVersionInfo（v1.1.0：spawn 流式探测，拿到输即收�
   it('v1.1.0 核心回归：输出已到但 cmd 壳不退出 → 仍判定成功并定点杀树', async () => {
     // 真实故障场景（本机实测 1/4 概率）：版本串 ~160ms 已到，cmd 壳残留不退出
     state.hangAfterOutput = true
-    const info = await getClaudeVersionInfo(fast)
+    // v1.3：注入 killTree spy——win 默认走 taskkill（execFileSync 桩记录）、linux 默认走
+    // process.kill（不经 child_process，桩记不到）——注入缝与生产同点（deps.killTree ?? 默认）
+    const killed: number[] = []
+    const info = await getClaudeVersionInfo({ ...fast, killTree: (pid) => killed.push(pid) })
     expect(info).toEqual({ version: '2.1.301', path: 'C:\\npm-global\\claude.cmd' })
-    expect(state.killedPids).toEqual([4242]) // 按记录的 pid 定点杀，不枚举进程
+    expect(killed).toEqual([4242]) // 按记录的 pid 定点杀，不枚举进程
   })
 
   it("探测失败（未安装/超时/非零退出）→ version='' 不崩（契约：空=未安装）", async () => {
@@ -262,13 +275,14 @@ describe('checkClaudeUpdate（v1.0.1：registry HTTP 直连优先，npm view 兜
     }
   })
 
-  it('HTTP 失败 → 回退 npm view CLI（cmd.exe /c 包装断言）', async () => {
+  it('HTTP 失败 → 回退 npm view CLI（平台分流断言：win cmd.exe /c 包装 / linux 直呼 npm）', async () => {
     stubFetch(null)
     try {
       const info = await checkClaudeUpdate()
+      const npmView = npmViewCommand()
       expect(state.calls).toContainEqual({
-        cmd: 'cmd.exe',
-        args: ['/c', 'npm', 'view', '@anthropic-ai/claude-code', 'version'],
+        cmd: npmView.file,
+        args: npmView.args,
         opts: expect.objectContaining({ timeout: 20_000 })
       })
       expect(info).toEqual({ current: '2.1.301', latest: '2.1.304', upToDate: false })
@@ -304,12 +318,14 @@ describe('checkClaudeUpdate（v1.0.1：registry HTTP 直连优先，npm view 兜
 })
 
 describe('installClaudeCli（固定模板——绝不真跑安装器）', () => {
-  it('模板常量精确断言：native=irm|iex 且无 ExecutionPolicy Bypass；npm=npm install -g', () => {
-    expect(NATIVE_INSTALL_FILE).toBe('powershell.exe')
-    expect(NATIVE_INSTALL_ARGS).toEqual(['-NoProfile', '-Command', 'irm https://claude.ai/install.ps1 | iex'])
+  it('模板常量精确断言（按宿主平台；win=irm|iex 无 ExecutionPolicy Bypass，linux=官方 install.sh）', () => {
+    const native = nativeInstallTemplateFor(process.platform)
+    const npm = npmInstallTemplateFor(process.platform)
+    expect(NATIVE_INSTALL_FILE).toBe(native.file)
+    expect(NATIVE_INSTALL_ARGS).toEqual(native.args)
     expect(NATIVE_INSTALL_ARGS.join(' ')).not.toContain('ExecutionPolicy')
-    expect(NPM_INSTALL_FILE).toBe('cmd.exe')
-    expect(NPM_INSTALL_ARGS).toEqual(['/c', 'npm', 'install', '-g', '@anthropic-ai/claude-code'])
+    expect(NPM_INSTALL_FILE).toBe(npm.file)
+    expect(NPM_INSTALL_ARGS).toEqual(npm.args)
   })
 
   it('经 CliRunner 固定模板执行（不经 execFile）；模板字符串原样进入 spawn args', async () => {
@@ -317,13 +333,13 @@ describe('installClaudeCli（固定模板——绝不真跑安装器）', () => 
     const native = await installClaudeCli(runner, 'native')
     expect(native.commandId).toBeTruthy()
     expect(state.fakePty.spawns[0]).toMatchObject({
-      file: 'powershell.exe',
+      file: NATIVE_INSTALL_FILE,
       args: [...NATIVE_INSTALL_ARGS]
     })
 
     const npm = await installClaudeCli(runner, 'npm')
     expect(npm.commandId).toBeTruthy()
-    expect(state.fakePty.spawns[1]).toMatchObject({ file: 'cmd.exe', args: [...NPM_INSTALL_ARGS] })
+    expect(state.fakePty.spawns[1]).toMatchObject({ file: NPM_INSTALL_FILE, args: [...NPM_INSTALL_ARGS] })
     expect(execFileMock).not.toHaveBeenCalled() // 全走 PTY 通道，不走 execFile
   })
 

@@ -78,9 +78,12 @@ describe('mungePath（实测目录对照：~/.claude/projects 命名规则）', 
     expect(mungePath('D:\\SourceCode\\agent')).toBe('D--SourceCode-agent') // 大写 D/S 保留
   })
 
-  it('本机活体校验：~/.claude/projects 下存在 mungePath(D:\\SourceCode\\agent) 目录（无则静默跳过——CI 无该目录）', () => {
+  it('本机活体校验：~/.claude/projects 下存在 mungePath(D:\\SourceCode\\agent) 目录（无则静默跳过——非作者机无该目录）', () => {
+    // v1.3 修存量缺陷：原守卫只查 projects 根存在——projects 存在但作者机专属子目录
+    // 不存在时仍挂（违背标题「无则静默跳过」语义）。改为活体目录本身缺失即跳过：
+    // 本用例只在作者机（有该项目的真实 claude 会话）生效，其余机器零价值纯跳过。
     const live = join(homedir(), '.claude', 'projects', mungePath('D:\\SourceCode\\agent'))
-    if (!existsSync(join(homedir(), '.claude', 'projects'))) return
+    if (!existsSync(live)) return
     expect(existsSync(live)).toBe(true)
   })
 })

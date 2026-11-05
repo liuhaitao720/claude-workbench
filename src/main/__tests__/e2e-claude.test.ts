@@ -36,7 +36,9 @@ async function makeGitRepo(dir: string): Promise<void> {
 }
 
 describe('S4 e2e ②：真实 claude 会话 spawn（经 PtyManager 真实路径）', () => {
-  it(
+  // v1.3 守卫：本用例的版本取证段（cmd.exe /c claude --version）为 win 形态；
+  // linux 的真实 spawn 验证走 --smoke 冒烟（spawnClaude 直 execvp 路径）
+  it.skipIf(process.platform !== 'win32')(
     'spawnClaude(buildNewSessionArgs) 于 temp git cwd：isRunning、10s 内 ≥200B 且含 CSI、kill 后 isRunning=false',
     { timeout: 30_000 },
     async () => {

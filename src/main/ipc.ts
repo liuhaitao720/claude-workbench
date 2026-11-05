@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, net, session, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { IpcChannels } from '../shared/ipc-channels'
@@ -8,6 +8,7 @@ import type {
   CliOutputEvent,
   CreateTaskOptions,
   ProjectRecord,
+  ProviderConfig,
   PtyDataEvent,
   RemoveTaskOptions,
   SkillInfo,
@@ -22,6 +23,9 @@ import { AppSettingsStore } from './settings-store'
 import { FontScanner } from './font-scan'
 import { NotifyService } from './notify'
 import { ProjectStore } from './project-store'
+import { ProviderStore } from './providers-store'
+import { createModelsProbe, type ModelsProbeResult } from './provider-models'
+import { createLocalProxy, type LocalProxyHandle } from './local-proxy'
 import { mainLanguage, setMainLanguage } from './language'
 import { PtyManager, buildNewSessionArgs, buildResumeArgs } from './pty-manager'
 import { importTasksFromSessionsImpl } from './session-import'
@@ -52,6 +56,96 @@ export function isSafeExternalUrl(raw: string): boolean {
     return false
   }
   return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+}
+
+/**
+ * v1.4 provider 入参校验（IPC 边界，纯函数单测覆盖）：unknown → 归一化 ProviderConfig，
+ * 非法拒绝抛带 i18n 文案 Error（renderer catch 后直接展示）。
+ * 归一化：name/models 逐项 trim、baseUrl 去尾斜杠、models 上限 50 项。
+ * apiKey 允许空串（内网免鉴权网关合法形态）；id 空串=新增语义（save 分配 uuid）。
+ */
+export function validateProviderInput(lang: 'zh' | 'en', raw: unknown): ProviderConfig {
+  const t = (key: Parameters<typeof translate>[1]): string => translate(lang, key)
+  if (typeof raw !== 'object' || raw === null) throw new Error(t('provider.errShape'))
+  const o = raw as Record<string, unknown>
+
+  const name = typeof o['name'] === 'string' ? o['name'].trim() : ''
+  if (name === '' || name.length > 64) throw new Error(t('provider.errName'))
+
+  if (o['format'] !== 'anthropic' && o['format'] !== 'openai') throw new Error(t('provider.errFormat'))
+
+  const rawUrl = typeof o['baseUrl'] === 'string' ? o['baseUrl'].trim() : ''
+  if (!isSafeExternalUrl(rawUrl) || rawUrl.length > 512) throw new Error(t('provider.errBaseUrl'))
+  const baseUrl = rawUrl.replace(/\/+$/, '')
+
+  const apiKey = typeof o['apiKey'] === 'string' ? o['apiKey'] : ''
+  if (apiKey.length > 512) throw new Error(t('provider.errShape'))
+  const apiKeyType = o['apiKeyType'] === undefined ? undefined : o['apiKeyType']
+  if (apiKeyType !== undefined && apiKeyType !== 'auth_token' && apiKeyType !== 'api_key') {
+    throw new Error(t('provider.errShape'))
+  }
+
+  let models: string[] = []
+  if (o['models'] !== undefined) {
+    if (!Array.isArray(o['models']) || o['models'].length > 50) throw new Error(t('provider.errModels'))
+    models = (o['models'] as unknown[]).map((m) => (typeof m === 'string' ? m.trim() : ''))
+    if (models.some((m) => m === '' || m.length > 128)) throw new Error(t('provider.errModels'))
+  }
+  let defaultModel: string | undefined
+  if (o['defaultModel'] !== undefined) {
+    if (typeof o['defaultModel'] !== 'string' || o['defaultModel'].length > 128) {
+      throw new Error(t('provider.errShape'))
+    }
+    defaultModel = o['defaultModel'].trim() || undefined
+  }
+
+  const id = typeof o['id'] === 'string' ? o['id'] : ''
+  if (id.length > 64) throw new Error(t('provider.errShape'))
+
+  // v1.4 档位映射（可选；对象且值为 ≤128 字符字符串，空白归一为未设置）
+  let slotModels: ProviderConfig['slotModels'] | undefined
+  if (o['slotModels'] !== undefined) {
+    if (typeof o['slotModels'] !== 'object' || o['slotModels'] === null) {
+      throw new Error(t('provider.errSlots'))
+    }
+    const raw = o['slotModels'] as Record<string, unknown>
+    const slots: NonNullable<ProviderConfig['slotModels']> = {}
+    let any = false
+    for (const key of ['sonnet', 'opus', 'fable', 'haiku'] as const) {
+      const v = raw[key]
+      if (v === undefined) continue
+      if (typeof v !== 'string' || v.trim().length > 128) throw new Error(t('provider.errSlots'))
+      const trimmed = v.trim()
+      if (trimmed !== '') {
+        slots[key] = trimmed
+        any = true
+      }
+    }
+    if (any) slotModels = slots
+  }
+
+  // v1.4 网络代理（可选；非空须为 http(s) URL）
+  let proxyUrl: string | undefined
+  if (o['proxyUrl'] !== undefined) {
+    if (typeof o['proxyUrl'] !== 'string') throw new Error(t('provider.errProxy'))
+    proxyUrl = o['proxyUrl'].trim() || undefined
+    if (proxyUrl !== undefined && (!isSafeExternalUrl(proxyUrl) || proxyUrl.length > 512)) {
+      throw new Error(t('provider.errProxy'))
+    }
+  }
+
+  return {
+    id,
+    name,
+    format: o['format'],
+    baseUrl,
+    apiKey,
+    ...(apiKeyType !== undefined ? { apiKeyType } : {}),
+    models,
+    ...(defaultModel !== undefined ? { defaultModel } : {}),
+    ...(slotModels !== undefined ? { slotModels } : {}),
+    ...(proxyUrl !== undefined ? { proxyUrl } : {})
+  }
 }
 
 /**
@@ -87,6 +181,13 @@ export interface AppContext {
   renameTask(taskId: string, name: string): Promise<TaskRecord>
   /** 切换"跳过权限确认"（v0.3.1 契约第 17 法）：仅元数据，下次 spawn 生效 */
   setTaskSkipPermissions(taskId: string, on: boolean): Promise<TaskRecord>
+  /** v1.4 任务级 provider/model 事后修改：仅元数据，下次 spawn/resume 生效 */
+  setTaskProvider(
+    taskId: string,
+    opts: { providerId?: string; model?: string; modelMode?: 'auto' | '' }
+  ): Promise<TaskRecord>
+  /** v1.4 模型列表探测（GET {baseUrl}/v1/models；官方端点经 provider 代理出口） */
+  probeProviderModels(id: string): Promise<ModelsProbeResult>
   pickDirectory(): Promise<string | null>
   /**
    * v0.9 S13 会话导入（第 33 法）：扫描项目目录的 claude CLI 历史会话 → 生成可恢复任务
@@ -99,6 +200,12 @@ export interface AppContext {
   readonly fontScanner: FontScanner
   /** v1.1.0 应用自更新（检测/下载校验/退出替换；进度经 cwb:event:app-update-progress） */
   readonly appUpdate: AppUpdater
+  /** v1.4 模型服务 provider 档案（providers.json；createTask/resumeTask 解析注入 env） */
+  readonly providers: ProviderStore
+  /** v1.4 本地代理（纯隧道；运行期间任务 HTTP_PROXY 统一指向它，按端点域名路由） */
+  readonly localProxy: LocalProxyHandle
+  /** v1.4 provider 解析（任务 providerId > 默认 > 不注入）→ ANTHROPIC_* env；测试直接调用 */
+  resolveProviderEnv: (providerId: string | undefined, model: string | undefined) => Record<string, string> | undefined
 }
 
 export interface AppContextOptions {
@@ -168,6 +275,43 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     taskNameOf: (taskId) => tasks.get(taskId)?.name,
     language: mainLanguage
   })
+  // v1.4 模型服务 provider 档案：userData/providers.json（apiKey 属凭据仅存本地）
+  const providers = new ProviderStore(baseDir)
+  // v1.4 本地代理：路由表 = provider 端点 host → 该 provider 的外部代理（无=直连）。
+  // 每连接现取——provider 增删/改代理配置即时生效，无需重启代理
+  const localProxy = createLocalProxy({
+    resolveRouting: () =>
+      providers.list().flatMap((p) => {
+        try {
+          return [{ host: new URL(p.baseUrl).hostname, ...(p.proxyUrl ? { upstream: p.proxyUrl } : {}) }]
+        } catch {
+          return []
+        }
+      })
+  })
+  // 随应用启动（缺省不开——测试环境零副作用；显式用例再开）
+  if (appSettings.get().proxyAutoStart === true) void localProxy.start()
+  // v1.4 模型列表探测：官方端点经 provider 代理出口（Electron net.fetch + 独立 partition
+  // session setProxy）；测试 mock 无 net/session 时降级直连（probe 内部容错）
+  const probeProviderModels = createModelsProbe({
+    sessionFetch: async (proxyUrl) => {
+      if (typeof net?.fetch !== 'function' || typeof session?.fromPartition !== 'function') {
+        return undefined
+      }
+      const s = session.fromPartition('cwb-probe-models', { cache: false })
+      await s.setProxy({ proxyRules: proxyUrl, proxyBypassRules: '127.0.0.1,localhost' })
+      // session 级 fetch（走该 session 的代理规则；net.fetch 的 RequestInit 不收 session）
+      return ((url: string | URL, init?: RequestInit) =>
+        s.fetch(typeof url === 'string' ? url : url.toString(), init)) as typeof fetch
+    }
+  })
+  const probeProviderModelsById = async (id: string): Promise<ModelsProbeResult> => {
+    const provider = providers.get(id)
+    if (provider === undefined) {
+      return { ok: false, error: translate(mainLanguage(), 'provider.errNotFound', { id }) }
+    }
+    return probeProviderModels(provider)
+  }
   const fontScanner = new FontScanner()
   // v1.1.0 应用自更新：落点 userData/updates；进度广播全部窗口（quit 走 app.quit 正常路径
   // ——before-quit 杀 PTY 树释放文件锁后更新器才动手，见 app-updater.ts 头注）
@@ -284,13 +428,16 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     try {
       // settings 写盘入 try：失败与 spawn 失败同路径清理 worktree/states（评审 #5）
       const settingsPath = await activity.buildSettings(taskId)
+      // v1.4：任务指定 provider/model/modelMode（缺省走默认链）→ spawn env 注入
+      const providerEnv = resolveProviderEnv(opts.providerId, opts.model, opts.modelMode)
       await pty.spawnClaude(
         taskId,
         buildNewSessionArgs(taskId, name, {
           skipPermissions: opts.skipPermissions,
           settingsPath
         }),
-        cwd
+        cwd,
+        providerEnv
       )
     } catch (err) {
       // spawn 失败不留孤儿 worktree/settings（尽力清理）
@@ -313,6 +460,11 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       cwd,
       ...(worktreePath ? { worktreePath } : {}),
       ...(opts.skipPermissions ? { skipPermissions: true } : {}),
+      ...(opts.providerId !== undefined && opts.providerId !== ''
+        ? { providerId: opts.providerId }
+        : {}),
+      ...(opts.model !== undefined && opts.model !== '' ? { model: opts.model } : {}),
+      ...(opts.modelMode === 'auto' ? { modelMode: 'auto' as const } : {}),
       status: 'running',
       createdAt: now,
       lastActiveAt: now
@@ -336,13 +488,16 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     activity.noteSpawn(task.id)
     try {
       const settingsPath = await activity.buildSettings(task.id)
+      // v1.4：沿用任务记录的 provider/model 元数据（与 skipPermissions 同语义——切换在下次恢复生效）
+      const providerEnv = resolveProviderEnv(task.providerId, task.model, task.modelMode)
       await pty.spawnClaude(
         task.id,
         buildResumeArgs(task.sessionId, task.name, {
           skipPermissions: task.skipPermissions === true,
           settingsPath
         }),
-        task.cwd
+        task.cwd,
+        providerEnv
       )
     } catch (err) {
       // spawn 失败清理 settings/内存态（评审 #4，与 createTask 对称）
@@ -391,9 +546,103 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     return updated
   }
 
+  /**
+   * v1.4 任务级 provider/model 事后修改（照 setTaskSkipPermissions 第 17 法先例）：
+   * 仅元数据——下次 spawn/resume 生效（运行中会话不受影响）；空串=清除该字段回退默认链。
+   * providerId 允许指向不存在的档案（删除后回退语义由 resolveProviderEnv 兜底）；
+   * modelMode:'auto'=CLI 自主选择（清除 model），''/undefined=清除 auto 回到 model 链。
+   */
+  async function setTaskProvider(
+    taskId: string,
+    opts: { providerId?: string; model?: string; modelMode?: 'auto' | '' }
+  ): Promise<TaskRecord> {
+    const task = tasks.get(taskId)
+    if (!task) throw new Error(`task not found: ${taskId}`)
+    const providerId =
+      opts.providerId !== undefined && opts.providerId !== '' ? opts.providerId : undefined
+    const modelMode = opts.modelMode === 'auto' ? ('auto' as const) : undefined
+    const model = modelMode === 'auto' ? undefined : opts.model !== undefined && opts.model !== '' ? opts.model : undefined
+    const updated = tasks.upsert({
+      ...task,
+      providerId,
+      model,
+      modelMode,
+      lastActiveAt: new Date().toISOString()
+    })
+    broadcastTaskUpdate(updated)
+    return updated
+  }
+
   async function pickDirectory(): Promise<string | null> {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
     return result.canceled ? null : (result.filePaths[0] ?? null)
+  }
+
+  /**
+   * v1.4 provider 解析 → spawn 注入 env。
+   * 解析链（用户确认的语义）：任务 providerId > 默认 provider > 不注入（v1.3 前
+   * 行为——继承 env 原样透传）；任务引用的 provider 已删除 → 回退默认链。
+   * 只做 API 配置注入（协议兼容由 claude CLI 与网关承担）。
+   * v1.4：modelMode='auto'（CLI 自主选择）不注入 ANTHROPIC_MODEL；档位映射
+   * slotModels → ANTHROPIC_DEFAULT_*_MODEL 照常注入（auto 与固定主模型下均生效）。
+   */
+  function resolveProviderEnv(
+    providerId: string | undefined,
+    model: string | undefined,
+    modelMode?: 'auto'
+  ): Record<string, string> | undefined {
+    const provider =
+      (providerId !== undefined && providerId !== '' ? providers.get(providerId) : undefined) ??
+      providers.getDefault()
+    if (provider === undefined) return undefined
+    const env: Record<string, string> = { ANTHROPIC_BASE_URL: provider.baseUrl }
+    if (provider.apiKey !== '') {
+      env[provider.apiKeyType === 'api_key' ? 'ANTHROPIC_API_KEY' : 'ANTHROPIC_AUTH_TOKEN'] =
+        provider.apiKey
+    }
+    // 任务模型：auto=CLI 自主（跳过 ANTHROPIC_MODEL，档位映射/供应商默认接管）
+    if (modelMode !== 'auto') {
+      const effectiveModel = model !== undefined && model !== '' ? model : provider.defaultModel
+      if (effectiveModel !== undefined && effectiveModel !== '') {
+        env['ANTHROPIC_MODEL'] = effectiveModel
+      }
+    }
+    // 档位映射（Anthropic 格式）：CLI 按档位选模型时落到具体模型
+    const slots = provider.slotModels
+    if (slots !== undefined) {
+      if (slots.sonnet !== undefined && slots.sonnet !== '') {
+        env['ANTHROPIC_DEFAULT_SONNET_MODEL'] = slots.sonnet
+      }
+      if (slots.opus !== undefined && slots.opus !== '') {
+        env['ANTHROPIC_DEFAULT_OPUS_MODEL'] = slots.opus
+      }
+      if (slots.fable !== undefined && slots.fable !== '') {
+        env['ANTHROPIC_DEFAULT_FABLE_MODEL'] = slots.fable
+      }
+      if (slots.haiku !== undefined && slots.haiku !== '') {
+        env['ANTHROPIC_DEFAULT_HAIKU_MODEL'] = slots.haiku
+      }
+    }
+    // v1.4 网络代理（照搬 cc-switch：Anthropic 原生格式直连官方需代理）：
+    // 大小写双写（Node/undici 与常见 CLI 读法不同），NO_PROXY 豁免本机回调——
+    // hooks 活动上报走 127.0.0.1，经代理会被劫持（cc-switch issue #1264 同源问题）。
+    // 本地代理运行期间：统一指向本地代理（路由由代理按端点 host 决定直连/外部代理），
+    // 不再直注 provider.proxyUrl——provider 代理配置改动即时生效（无需重 spawn）
+    const applyProxy = (p: string): void => {
+      env['HTTP_PROXY'] = p
+      env['HTTPS_PROXY'] = p
+      env['http_proxy'] = p
+      env['https_proxy'] = p
+      env['NO_PROXY'] = '127.0.0.1,localhost'
+      env['no_proxy'] = '127.0.0.1,localhost'
+    }
+    const local = localProxy.status()
+    if (local.running && local.port !== undefined) {
+      applyProxy(`http://127.0.0.1:${local.port}`)
+    } else if (provider.proxyUrl !== undefined && provider.proxyUrl !== '') {
+      applyProxy(provider.proxyUrl)
+    }
+    return env
   }
 
   return {
@@ -406,6 +655,9 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     skillMarket,
     pluginSkills,
     notify,
+    providers,
+    localProxy,
+    resolveProviderEnv,
     smokeReports,
     addProject,
     removeProject,
@@ -416,6 +668,8 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     removeTask,
     renameTask,
     setTaskSkipPermissions,
+    setTaskProvider,
+    probeProviderModels: probeProviderModelsById,
     pickDirectory,
     importTasksFromSessions,
     appSettings,
@@ -572,6 +826,42 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     ctx.notify.setWebhook(url, enabled)
   )
   ipcMain.handle(IpcChannels.NotifyTest, () => ctx.notify.sendTest())
+  // v1.4 模型服务 provider：档案 CRUD + 默认切换（入参校验拒绝即 invoke reject，renderer 展示错误）
+  ipcMain.handle(IpcChannels.ProvidersList, () => ctx.providers.state())
+  ipcMain.handle(IpcChannels.ProvidersSave, (_e, raw: unknown) =>
+    ctx.providers.save(validateProviderInput(mainLanguage(), raw))
+  )
+  ipcMain.handle(IpcChannels.ProvidersRemove, (_e, id: unknown) => {
+    if (typeof id !== 'string' || id === '') {
+      throw new Error(translate(mainLanguage(), 'provider.errShape'))
+    }
+    if (!ctx.providers.remove(id)) {
+      throw new Error(translate(mainLanguage(), 'provider.errNotFound', { id }))
+    }
+  })
+  ipcMain.handle(IpcChannels.ProvidersSetDefault, (_e, id: unknown) => {
+    if (typeof id !== 'string') {
+      throw new Error(translate(mainLanguage(), 'provider.errShape'))
+    }
+    if (!ctx.providers.setDefault(id)) {
+      throw new Error(translate(mainLanguage(), 'provider.errNotFound', { id }))
+    }
+  })
+  ipcMain.handle(IpcChannels.ProvidersProbeModels, (_e, id: unknown) => {
+    if (typeof id !== 'string' || id === '') {
+      throw new Error(translate(mainLanguage(), 'provider.errShape'))
+    }
+    return ctx.probeProviderModels(id)
+  })
+  ipcMain.handle(
+    IpcChannels.TasksSetProvider,
+    (_e, taskId: string, opts: { providerId?: string; model?: string; modelMode?: 'auto' | '' }) =>
+      ctx.setTaskProvider(taskId, opts)
+  )
+  // v1.4 本地代理：状态/启动/停止（start 失败即 reject——端口全占等，UI 显示错误）
+  ipcMain.handle(IpcChannels.ProxyStatus, () => ctx.localProxy.status())
+  ipcMain.handle(IpcChannels.ProxyStart, () => ctx.localProxy.start())
+  ipcMain.handle(IpcChannels.ProxyStop, () => ctx.localProxy.stop())
   // on（renderer send，无返回值）
   ipcMain.on(IpcChannels.PtyWrite, (_e, taskId: string, data: string) => {
     // v0.4.2 输入回显抑制：记录用户键入时刻（键入后 2s 内的 PTY 字节=TUI 重绘，不点亮 busy）

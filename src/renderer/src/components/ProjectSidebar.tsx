@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ProjectRecord, TaskRecord } from '../../../shared/types'
+import type { ProjectRecord, ProviderRegistryState, TaskRecord } from '../../../shared/types'
 import { useAppStore } from '../store'
 import { APP_VERSION } from '../app-info'
 import { loadDefaultIsolation, persistDefaultIsolation } from '../default-isolation'
@@ -33,9 +33,12 @@ export function ProjectSidebar() {
   const selectProject = useAppStore((s) => s.selectProject)
   const openTaskAutoResume = useAppStore((s) => s.openTaskAutoResume)
   const openSkills = useAppStore((s) => s.openSkills)
-  // v1.1.0 更新角标数据源（null=未检查/已是最新/检查失败）
+  // v1.1.0 更新角标数据源（null=未检查/已是最新/检查失败）；
+  // v1.3：平台不支持自动升级（linux，platformSupported=false）不亮角标——
+  // 角标引导的是应用内下载/升级链路，该链路在 linux 被门禁禁用
   const appUpdateInfo = useAppStore((s) => s.appUpdateInfo)
-  const hasUpdate = appUpdateInfo !== null && !appUpdateInfo.upToDate
+  const hasUpdate =
+    appUpdateInfo !== null && !appUpdateInfo.upToDate && appUpdateInfo.platformSupported !== false
   const openSettings = useAppStore((s) => s.openSettings)
 
   const [railCollapsed, setRailCollapsed] = useState(false)
@@ -301,6 +304,164 @@ function initialsOf(name: string): string {
 }
 
 /** 单任务"跳过权限确认"勾选（v0.3.1）——危险项琥珀色；默认关闭（安全默认） */
+// ── v1.4 新建任务：模型服务选择（折叠行，缺省"跟随默认"零负担） ──────────
+
+/** 任务级 provider/model 选择值（undefined = 跟随默认；modelMode:'auto'=CLI 自主选择） */
+export interface TaskProviderPick {
+  providerId?: string
+  model?: string
+  modelMode?: 'auto'
+}
+
+/** 选择模式派生：auto 显式标记；model 有值（含空串中间态）=固定；否则跟随缺省 */
+function pickMode(pick: TaskProviderPick): 'default' | 'fixed' | 'auto' {
+  if (pick.modelMode === 'auto') return 'auto'
+  if (pick.model !== undefined) return 'fixed'
+  return 'default'
+}
+
+function providerPickLabel(
+  t: ReturnType<typeof useI18n>,
+  pick: TaskProviderPick,
+  providers: ProviderRegistryState
+): string {
+  const label = t('newTask.providerLabel')
+  if (pick.providerId === undefined) {
+    const def = providers.providers.find((p) => p.id === providers.defaultProviderId)
+    const tail =
+      def !== undefined
+        ? t('newTask.providerFollowWith', { name: def.name })
+        : t('newTask.providerFollowNone')
+    return `${label}：${tail}`
+  }
+  const p = providers.providers.find((x) => x.id === pick.providerId)
+  const name = p?.name ?? pick.providerId
+  const mode = pickMode(pick)
+  const tail =
+    mode === 'auto'
+      ? t('common.modelModeAuto')
+      : mode === 'fixed' && pick.model !== undefined && pick.model !== ''
+        ? pick.model
+        : mode === 'fixed'
+          ? t('common.modelModeFixed')
+          : p?.defaultModel !== undefined && p.defaultModel !== ''
+            ? t('newTask.providerModelPlaceholder', { model: p.defaultModel })
+            : t('common.modelModeDefault')
+  return `${label}：${name} · ${tail}`
+}
+
+function ProviderPick({
+  value,
+  onChange
+}: {
+  value: TaskProviderPick
+  onChange: (v: TaskProviderPick) => void
+}) {
+  const t = useI18n()
+  const providers = useAppStore((s) => s.providers)
+  const [expanded, setExpanded] = useState(false)
+  const selected = providers.providers.find((p) => p.id === value.providerId)
+
+  if (!expanded) {
+    return (
+      <button
+        type="button"
+        className="provider-pick"
+        onClick={() => setExpanded(true)}
+        title={t('newTask.providerLabel')}
+      >
+        {providerPickLabel(t, value, providers)}
+      </button>
+    )
+  }
+  return (
+    <div className="provider-pick expanded">
+      <div className="provider-options" role="radiogroup" aria-label={t('newTask.providerLabel')}>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={value.providerId === undefined}
+          className={value.providerId === undefined ? 'on' : ''}
+          onClick={() => onChange({ providerId: undefined, model: undefined })}
+        >
+          {t('newTask.providerFollow')}
+        </button>
+        {providers.providers.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            role="radio"
+            aria-checked={value.providerId === p.id}
+            className={value.providerId === p.id ? 'on' : ''}
+            onClick={() => onChange({ providerId: p.id, model: undefined })}
+          >
+            {p.name}
+          </button>
+        ))}
+      </div>
+      {value.providerId !== undefined && (
+        <>
+          {/* v1.4 模型三态：跟随缺省 / 固定模型 / CLI 自主选择 */}
+          <div role="radiogroup" aria-label={t('common.modelModeLabel')} className="provider-options">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={pickMode(value) === 'default'}
+              className={pickMode(value) === 'default' ? 'on' : ''}
+              onClick={() => onChange({ providerId: value.providerId, model: undefined, modelMode: undefined })}
+            >
+              {t('common.modelModeDefault')}
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={pickMode(value) === 'fixed'}
+              className={pickMode(value) === 'fixed' ? 'on' : ''}
+              onClick={() => onChange({ ...value, modelMode: undefined, model: '' })}
+            >
+              {t('common.modelModeFixed')}
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={pickMode(value) === 'auto'}
+              className={pickMode(value) === 'auto' ? 'on' : ''}
+              onClick={() => onChange({ providerId: value.providerId, model: undefined, modelMode: 'auto' })}
+            >
+              {t('common.modelModeAuto')}
+            </button>
+          </div>
+          {pickMode(value) === 'fixed' && (
+            <>
+              <input
+                className="provider-model-input"
+                type="text"
+                list="cwb-newtask-models"
+                aria-label={t('newTask.providerModelLabel')}
+                placeholder={
+                  selected?.defaultModel !== undefined && selected.defaultModel !== ''
+                    ? t('newTask.providerModelPlaceholder', { model: selected.defaultModel })
+                    : t('newTask.providerModelPlaceholderNone')
+                }
+                value={value.model ?? ''}
+                onChange={(e) => onChange({ ...value, model: e.target.value.trim() })}
+              />
+              <datalist id="cwb-newtask-models">
+                {(selected?.models ?? []).map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+            </>
+          )}
+        </>
+      )}
+      <button type="button" className="btn small" onClick={() => setExpanded(false)}>
+        {t('common.close')}
+      </button>
+    </div>
+  )
+}
+
 function SkipPermsCheck({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   const t = useI18n()
   return (
@@ -361,6 +522,8 @@ function NewTaskDialog({
   const [pending, setPending] = useState<string | null>(null)
   /** 单任务"跳过权限确认"（v0.3.1）：默认关（安全默认），两阶段均可勾选 */
   const [skipPerms, setSkipPerms] = useState(false)
+  /** v1.4 任务级 provider/model（缺省=跟随默认；名称阶段选定，三选阶段沿用） */
+  const [providerPick, setProviderPick] = useState<TaskProviderPick>({})
 
   // A1：document 级 Escape——旧 overlay onKeyDown 依赖 autoFocus 焦点在弹窗内，
   // 焦点被点移到对话框空白处后失效；统一走 useEscapeClose
@@ -376,7 +539,12 @@ function NewTaskDialog({
       onCreated?.()
       void createTaskFlow(project.id, trimmed, {
         isolation: 'shared',
-        ...(skipPerms ? { skipPermissions: true } : {}) // 缺省=关闭（安全默认），false 不入参
+        ...(skipPerms ? { skipPermissions: true } : {}), // 缺省=关闭（安全默认），false 不入参
+        ...(providerPick.providerId !== undefined ? { providerId: providerPick.providerId } : {}),
+        ...(providerPick.modelMode === 'auto' ? { modelMode: 'auto' as const } : {}),
+        ...(providerPick.modelMode !== 'auto' && providerPick.model !== undefined && providerPick.model !== ''
+          ? { model: providerPick.model }
+          : {})
       })
     }
   }
@@ -390,7 +558,12 @@ function NewTaskDialog({
       onCreated?.()
       void createTaskFlow(project.id, taskName, {
         isolation,
-        ...(skipPerms ? { skipPermissions: true } : {})
+        ...(skipPerms ? { skipPermissions: true } : {}),
+        ...(providerPick.providerId !== undefined ? { providerId: providerPick.providerId } : {}),
+        ...(providerPick.modelMode === 'auto' ? { modelMode: 'auto' as const } : {}),
+        ...(providerPick.modelMode !== 'auto' && providerPick.model !== undefined && providerPick.model !== ''
+          ? { model: providerPick.model }
+          : {})
       })
     }
   }
@@ -422,6 +595,7 @@ function NewTaskDialog({
               }}
             />
             <SkipPermsCheck checked={skipPerms} onChange={setSkipPerms} />
+            <ProviderPick value={providerPick} onChange={setProviderPick} />
             <div className="dialog-actions">
               <button type="button" className="btn primary" onClick={submit}>
                 {t('newTask.create')}
@@ -435,6 +609,7 @@ function NewTaskDialog({
           <>
             <p className="dialog-hint">{t('newTask.isolationHint')}</p>
             <SkipPermsCheck checked={skipPerms} onChange={setSkipPerms} />
+            <ProviderPick value={providerPick} onChange={setProviderPick} />
             <div className="dialog-actions">
               <button
                 type="button"

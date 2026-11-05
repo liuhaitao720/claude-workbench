@@ -9,6 +9,7 @@ import {
   buildResumeArgs,
   pickClaudePaths
 } from '../pty-manager'
+import { pickClaudePathsFor } from '../platform'
 
 describe('buildClaudeEnv（v1.0.8 终端保真环境）', () => {
   it('TERM=xterm-256color + COLORTERM=truecolor（缺 COLORTERM 时 CLI 降级 256 色）', () => {
@@ -33,6 +34,51 @@ describe('buildClaudeEnv（v1.0.8 终端保真环境）', () => {
       else process.env['CLAUDECODE'] = prev
       if (prevModel === undefined) delete process.env['ANTHROPIC_MODEL']
       else process.env['ANTHROPIC_MODEL'] = prevModel
+    }
+  })
+
+  // ── v1.4 provider 注入（每任务 API 配置）───────────────────────────────
+  it('v1.4 无 providerEnv：继承的 ANTHROPIC_* 原样透传（v1.3 前行为逐字节不变）', () => {
+    const prev = process.env['ANTHROPIC_BASE_URL']
+    process.env['ANTHROPIC_BASE_URL'] = 'https://inherited.example'
+    try {
+      const env = buildClaudeEnv()
+      expect(env['ANTHROPIC_BASE_URL']).toBe('https://inherited.example')
+      // 显式传 undefined 也等价于"未指定"（resolveProviderEnv 无配置时返回 undefined）
+      expect(buildClaudeEnv(undefined)['ANTHROPIC_BASE_URL']).toBe('https://inherited.example')
+    } finally {
+      if (prev === undefined) delete process.env['ANTHROPIC_BASE_URL']
+      else process.env['ANTHROPIC_BASE_URL'] = prev
+    }
+  })
+
+  it('v1.4 providerEnv：先剥离继承的 ANTHROPIC_* 四件套再覆写（防系统级配置串扰）', () => {
+    const prev: Record<string, string | undefined> = {
+      ANTHROPIC_BASE_URL: process.env['ANTHROPIC_BASE_URL'],
+      ANTHROPIC_AUTH_TOKEN: process.env['ANTHROPIC_AUTH_TOKEN'],
+      ANTHROPIC_API_KEY: process.env['ANTHROPIC_API_KEY'],
+      ANTHROPIC_MODEL: process.env['ANTHROPIC_MODEL']
+    }
+    process.env['ANTHROPIC_BASE_URL'] = 'https://inherited.example'
+    process.env['ANTHROPIC_AUTH_TOKEN'] = 'inherited-token'
+    process.env['ANTHROPIC_API_KEY'] = 'inherited-key'
+    process.env['ANTHROPIC_MODEL'] = 'inherited-model'
+    try {
+      const env = buildClaudeEnv({
+        ANTHROPIC_BASE_URL: 'https://open.bigmodel.cn/api/anthropic',
+        ANTHROPIC_AUTH_TOKEN: 'sk-task',
+        ANTHROPIC_MODEL: 'glm-4.6'
+      })
+      expect(env['ANTHROPIC_BASE_URL']).toBe('https://open.bigmodel.cn/api/anthropic')
+      expect(env['ANTHROPIC_AUTH_TOKEN']).toBe('sk-task')
+      expect(env['ANTHROPIC_MODEL']).toBe('glm-4.6')
+      // 未覆写的 ANTHROPIC_API_KEY 被剥离（不残留继承值——鉴权变量单一来源）
+      expect(env['ANTHROPIC_API_KEY']).toBeUndefined()
+    } finally {
+      for (const [k, v] of Object.entries(prev)) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
     }
   })
 })
@@ -77,23 +123,34 @@ describe('pickClaudePaths（v1.0.6 where 多命中 → 有序候选列表）', (
     'C:\\Users\\dev\\AppData\\Local\\Microsoft\\WinGet\\Links\\claude.exe'
   ]
 
+  // v1.3：pickClaudePaths 按运行时平台分流——win 语义断言改用参数化 For 变体
+  // （任意宿主可测）；re-export 等值一并锚定。linux 分支语料见 platform.test.ts
   it('npm claude.cmd 优先，其余 cmd/exe/bat 按 where 顺序；sh 垫片与 .ps1 过滤', () => {
-    expect(pickClaudePaths(whereOutput)).toEqual([
+    expect(pickClaudePathsFor('win32', whereOutput)).toEqual([
       'C:\\Users\\dev\\AppData\\Roaming\\npm\\claude.cmd',
       'C:\\Users\\dev\\AppData\\Local\\Microsoft\\WinGet\\Links\\claude.exe'
     ])
   })
 
-  it('无 npm 命中时保持 where 顺序；空/全不可执行返回空数组；重复去重', () => {
-    expect(pickClaudePaths(['D:\\tools\\claude.exe', ''])).toEqual(['D:\\tools\\claude.exe'])
-    expect(pickClaudePaths(['', '   '])).toEqual([])
-    expect(pickClaudePaths(['C:\\x\\claude.ps1'])).toEqual([])
-    expect(pickClaudePaths(['D:\\a\\claude.exe', 'D:\\a\\claude.exe'])).toEqual(['D:\\a\\claude.exe'])
+  it('无 npm 命中时保持 where 顺序；空/全不可运行返回空数组；重复去重', () => {
+    expect(pickClaudePathsFor('win32', ['D:\\tools\\claude.exe', ''])).toEqual(['D:\\tools\\claude.exe'])
+    expect(pickClaudePathsFor('win32', ['', '   '])).toEqual([])
+    expect(pickClaudePathsFor('win32', ['C:\\x\\claude.ps1'])).toEqual([])
+    expect(pickClaudePathsFor('win32', ['D:\\a\\claude.exe', 'D:\\a\\claude.exe'])).toEqual(['D:\\a\\claude.exe'])
+  })
+
+  it('re-export 等值：pty-manager 导出的 pickClaudePaths 即 platform 按宿主平台的实现', () => {
+    expect(pickClaudePaths(whereOutput)).toEqual(pickClaudePathsFor(process.platform, whereOutput))
   })
 })
 
 describe('PtyManager（真实 node-pty）', () => {
-  it('spawn cmd.exe /c echo ok：收到含 ok 字节后退出，isRunning 归假', { timeout: 10_000 }, async () => {
+  // v1.3：真实 PTY 用例按宿主平台取壳（win=cmd.exe、linux=/bin/sh——PTY 上交互态
+  // sh 长命，kill/resize/尺寸记忆语义与 cmd.exe 同测）
+  const IS_WIN = process.platform === 'win32'
+  const SHELL = IS_WIN ? 'cmd.exe' : '/bin/sh'
+
+  it('spawn 平台壳层 echo ok：收到含 ok 字节后退出，isRunning 归假', { timeout: 10_000 }, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cwb-pty-'))
     try {
       const chunks: string[] = []
@@ -103,7 +160,7 @@ describe('PtyManager（真实 node-pty）', () => {
         onExit: (taskId) => exits.push(taskId)
       })
 
-      mgr.spawn('t-echo', 'cmd.exe', ['/c', 'echo', 'ok'], dir)
+      mgr.spawn('t-echo', SHELL, IS_WIN ? ['/c', 'echo', 'ok'] : ['-c', 'echo ok'], dir)
       expect(mgr.isRunning('t-echo')).toBe(true)
 
       await vi.waitFor(
@@ -128,7 +185,7 @@ describe('PtyManager（真实 node-pty）', () => {
         onExit: (taskId) => exits.push(taskId)
       })
 
-      mgr.spawn('t-shell', 'cmd.exe', [], dir)
+      mgr.spawn('t-shell', SHELL, [], dir)
       expect(mgr.isRunning('t-shell')).toBe(true)
 
       mgr.kill('t-shell')
@@ -153,7 +210,7 @@ describe('PtyManager（真实 node-pty）', () => {
         onExit: (taskId) => exits.push(taskId)
       })
 
-      mgr.spawn('t-resume', 'cmd.exe', [], dir)
+      mgr.spawn('t-resume', SHELL, [], dir)
       expect(mgr.currentSize('t-resume')).toEqual({ cols: 80, rows: 24 }) // 首启默认
 
       mgr.resize('t-resume', 120, 38) // 模拟终端 fit 后同步
@@ -167,7 +224,7 @@ describe('PtyManager（真实 node-pty）', () => {
       await vi.waitFor(() => expect(exits).toContain('t-resume'), { timeout: 9_000, interval: 100 })
 
       // --resume 重开：须沿用 120×38，否则 claude 按旧栅格计算光标 → 错位
-      mgr.spawn('t-resume', 'cmd.exe', [], dir)
+      mgr.spawn('t-resume', SHELL, [], dir)
       expect(mgr.currentSize('t-resume')).toEqual({ cols: 120, rows: 38 })
 
       mgr.kill('t-resume')

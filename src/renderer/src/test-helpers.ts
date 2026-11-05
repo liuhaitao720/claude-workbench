@@ -7,6 +7,7 @@ import type {
   CWBApi,
   NotifyConfig,
   ProjectRecord,
+  ProviderConfig,
   PtyDataEvent,
   SkillInfo,
   SkillMarketEntry,
@@ -44,7 +45,11 @@ export function makeTask(t: Partial<TaskRecord> = {}): TaskRecord {
     ...(t.skipPermissions ? { skipPermissions: true } : {}),
     status: t.status ?? 'stopped',
     createdAt: t.createdAt ?? now,
-    lastActiveAt: t.lastActiveAt ?? now
+    lastActiveAt: t.lastActiveAt ?? now,
+    // v1.4：透传任务级 provider/model（Partial 里给什么带什么——undefined 不落键）
+    ...(t.providerId !== undefined && t.providerId !== '' ? { providerId: t.providerId } : {}),
+    ...(t.model !== undefined && t.model !== '' ? { model: t.model } : {}),
+    ...(t.modelMode === 'auto' ? { modelMode: 'auto' as const } : {})
   }
 }
 
@@ -69,8 +74,17 @@ export type CwbApiMock = CWBApi & {
   cliOutputDisposer: ReturnType<typeof vi.fn>
 }
 
-/** 安装 window.cwb 全量 mock（18 法），返回带回调捕获与退订句柄的 mock */
-export function installCwbMock(opts: { projects?: ProjectRecord[]; tasks?: TaskRecord[] } = {}): CwbApiMock {
+/** 安装 window.cwb 全量 mock（18 法），返回带回调捕获与退订句柄的 mock。
+ *  v1.4：providers/defaultProviderId 预置模型服务档案（loadAll mount 即拉取——
+ *  事后覆写 mock 来不及，必须经 opts 在 render 前注入）。 */
+export function installCwbMock(
+  opts: {
+    projects?: ProjectRecord[]
+    tasks?: TaskRecord[]
+    providers?: ProviderConfig[]
+    defaultProviderId?: string
+  } = {}
+): CwbApiMock {
   const projects = opts.projects ?? []
   const tasks = opts.tasks ?? []
   const ptyCallbacks: Array<(e: PtyDataEvent) => void> = []
@@ -84,6 +98,9 @@ export function installCwbMock(opts: { projects?: ProjectRecord[]; tasks?: TaskR
   const activityDisposer = vi.fn()
 
   const api: CwbApiMock = {
+    // v1.3：CWBApi 新增 platform——mock 钉死 'win32'（组件按平台分支的行为在
+    // 测试里保持 Windows 语义，跨平台分支由 platform.test.ts 单测覆盖）
+    platform: 'win32',
     ptyCallbacks,
     taskUpdateCallbacks,
     activityCallbacks,
@@ -179,6 +196,27 @@ export function installCwbMock(opts: { projects?: ProjectRecord[]; tasks?: TaskR
     getNotifyConfig: vi.fn(async () => ({ url: '', enabled: false, channel: 'wecom' } as NotifyConfig)),
     setNotifyWebhook: vi.fn(async (url: string, enabled: boolean) => ({ url, enabled, channel: 'wecom' } as NotifyConfig)),
     sendTestNotify: vi.fn(async () => ({ ok: true })),
+    // v1.4 模型服务 provider（默认空注册表；具体用例经 installCwbMock opts 或 vi.mocked 覆写）
+    listProviders: vi.fn(async () => ({
+      providers: opts.providers ?? [],
+      ...(opts.defaultProviderId !== undefined ? { defaultProviderId: opts.defaultProviderId } : {})
+    })),
+    saveProvider: vi.fn(async (p: ProviderConfig) => p),
+    removeProvider: vi.fn(async () => {}),
+    setDefaultProvider: vi.fn(async () => {}),
+    probeProviderModels: vi.fn(async (_id: string) => ({ ok: true, models: ['glm-4.6'] })),
+    setTaskProvider: vi.fn(async (_taskId: string, opts: { providerId?: string; model?: string }) =>
+      makeTask({ providerId: opts.providerId, model: opts.model })
+    ),
+    // v1.4 本地代理（默认停止态；状态卡用例覆写）
+    getProxyStatus: vi.fn(async () => ({ running: false, stats: { total: 0, active: 0, direct: 0, viaProxy: 0 } })),
+    startProxy: vi.fn(async () => ({
+      running: true,
+      port: 12700,
+      startedAt: '2026-11-05T10:00:00.000Z',
+      stats: { total: 0, active: 0, direct: 0, viaProxy: 0 }
+    })),
+    stopProxy: vi.fn(async () => ({ running: false, stats: { total: 0, active: 0, direct: 0, viaProxy: 0 } })),
     // v1.2.0 skill 市场（默认空结果；SkillsDialog 在线搜索用例覆写）
     searchSkillMarket: vi.fn(async () => [] as SkillMarketEntry[]),
     listSkillMarketplaces: vi.fn(async () => [] as SkillMarketplaceInfo[]),

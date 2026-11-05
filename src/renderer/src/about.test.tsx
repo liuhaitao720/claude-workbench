@@ -96,13 +96,13 @@ describe('关于并入设置中心（v1.2.2：侧栏只留 Skills / 设置）', 
     fireEvent.click(screen.getByRole('button', { name: '设置' }))
     const dialog = await screen.findByRole('dialog', { name: '设置' })
     const s = within(dialog)
-    expect(s.getByRole('button', { name: /^外观/ }).getAttribute('aria-current')).toBe('true')
+    expect(s.getByRole('button', { name: /^通用/ }).getAttribute('aria-current')).toBe('true')
 
     fireEvent.click(s.getByRole('button', { name: /^关于/ }))
     expect(s.getByText(/版本 v1\.2\.1/)).toBeDefined()
     expect(s.getByRole('button', { name: /^关于/ }).getAttribute('aria-current')).toBe('true')
 
-    fireEvent.click(s.getByRole('button', { name: /^外观/ }))
+    fireEvent.click(s.getByRole('button', { name: /^通用/ }))
     expect(s.queryByText(/版本 v1\.2\.1/)).toBeNull() // 关于分类内容随切换卸载
     expect(s.getByRole('radiogroup', { name: '界面主题' })).toBeDefined()
   })

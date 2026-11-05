@@ -2,6 +2,24 @@
 
 Claude Workbench 版本更新说明（新版本在前；应用内「设置 → 应用更新」读取本文件展示）。
 
+## 1.4.0
+
+- 设置中心整体重排（左栏收敛为 通用 / 模型服务 / claude CLI / 关于 4 项）：外观+终端+通知+启动合并为「通用」，单一 110px 行栅格——label 右缘与控件左缘全弹窗成线；值型下拉统一 220px 宽；勾选提示改为行内（勾选框后同一行垂直居中）；通知表单按用户确认原样搬入（交互与既有锚点不变）
+- 本地代理（参考 cc-switch 服务形态；纯隧道不做协议翻译）：模型服务页顶部状态卡显示 运行中/已停止 · 端口 · 运行时长 · 请求/活跃/直连/代理分流统计，支持手动启停与「随应用启动」；运行期间任务的 HTTP(S)_PROXY 统一指向本地代理，由代理按任务端点域名路由（国内端点直连、官方端点链式走该 provider 配置的外部代理），provider 代理配置改动即时生效无需重开任务；停止则回退直接注入 provider 代理。默认端口 12700（被占自动 +1），仅监听 127.0.0.1
+- provider 编辑表单重排：长字段（端点/Key/模型列表/外部代理）整行输入；Anthropic 专属组（档位映射/网络）常驻置灰——切换 OpenAI 格式零跳动且配置保留
+
+- 多 API Provider：设置新增「模型服务」分类，可配置多个 API provider 档案（名称 / 端点格式 Anthropic·OpenAI 兼容 / API 端点 / API Key / 鉴权头 Authorization Bearer·x-api-key / 预设模型列表 / 缺省模型），一键切换默认 provider（参考 cc-switch 的管理方式）。API Key 仅保存在本机 `userData/providers.json`，不入仓库、不上传；工具只做配置注入——协议兼容由 claude CLI 与 API 网关承担，OpenAI 格式网关须在端点提供 Anthropic 协议兼容入口
+- provider 支持 JSON 直接编辑：列表行「JSON」按钮直达，档案以 JSON 形态展示、可直改保存（与表单同一校验链，语法/字段错误行内提示）；编辑表单内置「表单 / JSON」双模式切换，两侧改动互通
+- 「模型服务」布局重做（参考 cc-switch 主从式）：进入新增/编辑后切换为双栏——左侧紧凑列表切换编辑目标、右侧编辑器独立滚动，表单不再叠在列表下方；表单字段改双列网格排布（高度减半），设置弹窗加宽至 880px，整体显著减少滚动
+- Anthropic 原生格式支持网络代理（照搬 cc-switch）：provider 表单新增「网络代理（HTTP_PROXY）」字段——直连官方 api.anthropic.com 需填本地代理客户端地址（如 Clash http://127.0.0.1:7890），国内直连端点留空。spawn 时注入 HTTP_PROXY/HTTPS_PROXY（大小写双写）并对本机回调（127.0.0.1）自动豁免（NO_PROXY），防止代理劫持任务活动上报链路
+- 模型列表探测：provider 表单「预设模型」新增「探测模型」按钮——请求 {端点}/v1/models（Anthropic/OpenAI 同形响应）自动填充模型列表（合并去重）；配置了代理的 provider 探测走代理出口，官方端点也能探
+- 档位模型映射：Anthropic 格式 provider 可配置 Sonnet / Opus / Fable / Haiku 四档位对应的具体模型（注入 ANTHROPIC_DEFAULT_*_MODEL）——claude 按档位选模型时落到映射目标，子任务/后台轻任务可用便宜档
+- 任务模型三态选择：新建任务与任务菜单「模型服务…」均可选「跟随缺省（provider 缺省模型）/ 固定模型（注入 ANTHROPIC_MODEL）/ CLI 自主选择（不注入 ANTHROPIC_MODEL，档位映射与供应商默认接管）」
+- 设置「终端」并入「外观」：原终端分类仅字体+字号两项，并入外观页后左导航从 7 项收敛为 6 项
+- 每任务可指定 provider 与模型：新建任务对话框新增「模型服务」选择行（缺省折叠为"跟随默认"，零视觉负担）；任务菜单新增「模型服务…」可事后修改；指定了 provider 的任务在任务行显示徽标。与"跳过权限确认"同语义：仅元数据，下次 spawn（恢复/重启）生效
+- 注入方式为 spawn 进程环境变量（`ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` 或 `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL`），注入时先剥离继承的同名变量防串扰；未配置任何 provider 时行为与旧版完全一致（继承环境原样透传）
+- Ubuntu (Linux) 支持：支持在 Ubuntu 上构建（AppImage + deb）与运行——claude 发现增加登录 shell PATH 探测与 nvm/volta/fnm/asdf 常见目录扫描，进程树回收改用进程组，字体扫描走 fontconfig，应用内自动升级在 Linux 下禁用（改为提示手动更新）。构建与联调说明见 `BUILD-LINUX.md`，一键构建脚本 `build-linux.sh`
+
 ## 1.2.1
 
 - 修复自升级后残留 cmd 窗口：更新脚本改用 Windows 自带的 wscript.exe 隐藏启动（GUI 子系统无控制台），升级脚本与启动垫片执行后自删，不再留下两个黑窗口

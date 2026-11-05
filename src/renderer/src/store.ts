@@ -3,6 +3,7 @@ import type {
   AppUpdateInfo,
   CreateTaskOptions,
   ProjectRecord,
+  ProviderRegistryState,
   PtyDataEvent,
   RemoveTaskOptions,
   TaskActivityEvent,
@@ -106,6 +107,15 @@ interface AppState {
   renameTaskFlow: (taskId: string, name: string) => Promise<void>
   /** 切换单任务"跳过权限确认"（v0.3.1）：仅元数据，下次 spawn 生效 */
   setTaskSkipPermissionsFlow: (taskId: string, on: boolean) => Promise<void>
+  /** v1.4 任务级 provider/model 修改：仅元数据，下次 spawn/resume 生效；modelMode:'auto'=CLI 自主 */
+  setTaskProviderFlow: (
+    taskId: string,
+    opts: { providerId?: string; model?: string; modelMode?: 'auto' | '' }
+  ) => Promise<void>
+
+  /** v1.4 模型服务档案（启动 loadAll 拉取；任务行徽标/新建选择/编辑弹窗共用） */
+  providers: ProviderRegistryState
+  reloadProviders: () => Promise<void>
 
   openTask: (taskId: string) => void
   /** 打开 tab 且任务非 running 时自动恢复（用户 v3.2 确认：点击=加载上下文）；2s 节流防抖 */
@@ -167,6 +177,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   loadAll: async () => {
+    // v1.4 注：providers 档案不并入本批 Promise.all——延长全量加载完成时机会放大
+    // "启动加载迟到覆盖并发变更"竞态（如用户秒点打开目录后被全量 set 抹掉），
+    // 独立拉取只写自己的字段，零竞态面
     try {
       const [projects, tasks] = await Promise.all([
         window.cwb.listProjects(),
@@ -183,6 +196,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     } catch (err) {
       console.error('[cwb] loadAll failed:', err)
     }
+    void get().reloadProviders()
   },
 
   selectProject: (id) => set({ selectedProjectId: id }),
@@ -311,6 +325,25 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set((s) => ({ tasks: upsertTask(s.tasks, task) }))
     } catch (err) {
       console.error('[cwb] setTaskSkipPermissions failed:', err)
+    }
+  },
+
+  setTaskProviderFlow: async (taskId, opts) => {
+    try {
+      const task = await window.cwb.setTaskProvider(taskId, opts)
+      set((s) => ({ tasks: upsertTask(s.tasks, task) }))
+    } catch (err) {
+      console.error('[cwb] setTaskProvider failed:', err)
+    }
+  },
+
+  providers: { providers: [] },
+
+  reloadProviders: async () => {
+    try {
+      set({ providers: await window.cwb.listProviders() })
+    } catch {
+      // 读取失败保持现值（调用方 UI 不被抖动清空）
     }
   },
 

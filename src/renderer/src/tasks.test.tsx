@@ -21,12 +21,14 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-/** 项目名同时出现在侧栏行与新建对话框标题——用 id 行定位等待加载完成 */
+/** 项目名同时出现在侧栏行与新建对话框标题——用 id 行定位等待加载完成。
+ *  v1.4 providerOpts：经 installCwbMock 预置模型服务档案（loadAll mount 即拉取）。 */
 async function renderWithProject(
   project: ReturnType<typeof makeProject>,
-  tasks: ReturnType<typeof makeTask>[] = []
+  tasks: ReturnType<typeof makeTask>[] = [],
+  providerOpts: { providers?: import('../../shared/types').ProviderConfig[]; defaultProviderId?: string } = {}
 ) {
-  const api = installCwbMock({ projects: [project], tasks })
+  const api = installCwbMock({ projects: [project], tasks, ...providerOpts })
   render(<App />)
   await waitFor(() =>
     expect(document.querySelector(`li[data-project-id="${project.id}"]`)).toBeDefined()
@@ -392,6 +394,127 @@ describe('单任务跳过权限确认（v0.3.1：--dangerously-skip-permissions�
     fireEvent.click(screen.getByRole('button', { name: '新建任务' }))
     await waitFor(() =>
       expect(api.createTask).toHaveBeenCalledWith('pn', 'plain', { isolation: 'shared' })
+    )
+  })
+
+  // ── v1.4 任务级模型服务（菜单弹窗 + 徽标 + 新建对话框选择） ──────────────
+  const glmProvider = {
+    id: 'pv-glm',
+    name: 'GLM',
+    format: 'anthropic' as const,
+    baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+    apiKey: 'sk-x',
+    models: ['glm-4.6', 'glm-4.5-air'],
+    defaultModel: 'glm-4.6'
+  }
+
+  it('v1.4 任务指定 provider → 行内 provider 徽标显示 provider 名', async () => {
+    await renderWithProject(
+      gitProject,
+      [makeTask({ id: 'tp', projectId: 'pg', name: 'prov-task', providerId: 'pv-glm' })],
+      { providers: [glmProvider], defaultProviderId: 'pv-glm' }
+    )
+    await vi.waitFor(() => {
+      const chip = taskRow('tp')!.querySelector('.provider-chip')
+      expect(chip?.textContent).toBe('GLM')
+    })
+  })
+
+  it('v1.4 ⋯ 菜单「模型服务…」弹窗：选 provider+填模型 → setTaskProvider(id, {providerId, model})', async () => {
+    const api = await renderWithProject(
+      gitProject,
+      [makeTask({ id: 'tp', projectId: 'pg', name: 'prov-task', status: 'stopped' })],
+      { providers: [glmProvider] }
+    )
+    await vi.waitFor(() => expect(useAppStore.getState().providers.providers).toHaveLength(1))
+
+    fireEvent.click(within(taskRow('tp')!).getByRole('button', { name: '任务操作' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '模型服务…' }))
+    const dlg = screen.getByRole('dialog', { name: '任务模型服务' })
+
+    // 跟随默认（当前态）→ 选 GLM pill → 三态出现 → 固定模型 → 输入出现并填入
+    fireEvent.click(within(dlg).getByRole('radio', { name: 'GLM' }))
+    fireEvent.click(within(dlg).getByRole('radio', { name: '固定模型' }))
+    fireEvent.change(within(dlg).getByLabelText('模型'), { target: { value: 'glm-4.5-air' } })
+    fireEvent.click(within(dlg).getByRole('button', { name: '保存' }))
+    await waitFor(() =>
+      expect(api.setTaskProvider).toHaveBeenCalledWith('tp', {
+        providerId: 'pv-glm',
+        model: 'glm-4.5-air',
+        modelMode: ''
+      })
+    )
+  })
+
+  it('v1.4 任务模型三态：CLI 自主选择 → setTaskProvider modelMode:auto（模型输入隐藏）', async () => {
+    const api = await renderWithProject(
+      gitProject,
+      [makeTask({ id: 'tp', projectId: 'pg', name: 'prov-task', status: 'stopped' })],
+      { providers: [glmProvider] }
+    )
+    await vi.waitFor(() => expect(useAppStore.getState().providers.providers).toHaveLength(1))
+
+    fireEvent.click(within(taskRow('tp')!).getByRole('button', { name: '任务操作' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '模型服务…' }))
+    const dlg = screen.getByRole('dialog', { name: '任务模型服务' })
+
+    fireEvent.click(within(dlg).getByRole('radio', { name: 'GLM' }))
+    fireEvent.click(within(dlg).getByRole('radio', { name: 'CLI 自主选择' }))
+    expect(within(dlg).queryByLabelText('模型')).toBeNull() // auto 无需固定模型输入
+    fireEvent.click(within(dlg).getByRole('button', { name: '保存' }))
+    await waitFor(() =>
+      expect(api.setTaskProvider).toHaveBeenCalledWith('tp', {
+        providerId: 'pv-glm',
+        model: '',
+        modelMode: 'auto'
+      })
+    )
+  })
+
+  it('v1.4 新建对话框：折叠行缺省"跟随默认"；展开选 provider+模型 → createTask 带 providerId/model', async () => {
+    const api = await renderWithProject(plainProject, [], { providers: [glmProvider], defaultProviderId: 'pv-glm' })
+    await vi.waitFor(() => expect(useAppStore.getState().providers.providers).toHaveLength(1))
+
+    fireEvent.click(within(document.querySelector('li[data-project-id]') as HTMLElement).getByRole('button', { name: '项目操作' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建任务' }))
+    const dialog = screen.getByRole('dialog', { name: '新建任务' })
+    // 折叠态：一行按钮显示"跟随默认（未配置 providers 时）或（GLM）"
+    const pickBtn = within(dialog).getByRole('button', { name: /^模型服务：/ })
+    expect(pickBtn.textContent).toMatch(/跟随默认/)
+
+    fireEvent.click(pickBtn)
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'GLM' }))
+    fireEvent.click(within(dialog).getByRole('radio', { name: '固定模型' }))
+    fireEvent.change(within(dialog).getByLabelText('模型'), { target: { value: 'glm-4.6' } })
+    fireEvent.change(within(dialog).getByPlaceholderText('任务名'), { target: { value: 'via-glm' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '新建任务' }))
+    await waitFor(() =>
+      expect(api.createTask).toHaveBeenCalledWith('pn', 'via-glm', {
+        isolation: 'shared',
+        providerId: 'pv-glm',
+        model: 'glm-4.6'
+      })
+    )
+  })
+
+  it('v1.4 新建对话框：CLI 自主选择 → createTask 带 modelMode:auto（无 model）', async () => {
+    const api = await renderWithProject(plainProject, [], { providers: [glmProvider], defaultProviderId: 'pv-glm' })
+    await vi.waitFor(() => expect(useAppStore.getState().providers.providers).toHaveLength(1))
+
+    fireEvent.click(within(document.querySelector('li[data-project-id]') as HTMLElement).getByRole('button', { name: '项目操作' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建任务' }))
+    const dialog = screen.getByRole('dialog', { name: '新建任务' })
+    fireEvent.click(within(dialog).getByRole('button', { name: /^模型服务：/ }))
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'GLM' }))
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'CLI 自主选择' }))
+    fireEvent.change(within(dialog).getByPlaceholderText('任务名'), { target: { value: 'auto-pick' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '新建任务' }))
+    await waitFor(() =>
+      expect(api.createTask).toHaveBeenCalledWith('pn', 'auto-pick', {
+        isolation: 'shared',
+        providerId: 'pv-glm',
+        modelMode: 'auto'
+      })
     )
   })
 })

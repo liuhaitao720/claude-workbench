@@ -14,7 +14,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe('S1 spike: node-pty spawns claude CLI (main/node domain)', () => {
-  it(
+  // v1.3 守卫：作者机探针（硬编码本机 claude.cmd 与工作目录）——非 win32 或路径
+  // 不存在时跳过（曾在本机因路径缺失挂 2 例）；跨平台真实 spawn 由 --smoke 冒烟覆盖
+  it.skipIf(process.platform !== 'win32' || !existsSync(CLAUDE_CMD))(
     'captures ANSI first screen from claude TUI via cmd.exe wrapper',
     { timeout: TEST_TIMEOUT_MS },
     async () => {

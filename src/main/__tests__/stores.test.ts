@@ -28,7 +28,10 @@ describe('ProjectStore（真实文件 CRUD）', () => {
     const base = tempBase()
     try {
       const store = new ProjectStore(base)
-      const rec = store.add('D:\\proj\\alpha', true)
+      // v1.3：basename 按 node:path 平台语义切分——win 宿主用反斜杠路径、linux 用
+      // 正斜杠路径（跨平台各按本平台目录形态取 basename）
+      const dir = process.platform === 'win32' ? 'D:\\proj\\alpha' : '/proj/alpha'
+      const rec = store.add(dir, true)
       expect(rec.id).toMatch(/^[0-9a-f-]{36}$/)
       expect(rec.name).toBe('alpha')
       expect(rec.isGit).toBe(true)

@@ -14,6 +14,21 @@ asarUnpack:
 win:
   target:
     - nsis
+# v1.3 Linux（Ubuntu）打包：AppImage（免安装直跑）+ deb（系统包管理）。
+# icon-512.png 为程序化重绘（tools/gen-icon-512.mjs——原 icon.ico 最大真实像素帧
+# 仅 128，不满足 linux ≥256 下限）；electron-builder 会从 512 源自动生成全套
+# hicolor 尺寸。deb 元数据硬门槛：maintainer（含邮箱）+ package.json homepage。
+# 注意：linux 包必须在 Linux 环境构建（node_modules 的 node-pty 原生产物随宿主平台，
+# Windows 上交叉打 linux 包会打进 win32 二进制 → 运行时 require pty.node 失败）。
+linux:
+  icon: assets/icon-512.png
+  category: Development
+  maintainer: Liu Haitao <liuhaitao720@users.noreply.github.com>
+  executableName: claude-workbench
+  syncDesktopName: true
+  target:
+    - AppImage
+    - deb
 extraResources:
   - from: assets/icon.png
     to: icon.png

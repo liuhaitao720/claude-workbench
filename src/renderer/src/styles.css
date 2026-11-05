@@ -1127,11 +1127,12 @@ button {
 /* 单选列组（安装方式 / Skills 导入目标 / v0.5.3 主题三选共用） */
 .install-methods,
 .import-scope,
+/* v1.4 单选组横向排列（原型定稿：与行栅格同一水平线对齐） */
 .theme-choice {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 6px 0;
+  flex-direction: row;
+  gap: 16px;
+  margin: 0;
 }
 
 .install-methods label,
@@ -1164,6 +1165,530 @@ button {
   border: 1px solid var(--border-3);
   background: var(--bg-input);
   color: inherit;
+}
+
+/* ── v1.4 模型服务 provider（列表 + 表单） ─────────────────── */
+
+/* 紧凑按钮变体（列表行内操作） */
+.btn.small {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.provider-list {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.provider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+/* 格式徽标：Anthropic 珊瑚橙（呼应应用图标 da7756）/ OpenAI 中性青灰——小号 mono */
+.provider-fmt {
+  flex: none;
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  letter-spacing: 0.02em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-3);
+}
+
+.provider-fmt.anthropic {
+  color: #f0a48c;
+  border-color: #8a4a37;
+  background: #3a2620;
+}
+
+.provider-fmt.openapi {
+  color: #8fc6c9;
+  border-color: #3d6a6d;
+  background: #1f3336;
+}
+
+.provider-name {
+  flex: none;
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1);
+  font-weight: 500;
+}
+
+.provider-default-tag {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ok);
+  border: 1px solid var(--ok-border);
+  background: var(--ok-bg);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+.provider-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  font-size: 12px;
+  direction: rtl; /* 长域名从右截断保可见（域名主段在右侧） */
+  text-align: left;
+}
+
+.provider-actions {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.provider-form {
+  padding: 12px;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  background: var(--bg-app);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── v1.4 编辑态双栏（参考 cc-switch 主从布局）：rail 切换目标 / 编辑器独立滚动 ── */
+.providers-layout {
+  display: flex;
+  gap: 14px;
+  align-items: stretch;
+  margin-top: 10px;
+}
+
+.providers-rail {
+  width: 212px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 56vh;
+  overflow-y: auto;
+}
+
+.providers-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-1);
+  text-align: left;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.providers-rail-item:hover {
+  border-color: var(--border-3);
+  background: var(--bg-sel);
+}
+
+.providers-rail-item.on {
+  border-color: var(--accent);
+  background: var(--bg-sel);
+}
+
+.providers-rail-item.add {
+  border-style: dashed;
+  color: var(--text-3);
+}
+
+.providers-rail-item .provider-fmt {
+  font-size: 10px;
+  padding: 0 6px;
+  flex: none;
+}
+
+.providers-rail-item .rail-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.providers-rail-item .rail-default {
+  flex: none;
+  color: var(--ok);
+  font-size: 10px;
+}
+
+.providers-main {
+  flex: 1;
+  min-width: 0;
+  /* 编辑器独立滚动：设置页整体不再随表单/JSON 变长而滚动 */
+  max-height: 56vh;
+  overflow-y: auto;
+}
+
+/* 表单双列网格：字段成对排布，高度减半 */
+.provider-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 12px;
+}
+
+.provider-form-grid .form-field.span2 {
+  grid-column: 1 / -1;
+}
+
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.form-field input,
+.form-field select {
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-3);
+  background: var(--bg-input);
+  color: var(--text-1);
+  font-size: 13px;
+}
+
+.form-field input:focus,
+.form-field select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* v1.4 外观页行栅格：label 固定宽 + 控件列对齐（提示落控件列，整页零散乱） */
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 6px;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.form-label {
+  color: var(--text-2);
+  font-size: 13px;
+  text-align: right;
+}
+
+.form-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+/* 长提示落到控件列下一行（与控件左对齐），不再悬在行尾 */
+/* 行内提示：控件/勾选框后同一行垂直居中；长文用 .wrap 折行 */
+.hint-inline {
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.hint-inline.wrap {
+  white-space: normal;
+}
+
+.form-control .hint-small {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.form-hint {
+  grid-column: 2;
+  margin: -8px 0 0;
+}
+
+.form-subtitle {
+  margin: 26px 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.03em;
+}
+
+.settings-select {
+  width: 260px;
+  max-width: 100%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-3);
+  background: var(--bg-input);
+  color: var(--text-1);
+  font-size: 13px;
+}
+
+.settings-num {
+  width: 96px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-3);
+  background: var(--bg-input);
+  color: var(--text-1);
+  font-size: 13px;
+}
+
+/* v1.4 通用行栅格配套：值型下拉统一 220px / 自适应输入 / mono */
+.settings-select.val {
+  width: 220px;
+}
+
+.settings-input.grow {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border-3);
+  background: var(--bg-input);
+  color: var(--text-1);
+  font-size: 13px;
+}
+
+.settings-input.mono {
+  font-family: var(--font-mono, monospace);
+}
+
+/* v1.4 本地代理状态卡（参考 cc-switch 形态） */
+.proxy-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--ok-border);
+  background: var(--ok-bg);
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+
+.proxy-card.off {
+  border-color: var(--border-soft);
+  background: var(--bg-panel);
+}
+
+.proxy-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 6px var(--ok);
+}
+
+.proxy-card.off .proxy-dot {
+  background: var(--text-3);
+  box-shadow: none;
+}
+
+.proxy-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.proxy-info b {
+  font-size: 13px;
+}
+
+.proxy-meta {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-family: var(--font-mono, monospace);
+}
+
+.proxy-meta.soft {
+  font-family: inherit;
+}
+
+.proxy-stats {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-3);
+  text-align: right;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* v1.4 编辑表单：Anthropic 专属组常驻置灰（格式切换零跳动） */
+.fmt-block.disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* 档位映射 2x2 子网格（每项仍左 label 右输入，同构） */
+.slots {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 14px;
+}
+
+.slot {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.slot span {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.slot input {
+  width: 100%;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-3);
+  background: var(--bg-input);
+  color: var(--text-1);
+  font-size: 12.5px;
+  font-family: var(--font-mono, monospace);
+}
+
+/* v1.4 provider 表单/JSON 双模式切换 + JSON 直编区 */
+.form-mode-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.form-mode-toggle button {
+  padding: 2px 12px;
+  font-size: 12px;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid var(--border-3);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.form-mode-toggle button.on {
+  color: var(--text-max);
+  background: var(--bg-sel);
+  border-color: var(--accent);
+}
+
+.provider-json-input {
+  box-sizing: border-box;
+  width: 100%;
+  /* 双栏下编辑器自带滚动：JSON 区给足高度但封顶，不再撑长整页 */
+  height: 300px;
+  resize: vertical;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-3);
+  background: var(--bg-input);
+  color: var(--text-1);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+}
+
+/* v1.4 新建任务/任务弹窗：provider 选择（折叠行 + 展开单选 pills + model datalist） */
+.provider-pick {
+  align-self: flex-start;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-3);
+  background: var(--bg-panel);
+  border: 1px dashed var(--border-3);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.provider-pick:hover {
+  color: var(--text-1);
+  border-color: var(--accent);
+}
+
+.provider-pick.expanded {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  border-style: solid;
+  cursor: default;
+}
+
+.provider-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.provider-options button {
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--bg-sel);
+  border: 1px solid var(--border-3);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.provider-options button.on {
+  color: var(--text-max);
+  background: var(--accent-bg);
+  border-color: var(--accent);
+}
+
+.provider-model-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-3);
+  background: var(--bg-input);
+  color: var(--text-1);
+  font-size: 13px;
+}
+
+/* 任务行 provider 徽标（仅任务指定了 provider 时显示；名字缩略） */
+.provider-chip {
+  flex: none;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #8fc6c9;
+  border: 1px solid #3d6a6d;
+  background: #1f3336;
 }
 
 .cli-run-row {
@@ -1522,8 +2047,10 @@ button {
    声明在 .dialog/.dialog-wide 之后（同特异性按源序覆盖宽高） */
 
 .settings-dialog {
-  width: 720px;
+  width: 880px; /* v1.4 加宽：模型服务双栏（rail+编辑器）与各节双列表单需要横向余量 */
   max-width: calc(100vw - 32px);
+  /* v1.4 定高：以「通用」页完整显示为准——切页高度不跳，长页（模型服务）在 body 内滚 */
+  height: 640px;
   max-height: 84vh;
   display: flex;
   flex-direction: column;

@@ -52,6 +52,9 @@ import {
 import { buildClaudeEnv, resolveClaudeCommand } from '../pty-manager'
 import type { CliOutputEvent } from '../../shared/types'
 
+/** v1.3：spawn 形态按宿主平台分流（win=cmd.exe 包装+chcp 前缀；linux=直 spawn 解析路径） */
+const IS_WIN = process.platform === 'win32'
+
 describe('tokenizeCommand（空白切分+去引号）', () => {
   it('普通空白切分；成对引号内空白保留、引号字符剔除', () => {
     expect(tokenizeCommand('claude plugin install foo')).toEqual(['claude', 'plugin', 'install', 'foo'])
@@ -141,14 +144,21 @@ describe('CliRunner（假 PTY 缝）', () => {
     })
   })
 
-  it('run 合法命令：受控 args 经 cmd.exe 包装（不拼接用户原文）；onData/onExit 回调外送', async () => {
+  it('run 合法命令：受控 args 经平台分流 spawn（win=cmd.exe 包装 / linux=直 spawn；不拼接用户原文）；onData/onExit 回调外送', async () => {
     const { commandId } = await runner.run('claude plugin install someone/skill@1.0')
+    const userArgs = ['plugin', 'install', 'someone/skill@1.0']
     expect(fakePtyModule.spawns).toEqual([
-      {
-        file: 'cmd.exe',
-        args: ['/c', 'chcp 65001>nul&&C:\\npm-global\\claude.cmd', 'plugin', 'install', 'someone/skill@1.0'],
-        options: expect.objectContaining({ env: buildClaudeEnv() })
-      }
+      IS_WIN
+        ? {
+            file: 'cmd.exe',
+            args: ['/c', 'chcp 65001>nul&&C:\\npm-global\\claude.cmd', ...userArgs],
+            options: expect.objectContaining({ env: buildClaudeEnv() })
+          }
+        : {
+            file: 'C:\\npm-global\\claude.cmd',
+            args: [...userArgs],
+            options: expect.objectContaining({ env: buildClaudeEnv() })
+          }
     ])
     expect(runner.isRunning(commandId)).toBe(true)
 
@@ -224,12 +234,17 @@ describe('CliRunner（假 PTY 缝）', () => {
   })
 
   // ── v1.2.0 skill 市场安装/刷新（固定模板 + 参数复核）────────────────────
-  it('runPlugin：受控 args 经 cmd.exe 包装（skill 安装/刷新走此路，不经用户命令面）', async () => {
+  it('runPlugin：受控 args 经平台分流 spawn（skill 安装/刷新走此路，不经用户命令面）', async () => {
     const { commandId } = await runner.runPlugin(['plugin', 'install', 'pdf-tools@official', '-y'])
-    expect(fakePtyModule.spawns[0]).toMatchObject({
-      file: 'cmd.exe',
-      args: ['/c', 'chcp 65001>nul&&C:\\npm-global\\claude.cmd', 'plugin', 'install', 'pdf-tools@official', '-y']
-    })
+    const argv = ['plugin', 'install', 'pdf-tools@official', '-y']
+    expect(fakePtyModule.spawns[0]).toMatchObject(
+      IS_WIN
+        ? {
+            file: 'cmd.exe',
+            args: ['/c', 'chcp 65001>nul&&C:\\npm-global\\claude.cmd', ...argv]
+          }
+        : { file: 'C:\\npm-global\\claude.cmd', args: [...argv] }
+    )
     expect(runner.isRunning(commandId)).toBe(true)
   })
 

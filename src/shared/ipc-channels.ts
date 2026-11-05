@@ -51,7 +51,20 @@ const HANDLE = {
   SkillMarketInstall: 'cwb:skill:market-install',
   SkillMarketRefresh: 'cwb:skill:market-refresh',
   // v1.2.1 插件 skill 启用/停用（已安装列表里插件条目切换状态）
-  SkillPluginSetEnabled: 'cwb:skill:plugin-set-enabled'
+  SkillPluginSetEnabled: 'cwb:skill:plugin-set-enabled',
+  // v1.4 模型服务 provider 档案 CRUD + 默认切换（参考 cc-switch；仅配置注入，协议由 CLI/网关承担）
+  ProvidersList: 'cwb:providers:list',
+  ProvidersSave: 'cwb:providers:save',
+  ProvidersRemove: 'cwb:providers:remove',
+  ProvidersSetDefault: 'cwb:providers:set-default',
+  // v1.4 模型列表探测（GET {baseUrl}/v1/models；官方端点经 provider 代理出口）
+  ProvidersProbeModels: 'cwb:providers:probe-models',
+  // v1.4 任务级 provider/model 事后修改（下次 spawn/resume 生效，照 set-skip-permissions 先例）
+  TasksSetProvider: 'cwb:tasks:set-provider',
+  // v1.4 本地代理（纯隧道）：状态/启动/停止
+  ProxyStatus: 'cwb:proxy:status',
+  ProxyStart: 'cwb:proxy:start',
+  ProxyStop: 'cwb:proxy:stop'
 } as const
 
 const SEND = {

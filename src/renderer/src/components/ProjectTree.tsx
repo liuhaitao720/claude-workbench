@@ -316,10 +316,13 @@ function TaskRow({ task }: { task: TaskRecord }) {
   const removeTaskFlow = useAppStore((s) => s.removeTaskFlow)
   const renameTaskFlow = useAppStore((s) => s.renameTaskFlow)
   const setTaskSkipPermissionsFlow = useAppStore((s) => s.setTaskSkipPermissionsFlow)
+  /** v1.4 徽标文案：provider 名（档案已删则回退 id——语义仍是"指定了 provider"） */
+  const providers = useAppStore((s) => s.providers)
   const activeTaskId = useAppStore((s) => s.activeTaskId)
   const { openKey, setOpenKey } = useContext(MenuOpenCtx)
   const [renaming, setRenaming] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [providerOpen, setProviderOpen] = useState(false)
   const [draft, setDraft] = useState(task.name)
   const menuBtnRef = useRef<HTMLButtonElement>(null)
   /** 单击开 tab 的延迟判别计时器（评审 F1）：双击时取消，卸载时清理 */
@@ -344,6 +347,11 @@ function TaskRow({ task }: { task: TaskRecord }) {
       ? { label: t('tree.stop'), onClick: () => void stopTaskFlow(task.id) }
       : { label: t('tree.resume'), onClick: () => void resumeTaskFlow(task.id) },
     { label: t('tree.rename'), onClick: () => setRenaming(true) },
+    {
+      // v1.4 任务级 provider/model：弹小编辑框；仅元数据，下次 spawn（恢复）生效
+      label: t('tree.setProvider'),
+      onClick: () => setProviderOpen(true)
+    },
     {
       // 单任务"跳过权限确认"切换（v0.3.1）：显示当前状态；仅元数据，下次 spawn（恢复）生效
       label: t(task.skipPermissions ? 'tree.skipPermsOn' : 'tree.skipPermsOff'),
@@ -411,6 +419,17 @@ function TaskRow({ task }: { task: TaskRecord }) {
                 ⚡
               </span>
             )}
+            {task.providerId !== undefined && (
+              <span
+                className="provider-chip"
+                title={t('tree.providerBadgeTitle', {
+                  name: providers.providers.find((p) => p.id === task.providerId)?.name ?? task.providerId,
+                  model: task.model !== undefined && task.model !== '' ? ` · ${task.model}` : ''
+                })}
+              >
+                {providers.providers.find((p) => p.id === task.providerId)?.name ?? 'API'}
+              </span>
+            )}
           </button>
           <RowMenuButton
             ref={menuBtnRef}
@@ -423,6 +442,7 @@ function TaskRow({ task }: { task: TaskRecord }) {
       {menuOpen && (
         <SidebarMenu triggerRef={menuBtnRef} items={menuItems} onClose={() => setOpenKey(null)} />
       )}
+      {providerOpen && <TaskProviderDialog task={task} onClose={() => setProviderOpen(false)} />}
       {deleting && (
         <DeleteTaskDialog
           name={task.name}
@@ -439,6 +459,166 @@ function TaskRow({ task }: { task: TaskRecord }) {
 }
 
 /** 删除确认弹窗（独立组件：仅 deleting 时挂载——Escape 监听随挂载增减，A1） */
+/**
+ * v1.4 任务级模型服务编辑弹窗（菜单「模型服务…」）：provider 单选（含「跟随默认」）
+ * + model datalist 手填；保存调 setTaskProviderFlow（仅元数据，下次 spawn 生效）。
+ * 表单交互与新建任务 ProviderPick 同构（单选 pills + datalist），数据同源 store.providers。
+ */
+function TaskProviderDialog({
+  task,
+  onClose
+}: {
+  task: TaskRecord
+  onClose: () => void
+}) {
+  const t = useI18n()
+  const providers = useAppStore((s) => s.providers)
+  const setTaskProviderFlow = useAppStore((s) => s.setTaskProviderFlow)
+  const [providerId, setProviderId] = useState<string | undefined>(task.providerId)
+  // v1.4 模型三态：'auto'=CLI 自主 / ''（mode 'fixed'）=固定 model / undefined=跟随缺省
+  const [model, setModel] = useState(task.model ?? (task.modelMode === 'auto' ? undefined : ''))
+  const [modelMode, setModelMode] = useState<'auto' | undefined>(task.modelMode)
+  const [saved, setSaved] = useState(false)
+  useEscapeClose(onClose)
+  const selected = providers.providers.find((p) => p.id === providerId)
+  const mode: 'default' | 'fixed' | 'auto' =
+    modelMode === 'auto' ? 'auto' : model !== undefined ? 'fixed' : 'default'
+
+  const save = () => {
+    onClose()
+    void setTaskProviderFlow(task.id, {
+      providerId: providerId !== undefined && providerId !== '' ? providerId : '',
+      model: mode === 'fixed' ? (model ?? '').trim() : '',
+      modelMode: mode === 'auto' ? 'auto' : ''
+    })
+  }
+
+  return (
+    <div
+      className="dialog-overlay"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="dialog" role="dialog" aria-label={t('tree.providerDialogTitle')}>
+        <p className="dialog-title">
+          {t('tree.providerDialogTitle')} · {task.name}
+        </p>
+        <div className="provider-options" role="radiogroup" aria-label={t('newTask.providerLabel')}>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={providerId === undefined}
+            className={providerId === undefined ? 'on' : ''}
+            onClick={() => {
+              setProviderId(undefined)
+              setModel('')
+            }}
+          >
+            {t('tree.providerClearPick')}
+          </button>
+          {providers.providers.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              role="radio"
+              aria-checked={providerId === p.id}
+              className={providerId === p.id ? 'on' : ''}
+              onClick={() => {
+                setProviderId(p.id)
+                setModel(undefined)
+              }}
+            >
+              {p.name}
+            </button>
+          ))}
+        </div>
+        {/* v1.4 模型三态：跟随缺省 / 固定模型 / CLI 自主选择 */}
+        <div role="radiogroup" aria-label={t('common.modelModeLabel')} className="provider-options">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={mode === 'default'}
+            className={mode === 'default' ? 'on' : ''}
+            onClick={() => {
+              setModelMode(undefined)
+              setModel(undefined)
+              setSaved(false)
+            }}
+          >
+            {t('common.modelModeDefault')}
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={mode === 'fixed'}
+            className={mode === 'fixed' ? 'on' : ''}
+            onClick={() => {
+              setModelMode(undefined)
+              setModel('')
+              setSaved(false)
+            }}
+          >
+            {t('common.modelModeFixed')}
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={mode === 'auto'}
+            className={mode === 'auto' ? 'on' : ''}
+            onClick={() => {
+              setModelMode('auto')
+              setModel(undefined)
+              setSaved(false)
+            }}
+          >
+            {t('common.modelModeAuto')}
+          </button>
+        </div>
+        {mode === 'fixed' && (
+          <>
+            <input
+              className="provider-model-input"
+              type="text"
+              list="cwb-task-models"
+              aria-label={t('newTask.providerModelLabel')}
+              placeholder={
+                selected?.defaultModel !== undefined && selected.defaultModel !== ''
+                  ? t('newTask.providerModelPlaceholder', { model: selected.defaultModel })
+                  : t('newTask.providerModelPlaceholderNone')
+              }
+              value={model ?? ''}
+              onChange={(e) => {
+                setModel(e.target.value)
+                setSaved(false)
+              }}
+            />
+            <datalist id="cwb-task-models">
+              {(selected?.models ?? []).map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </>
+        )}
+        <p className="hint-small">{t('tree.providerDialogHint')}</p>
+        <div className="dialog-actions">
+          <button type="button" className="btn primary" onClick={save}>
+            {t('common.save')}
+          </button>
+          <button type="button" className="btn" onClick={onClose}>
+            {t('common.cancel')}
+          </button>
+        </div>
+        {saved && (
+          <p className="muted ok" role="status">
+            {t('tree.providerSaved')}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function DeleteTaskDialog({
   name,
   hasWorktree,

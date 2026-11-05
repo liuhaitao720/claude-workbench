@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { spawn as ptySpawn, type IPty } from 'node-pty'
 import type { CliOutputEvent } from '../shared/types'
 import { translate, type Language } from '../shared/i18n'
 import { buildClaudeEnv, resolveClaudeCommand } from './pty-manager'
+import { IS_WIN, killTreeSync } from './platform'
 
 /**
  * v0.5③ CLI 命令执行器（安全核心）。
@@ -25,7 +25,10 @@ import { buildClaudeEnv, resolveClaudeCommand } from './pty-manager'
 /** 子命令冻结白名单（v0.5③ 守门评审：不为单条命令放宽；npm 形态安装走 installClaudeCli 固定模板） */
 export const CLI_SUBCOMMAND_WHITELIST: ReadonlySet<string> = new Set(['plugin', 'update', 'upgrade', 'mcp'])
 
-/** cmd.exe 元字符黑名单（任一 token 命中即拒绝；含换行防多语句注入） */
+/** cmd.exe 元字符黑名单（任一 token 命中即拒绝；含换行防多语句注入）。
+ *  v1.3 跨平台不变量：Linux 直 execvp（argv 数组无 shell）下这些字符全部惰性，
+ *  黑名单为超集防御继续全平台生效；红线——Linux 分支必须保持 no-shell 直 spawn，
+ *  若将来改走 sh -c 则 $ ; ( ) 等未列字符立即构成注入面，须重建黑名单。 */
 const CMD_METACHARS = /[&|><%"^\r\n`]/
 
 /** 单命令最长存活（超时 kill 防孤儿：弹窗已关/用户遗忘的安装命令不能永跑） */
@@ -71,11 +74,12 @@ export function tokenizeCommand(input: string): string[] {
     .filter((t) => t.length > 0)
 }
 
-/** 首 token 是否指向 claude（裸命令 claude，或任意路径形态的 claude.cmd/claude.exe） */
+/** 首 token 是否指向 claude（裸命令 claude，或任意路径形态的 claude.cmd/claude.exe/
+ *  claude——v1.3 Linux 无扩展名全路径，如 /home/u/.local/bin/claude） */
 function isClaudeToken(token: string): boolean {
   if (token === 'claude') return true
   const base = token.split(/[\\/]/).pop() ?? token
-  return base === 'claude.cmd' || base === 'claude.exe'
+  return base === 'claude.cmd' || base === 'claude.exe' || base === 'claude'
 }
 
 /**
@@ -130,18 +134,26 @@ export class CliRunner {
 
   constructor(private readonly callbacks: CliRunnerCallbacks) {}
 
-  /** 校验用户命令并启动（经 cmd.exe 包装 resolved claude）；返回 commandId；拒绝抛 Error */
+  /**
+   * 校验用户命令并启动（win 经 cmd.exe 包装 resolved claude；linux 直 spawn）；
+   * 返回 commandId；拒绝抛 Error。
+   */
   async run(userCommand: string): Promise<{ commandId: string }> {
     const tokens = validateClaudeCommand(userCommand, this.callbacks.language?.() ?? 'zh')
     const claudeCmd = await resolveClaudeCommand()
     // 受控 args：白名单校验后的 token 数组（无元字符），claude 路径取 main 解析结果——不回拼原文
-    // v1.0 乱码修复：npm 子进程在中文 Windows 输出 GBK——chcp 65001 切 UTF-8（输出串行生效）
-    return this.spawnFixed('cmd.exe', ['/c', 'chcp 65001>nul&&' + claudeCmd, ...tokens.slice(1)])
+    // v1.0 乱码修复（win）：npm 子进程在中文 Windows 输出 GBK——chcp 65001 切 UTF-8（输出串行生效）
+    if (IS_WIN) {
+      return this.spawnFixed('cmd.exe', ['/c', 'chcp 65001>nul&&' + claudeCmd, ...tokens.slice(1)])
+    }
+    // Linux：直 spawn 解析出的二进制（execvp 无壳，env 已含增强 PATH）
+    return this.spawnFixed(claudeCmd, [...tokens.slice(1)])
   }
 
   /**
    * v1.2.0 skill 市场固定模板：`claude plugin <argv...>`。
-   * 与 spawnFixed 同性质（main 侧构造的受控 args，无自由命令面），但额外按
+   * 与 spawnFixed 同性质（main 侧构造的受控 args，无自由命令面——file 取运行时
+   * 解析的 claude 路径，v1.3 起 win/linux 均如此），但额外按
    * validateClaudeCommand 同口径复核每个 token 的元字符——installId 虽来自
    * marketplace 目录（外部不可信输入，已在 SkillMarket 侧过白名单），仍做纵深防御。
    */
@@ -149,12 +161,17 @@ export class CliRunner {
     const offending = argv.find((t) => CMD_METACHARS.test(t))
     if (offending !== undefined) throw new Error(`参数含被禁止的元字符: ${offending}`)
     const claudeCmd = await resolveClaudeCommand()
-    return this.spawnFixed('cmd.exe', ['/c', 'chcp 65001>nul&&' + claudeCmd, ...argv])
+    if (IS_WIN) {
+      return this.spawnFixed('cmd.exe', ['/c', 'chcp 65001>nul&&' + claudeCmd, ...argv])
+    }
+    return this.spawnFixed(claudeCmd, [...argv])
   }
 
   /**
-   * 固定模板启动（installClaudeCli 专用）：file/args 均为 main 侧编译期常量，
-   * 不接受用户输入，故不经白名单校验（模板法的安全前提即「无自由命令面」）。
+   * 固定模板启动（installClaudeCli 专用）：file/args 均为 main 侧常量或
+   * main 解析的 claude 路径（v1.3 起 run/runPlugin 亦以运行时解析路径作 file——
+   * 路径来源可信、args 受控），不接受用户输入，故不经白名单校验
+   * （模板法的安全前提即「无自由命令面」）。
    */
   async spawnFixed(file: string, args: string[]): Promise<{ commandId: string }> {
     const commandId = randomUUID()
@@ -199,15 +216,12 @@ export class CliRunner {
 
   /**
    * v1.0.3 退出目录锁修复：定点杀全部 CLI 命令进程树（同 PtyManager.killAllTrees——
-   * before-quit 路径同步 taskkill /T /F，按记录 pid 非枚举）。
+   * before-quit 路径同步杀树，按记录 pid 非枚举；win taskkill /T /F、linux 进程组，
+   * 见 platform.killTreeSync）。
    */
   killAllTrees(): void {
     for (const tracked of this.commands.values()) {
-      try {
-        execFileSync('taskkill', ['/PID', String(tracked.pty.pid), '/T', '/F'], { stdio: 'ignore' })
-      } catch {
-        // 已死/杀失败——尽力而为
-      }
+      killTreeSync(tracked.pty.pid)
     }
   }
 

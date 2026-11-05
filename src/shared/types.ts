@@ -36,6 +36,22 @@ export interface TaskRecord {
    */
   skipPermissions?: boolean
   /**
+   * 任务指定使用的模型服务 provider（v1.4；ProviderConfig.id）。
+   * 与 skipPermissions 同语义：仅在下次 spawn 生效；缺省=跟随默认 provider；
+   * 引用的 provider 已删除时回退默认 provider 链。
+   */
+  providerId?: string
+  /**
+   * 任务指定模型（v1.4；注入 ANTHROPIC_MODEL）。缺省=provider 的 defaultModel，
+   * 两者皆空则不注入（claude 用账号默认）。
+   */
+  model?: string
+  /**
+   * 任务模型选择模式（v1.4）：'auto'=由 claude CLI 自主选择——不注入 ANTHROPIC_MODEL，
+   * 档位映射（provider.slotModels）照常生效；undefined=旧语义（model → defaultModel 链）。
+   */
+  modelMode?: 'auto'
+  /**
    * 任务状态（v0.3.2 三态跟踪）：
    * - running：PTY 运行中（UI 绿点+脉冲动画+运行时长）
    * - stopped：显式停止（灰点）
@@ -142,6 +158,31 @@ export interface AppUpdateInfo {
   /** 清单/CHANGELOG 拉取失败时的降级描述（不影响版本对比结论） */
   manifestError?: string
   notesError?: string
+  /** v1.3：当前平台是否支持应用内自动升级（win=true；linux 检查更新可用，
+   *  下载/安装被门禁拒绝——UI 显示手动更新指引，不亮侧栏更新角标） */
+  platformSupported?: boolean
+}
+
+/** v1.4 本地代理统计【main local-proxy 维护 / renderer 状态卡展示】 */
+export interface LocalProxyStats {
+  /** 累计连接数（CONNECT + 绝对 URI 请求） */
+  total: number
+  /** 当前活跃连接 */
+  active: number
+  /** 直连路由的连接数 */
+  direct: number
+  /** 经外部代理路由的连接数 */
+  viaProxy: number
+}
+
+/** v1.4 本地代理状态（纯隧道：按目标 host 路由直连/外部代理；不做协议翻译） */
+export interface LocalProxyStatus {
+  running: boolean
+  /** 实际监听端口（running 时存在；被占自动 +1 重试） */
+  port?: number
+  /** ISO 启动时刻 */
+  startedAt?: string
+  stats: LocalProxyStats
 }
 
 /** 应用自更新进度事件【v1.1.0：下载/校验/就绪/安装中/出错】 */
@@ -176,6 +217,9 @@ export interface AppSettings {
    * false 时仅检查并提示，由用户在设置中心手动升级。
    */
   autoUpdate?: boolean
+  /** v1.4 本地代理随应用启动（缺省 false；运行期间任务 HTTP_PROXY 统一指向
+   * 本地代理，停止则回退直接注入 provider 代理配置） */
+  proxyAutoStart?: boolean
 }
 
 /** 任务活动状态事件（v3.2：'busy'=执行中黄转圈 | 'awaiting'=待答复红 | 'idle'=就绪绿） */
@@ -193,6 +237,63 @@ export interface CreateTaskOptions {
   isolation: 'worktree' | 'shared'
   /** 传 true 时 spawn 附加 --dangerously-skip-permissions（缺省=关闭，安全默认） */
   skipPermissions?: boolean
+  /** v1.4 任务指定 provider（ProviderConfig.id；缺省=默认 provider） */
+  providerId?: string
+  /** v1.4 任务指定模型（缺省=provider.defaultModel） */
+  model?: string
+  /** v1.4 任务模型模式：'auto'=CLI 自主选择（不注入 ANTHROPIC_MODEL） */
+  modelMode?: 'auto'
+}
+
+/**
+ * 模型服务 provider 档案【v1.4（参考 cc-switch）：main providers-store 持久化 /
+ * renderer 设置中心「模型服务」编辑 / createTask-resumeTask 解析注入 env】。
+ *
+ * 本工具只做 API 配置注入（用户确认的边界）：协议兼容由 claude CLI 与 API 网关
+ * 承担——baseUrl 必须是 claude 可用的 Anthropic 协议端点根（Anthropic 格式直连；
+ * OpenAI 格式网关须自行提供 Anthropic 兼容入口），format 仅作配置标识与 UI 展示。
+ */
+export interface ProviderConfig {
+  /** uuid（保存时 id 空串=新增） */
+  id: string
+  /** 显示名（列表/任务选择下拉用） */
+  name: string
+  /** 端点协议标识（anthropic=官方或兼容直连；openai=网关侧为 chat completions 格式） */
+  format: 'anthropic' | 'openai'
+  /** Anthropic 协议端点根（如 https://open.bigmodel.cn/api/anthropic）；无尾斜杠，main 侧归一 */
+  baseUrl: string
+  /** API Key 属凭据——仅存本机 userData/providers.json，不入仓库、不上传（红线，照 notify.json 先例） */
+  apiKey: string
+  /** 鉴权头形态：auth_token=ANTHROPIC_AUTH_TOKEN（Bearer，缺省，cc-switch 同款）；api_key=ANTHROPIC_API_KEY（x-api-key） */
+  apiKeyType?: 'auth_token' | 'api_key'
+  /** 预设模型列表（任务级下拉候选；空列表允许——纯手填） */
+  models: string[]
+  /** 该 provider 的缺省模型（任务未指定 model 时注入 ANTHROPIC_MODEL） */
+  defaultModel?: string
+  /**
+   * 网络代理（v1.4，照搬 cc-switch：Anthropic 原生格式直连官方 api.anthropic.com 需开代理）。
+   * 非空时 spawn 注入 HTTP_PROXY/HTTPS_PROXY（大小写双写）+ NO_PROXY=127.0.0.1,localhost
+   * （本机 hooks 回调豁免，防代理劫持工作台自身链路）；国内直连端点留空。
+   */
+  proxyUrl?: string
+  /**
+   * 档位映射（v1.4，Anthropic 格式）：claude CLI 按档位（Sonnet/Opus/Fable/Haiku）选模型时
+   * 落到对应具体模型——注入 ANTHROPIC_DEFAULT_SONNET/OPUS/FABLE/HAIKU_MODEL。
+   * 任务级"固定模型"（ANTHROPIC_MODEL）优先于档位映射；"CLI 自主"时档位映射仍生效。
+   */
+  slotModels?: {
+    sonnet?: string
+    opus?: string
+    fable?: string
+    haiku?: string
+  }
+}
+
+/** providers 持久化整体状态【providers.json 的文件形状】 */
+export interface ProviderRegistryState {
+  providers: ProviderConfig[]
+  /** 默认（当前）provider；未配置任何默认时缺省（任务与全局回退：不注入，行为与 v1.3 前一致） */
+  defaultProviderId?: string
 }
 
 export interface RemoveTaskOptions {
@@ -205,6 +306,10 @@ export interface RemoveTaskOptions {
  * 生产者：S2（main 侧 handler）+ S1.5（preload 桥接映射）；消费者：S3（renderer）
  */
 export interface CWBApi {
+  /** 运行平台（'win32' | 'linux' | 'darwin'；v1.3 跨平台适配——UI 据此分支：
+   *  默认字体/claude 安装命令展示/windowsPty 终端选项/更新角标门禁） */
+  readonly platform: string
+
   // ── projects（4）─────────────────────────────
   /** 全部项目 */
   listProjects(): Promise<ProjectRecord[]>
@@ -360,6 +465,44 @@ export interface CWBApi {
   setNotifyWebhook(url: string, enabled: boolean): Promise<NotifyConfig>
   /** 立即推送测试消息 */
   sendTestNotify(): Promise<{ ok: boolean; error?: string }>
+
+  // ── 模型服务 provider（5，v1.4）─────────────
+  /** 全部 provider 档案 + 默认 id（设置中心「模型服务」与新建任务选择的数据源） */
+  listProviders(): Promise<ProviderRegistryState>
+  /**
+   * 新增/编辑 provider（id 空串=新增）；main 侧校验（名称/baseUrl 非空、format 合法、
+   * baseUrl 为 http(s)）拒绝抛带原因 Error。返回保存后记录（含分配的 id）。
+   */
+  saveProvider(provider: ProviderConfig): Promise<ProviderConfig>
+  /**
+   * 删除 provider（引用它的任务不级联清理——回退默认链）；被删者恰为默认时默认清空。
+   * 不存在返回错误。
+   */
+  removeProvider(id: string): Promise<void>
+  /** 设默认 provider（id 空串=取消默认）；不存在返回错误 */
+  setDefaultProvider(id: string): Promise<void>
+  /**
+   * v1.4 模型列表探测：GET {baseUrl}/v1/models（Anthropic/OpenAI 同形响应 {data:[{id}]}）；
+   * provider 配了代理时走代理出口。失败返回 ok:false + error（网络/鉴权）。
+   */
+  probeProviderModels(id: string): Promise<{ ok: boolean; models?: string[]; error?: string }>
+  /**
+   * v1.4 任务级 provider/model 事后修改（照 setTaskSkipPermissions 第 17 法先例）：
+   * 仅元数据，下次 spawn/resume 生效；undefined/空串=清除该项（回退默认链）；
+   * modelMode:'auto'=CLI 自主选择（不注入 ANTHROPIC_MODEL）。
+   */
+  setTaskProvider(
+    taskId: string,
+    opts: { providerId?: string; model?: string; modelMode?: 'auto' | '' }
+  ): Promise<TaskRecord>
+
+  // ── 本地代理（3，v1.4）──────────────────────
+  /** 代理状态（运行中含端口/启动时刻/统计） */
+  getProxyStatus(): Promise<LocalProxyStatus>
+  /** 启动（幂等；端口被占自动 +1；失败 reject 带原因） */
+  startProxy(): Promise<LocalProxyStatus>
+  /** 停止（幂等；活跃连接自然排空） */
+  stopProxy(): Promise<LocalProxyStatus>
 
   // ── smoke（1，测试专用）──────────────────────
   /** S4 冒烟回执：renderer 收到 PTY 数据后回报 main */

@@ -146,7 +146,7 @@ describe('终端：字号 stepper 与字体族 select', () => {
   it('字号 stepper：输入 18 → changeFontSize 通路（persist + options + 活动 ptyResize）', async () => {
     const api = await renderApp()
     const s = await openSettings()
-    gotoSection(s, '终端')
+    gotoSection(s, '通用') // v1.4 四页合并为通用
     openTab('t-s1')
     const term = await waitFor(() => {
       const t = terminalCache.get('t-s1')
@@ -165,7 +165,7 @@ describe('终端：字号 stepper 与字体族 select', () => {
   it('字体族 select：Consolas → options.fontFamily + persist + 活动 ptyResize', async () => {
     const api = await renderApp()
     const s = await openSettings()
-    gotoSection(s, '终端')
+    gotoSection(s, '通用') // v1.4 四页合并为通用
     openTab('t-s1')
     const term = await waitFor(() => {
       const t = terminalCache.get('t-s1')
@@ -205,7 +205,7 @@ describe('通知设置（v0.5④N，迁自 About）', () => {
       channel: 'wecom'
     })
     const s = await openSettings()
-    gotoSection(s, '通知')
+    gotoSection(s, '通用')
     const urlInput = (await s.findByLabelText('webhook URL')) as HTMLInputElement
     expect(urlInput.value).toBe('https://qyapi.weixin.qq.com/hook')
     expect((s.getByRole('checkbox', { name: '启用' }) as HTMLInputElement).checked).toBe(false)
@@ -222,7 +222,7 @@ describe('通知设置（v0.5④N，迁自 About）', () => {
   it('测试推送：成功/失败结果行内显示；URL 为空时禁用', async () => {
     const api = await renderApp()
     const s = await openSettings()
-    gotoSection(s, '通知')
+    gotoSection(s, '通用')
     const urlInput = (await s.findByLabelText('webhook URL')) as HTMLInputElement
     expect(
       (s.getByRole('button', { name: '测试推送' }) as HTMLButtonElement).disabled
@@ -238,6 +238,262 @@ describe('通知设置（v0.5④N，迁自 About）', () => {
     vi.mocked(api.sendTestNotify).mockResolvedValue({ ok: false, error: 'timeout' })
     fireEvent.click(s.getByRole('button', { name: '测试推送' }))
     expect(await s.findByText('测试推送失败：timeout')).toBeDefined()
+  })
+})
+
+// ── v1.4 模型服务（provider 档案 CRUD + 默认切换） ────────────────────────
+
+describe('模型服务（v1.4 providers）', () => {
+  const glm = {
+    id: 'p-glm',
+    name: 'GLM',
+    format: 'anthropic' as const,
+    baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+    apiKey: 'sk-glm',
+    models: ['glm-4.6', 'glm-4.5-air'],
+    defaultModel: 'glm-4.6'
+  }
+  const gw = {
+    id: 'p-gw',
+    name: '公司网关',
+    format: 'openai' as const,
+    baseUrl: 'https://gw.example/anthropic',
+    apiKey: 'k2',
+    models: [],
+  }
+
+  it('列表预填（格式徽标/默认标记/URL）；编辑 → 改名保存 payload 断言', async () => {
+    const api = await renderApp()
+    vi.mocked(api.listProviders).mockResolvedValue({
+      providers: [glm, gw],
+      defaultProviderId: 'p-glm'
+    })
+    const s = await openSettings()
+    gotoSection(s, '模型服务')
+
+    // 左栏摘要会显示默认 provider 名（GLM 出现两次）——行内断言经 URL title 定位行
+    const glmRow = (await s.findByTitle('https://open.bigmodel.cn/api/anthropic')).closest('li') as HTMLElement
+    expect(within(glmRow).getByText('GLM')).toBeDefined()
+    expect(within(glmRow).getByText('Anthropic')).toBeDefined() // 格式徽标
+    expect(within(glmRow).getByText('默认')).toBeDefined() // 默认标记
+    const gwRow = s.getByTitle('https://gw.example/anthropic').closest('li') as HTMLElement
+    expect(within(gwRow).getByText('公司网关')).toBeDefined()
+    expect(within(gwRow).getByText('OpenAI 兼容')).toBeDefined()
+
+    // 编辑 GLM：改名为 GLM-2 → 保存（payload 含原 id 与模型列表）
+    fireEvent.click(within(glmRow).getByRole('button', { name: '编辑' }))
+    const nameInput = (await s.findByLabelText('名称')) as HTMLInputElement
+    expect(nameInput.value).toBe('GLM')
+    fireEvent.change(nameInput, { target: { value: 'GLM-2' } })
+    fireEvent.click(s.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(api.saveProvider).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.saveProvider).mock.calls[0][0]).toMatchObject({
+      id: 'p-glm',
+      name: 'GLM-2',
+      format: 'anthropic',
+      baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+      models: ['glm-4.6', 'glm-4.5-air'],
+      defaultModel: 'glm-4.6'
+    })
+  })
+
+  it('新增：空名/空 URL 禁用保存；models 逗号文本拆分归一后提交', async () => {
+    const api = await renderApp()
+    const s = await openSettings()
+    gotoSection(s, '模型服务')
+
+    fireEvent.click(await s.findByRole('button', { name: '新增 provider' }))
+    const saveBtn = (await s.findByRole('button', { name: '保存' })) as HTMLButtonElement
+    expect(saveBtn.disabled).toBe(true) // 空名/空 URL 禁用
+
+    fireEvent.change(s.getByLabelText('名称'), { target: { value: 'Kimi' } })
+    fireEvent.change(s.getByLabelText('API 端点（Anthropic 协议入口）'), {
+      target: { value: 'https://api.moonshot.cn/anthropic' }
+    })
+    fireEvent.change(s.getByLabelText('API Key'), { target: { value: 'sk-kimi' } })
+    fireEvent.change(s.getByLabelText('预设模型（逗号分隔）'), {
+      target: { value: ' kimi-k2,  kimi-latest ,' }
+    })
+    expect((saveBtn as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(saveBtn)
+    await waitFor(() => expect(api.saveProvider).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.saveProvider).mock.calls[0][0]).toMatchObject({
+      name: 'Kimi',
+      baseUrl: 'https://api.moonshot.cn/anthropic',
+      apiKey: 'sk-kimi',
+      apiKeyType: 'auth_token',
+      models: ['kimi-k2', 'kimi-latest']
+    })
+  })
+
+  it('设为默认 / 删除（confirm 确认）；保存失败错误行内展示', async () => {
+    const api = await renderApp()
+    vi.mocked(api.listProviders).mockResolvedValue({ providers: [glm, gw] })
+    const s = await openSettings()
+    gotoSection(s, '模型服务')
+    await s.findByText('GLM')
+
+    // 设为默认（无默认时两行都显示该按钮；点公司网关行内按钮）
+    fireEvent.click(
+      within(s.getByText('公司网关').closest('li') as HTMLElement).getByRole('button', { name: '设为默认' })
+    )
+    await waitFor(() => expect(api.setDefaultProvider).toHaveBeenCalledWith('p-gw'))
+
+    // 删除：confirm 取消 → 不调；确认 → 调
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    fireEvent.click(
+      within(s.getByText('GLM').closest('li') as HTMLElement).getByRole('button', { name: '移除' })
+    )
+    expect(api.removeProvider).not.toHaveBeenCalled()
+    confirmSpy.mockReturnValue(true)
+    fireEvent.click(
+      within(s.getByText('GLM').closest('li') as HTMLElement).getByRole('button', { name: '移除' })
+    )
+    await waitFor(() => expect(api.removeProvider).toHaveBeenCalledWith('p-glm'))
+    confirmSpy.mockRestore()
+
+    // 保存失败（main 校验拒绝）→ inline-error
+    vi.mocked(api.saveProvider).mockRejectedValue(new Error('API 端点必须是 http(s) URL'))
+    fireEvent.click(s.getByRole('button', { name: '新增 provider' }))
+    fireEvent.change(s.getByLabelText('名称'), { target: { value: 'X' } })
+    fireEvent.change(s.getByLabelText('API 端点（Anthropic 协议入口）'), {
+      target: { value: 'https://x' }
+    })
+    fireEvent.click(s.getByRole('button', { name: '保存' }))
+    expect(await s.findByText('API 端点必须是 http(s) URL')).toBeDefined()
+  })
+
+  it('v1.4 JSON 直编：行内「JSON」直达 → textarea 预填档案 JSON → 改名保存（models 数组原样）', async () => {
+    const api = await renderApp()
+    vi.mocked(api.listProviders).mockResolvedValue({ providers: [glm] })
+    const s = await openSettings()
+    gotoSection(s, '模型服务')
+    await s.findByText('GLM')
+
+    fireEvent.click(
+      within(s.getByTitle('https://open.bigmodel.cn/api/anthropic').closest('li') as HTMLElement).getByRole('button', { name: 'JSON' })
+    )
+    const area = (await s.findByLabelText('JSON')) as HTMLTextAreaElement
+    const shown = JSON.parse(area.value) as Record<string, unknown>
+    expect(shown).toMatchObject({ id: 'p-glm', name: 'GLM', models: ['glm-4.6', 'glm-4.5-air'] })
+
+    // 直改 JSON：改名 + 增模型 → 保存 → payload 与 JSON 同形（数组未拆散）
+    const edited = { ...shown, name: 'GLM-2', models: [...(shown['models'] as string[]), 'glm-air'] }
+    fireEvent.change(area, { target: { value: JSON.stringify(edited, null, 2) } })
+    fireEvent.click(s.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(api.saveProvider).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.saveProvider).mock.calls[0][0]).toMatchObject({
+      id: 'p-glm',
+      name: 'GLM-2',
+      models: ['glm-4.6', 'glm-4.5-air', 'glm-air']
+    })
+  })
+
+  it('v1.4 JSON 直编：语法错误行内提示且不提交；表单⇄JSON 切换互通（JSON 改动回表单可见）', async () => {
+    const api = await renderApp()
+    vi.mocked(api.listProviders).mockResolvedValue({ providers: [glm] })
+    const s = await openSettings()
+    gotoSection(s, '模型服务')
+    await s.findByText('GLM')
+
+    // 表单 → JSON 切换（序列化当前表单）
+    fireEvent.click(
+      within(s.getByText('GLM').closest('li') as HTMLElement).getByRole('button', { name: '编辑' })
+    )
+    fireEvent.click(s.getByRole('tab', { name: 'JSON' }))
+    const area = (await s.findByLabelText('JSON')) as HTMLTextAreaElement
+
+    // 语法错误 → 不提交 + 行内 JSON 解析失败
+    fireEvent.change(area, { target: { value: '{broken' } })
+    fireEvent.click(s.getByRole('button', { name: '保存' }))
+    expect(await s.findByText(/JSON 解析失败/)).toBeDefined()
+    expect(api.saveProvider).not.toHaveBeenCalled()
+
+    // 修好并切回表单：JSON 里的改动回填到表单字段
+    fireEvent.change(area, {
+      target: { value: JSON.stringify({ id: 'p-glm', name: 'GLM-3', format: 'anthropic', baseUrl: 'https://g', apiKey: 'k', models: ['m1'], proxyUrl: 'http://127.0.0.1:7890' }) }
+    })
+    fireEvent.click(s.getByRole('tab', { name: '表单' }))
+    expect((s.getByLabelText('名称') as HTMLInputElement).value).toBe('GLM-3')
+    expect((s.getByLabelText('预设模型（逗号分隔）') as HTMLInputElement).value).toBe('m1')
+  })
+
+  it('v1.4 网络代理（anthropic 原生需开代理，照搬 cc-switch）：字段随格式显隐；填写随保存提交', async () => {
+    const api = await renderApp()
+    vi.mocked(api.listProviders).mockResolvedValue({ providers: [glm] })
+    const s = await openSettings()
+    gotoSection(s, '模型服务')
+
+    // 编辑 anthropic 档案 → 代理字段可见
+    fireEvent.click(
+      within(s.getByTitle('https://open.bigmodel.cn/api/anthropic').closest('li') as HTMLElement).getByRole('button', { name: '编辑' })
+    )
+    const proxyInput = (await s.findByLabelText('网络代理（HTTP_PROXY）')) as HTMLInputElement
+    fireEvent.change(proxyInput, { target: { value: 'http://127.0.0.1:7890' } })
+    fireEvent.click(s.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(api.saveProvider).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.saveProvider).mock.calls[0][0]).toMatchObject({
+      id: 'p-glm',
+      proxyUrl: 'http://127.0.0.1:7890'
+    })
+
+    // 切 openai 格式 → 代理/档位组常驻置灰（零跳动；配置保留）
+    fireEvent.click(s.getByRole('button', { name: '新增 provider' }))
+    fireEvent.change(s.getByLabelText('名称'), { target: { value: 'G' } })
+    fireEvent.change(s.getByLabelText('API 端点（Anthropic 协议入口）'), { target: { value: 'https://g' } })
+    fireEvent.change(s.getByLabelText('端点格式'), { target: { value: 'openai' } })
+    const proxyInOpenai = s.getByLabelText('网络代理（HTTP_PROXY）')
+    expect(proxyInOpenai.closest('.fmt-block')?.getAttribute('aria-disabled')).toBe('true')
+    expect(s.getByText(/OpenAI 兼容格式：协议转换由网关承担/)).toBeDefined()
+  })
+
+  it('v1.4 模型探测：成功合并预设列表（去重保序）；失败行内提示', async () => {
+    const api = await renderApp()
+    vi.mocked(api.listProviders).mockResolvedValue({ providers: [glm] })
+    vi.mocked(api.probeProviderModels).mockResolvedValue({ ok: true, models: ['glm-4.6', 'glm-4.7'] })
+    const s = await openSettings()
+    gotoSection(s, '模型服务')
+    fireEvent.click(
+      within(s.getByTitle('https://open.bigmodel.cn/api/anthropic').closest('li') as HTMLElement).getByRole('button', { name: '编辑' })
+    )
+
+    fireEvent.click(await s.findByRole('button', { name: '探测模型' }))
+    expect(await s.findByText('探测到 2 个模型')).toBeDefined()
+    const modelsInput = (s.getByLabelText('预设模型（逗号分隔）') as HTMLInputElement).value
+    expect(modelsInput).toBe('glm-4.6, glm-4.5-air, glm-4.7') // 已有项去重保序 + 新增追加
+
+    // 失败 → 行内错误
+    vi.mocked(api.probeProviderModels).mockResolvedValue({ ok: false, error: 'HTTP 401' })
+    fireEvent.click(s.getByRole('button', { name: '探测模型' }))
+    expect(await s.findByText('探测失败：HTTP 401')).toBeDefined()
+  })
+
+  it('v1.4 档位映射（Sonnet/Opus/Fable/Haiku）：anthropic 显示、保存 payload 带 slotModels', async () => {
+    const api = await renderApp()
+    vi.mocked(api.listProviders).mockResolvedValue({ providers: [glm] })
+    const s = await openSettings()
+    gotoSection(s, '模型服务')
+    fireEvent.click(
+      within(s.getByTitle('https://open.bigmodel.cn/api/anthropic').closest('li') as HTMLElement).getByRole('button', { name: '编辑' })
+    )
+
+    fireEvent.change(await s.findByLabelText('Sonnet 档位模型'), { target: { value: 'glm-4.6' } })
+    fireEvent.change(s.getByLabelText('Opus 档位模型'), { target: { value: ' glm-4.5 ' } })
+    fireEvent.change(s.getByLabelText('Haiku 档位模型'), { target: { value: ' glm-4.5-air ' } })
+    fireEvent.click(s.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(api.saveProvider).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.saveProvider).mock.calls[0][0]).toMatchObject({
+      id: 'p-glm',
+      slotModels: { sonnet: 'glm-4.6', opus: 'glm-4.5', haiku: 'glm-4.5-air' } // trim 归一；fable 空省略
+    })
+
+    // openai 格式 → 档位组常驻置灰（配置保留不丢）
+    fireEvent.click(s.getByRole('button', { name: '新增 provider' }))
+    fireEvent.change(s.getByLabelText('名称'), { target: { value: 'G' } })
+    fireEvent.change(s.getByLabelText('API 端点（Anthropic 协议入口）'), { target: { value: 'https://g' } })
+    fireEvent.change(s.getByLabelText('端点格式'), { target: { value: 'openai' } })
+    const slotInOpenai = s.getByLabelText('Sonnet 档位模型')
+    expect(slotInOpenai.closest('.fmt-block')?.getAttribute('aria-disabled')).toBe('true')
   })
 })
 
@@ -476,7 +732,7 @@ describe('启动与窗口', () => {
   it('getAppSettings 初始化（mock 默认托盘常驻）；选「退出应用」→ setAppSettings({closeToTray:false})', async () => {
     const api = await renderApp()
     const s = await openSettings()
-    gotoSection(s, '启动')
+    gotoSection(s, '通用')
     await waitFor(() => expect(api.getAppSettings).toHaveBeenCalledTimes(1))
     expect(
       (s.getByRole('radio', { name: '最小化到托盘（常驻）' }) as HTMLInputElement).checked
@@ -489,7 +745,7 @@ describe('启动与窗口', () => {
   it('开机自启 checkbox：勾选 → setAppSettings({launchAtLogin:true})', async () => {
     const api = await renderApp()
     const s = await openSettings()
-    gotoSection(s, '启动')
+    gotoSection(s, '通用')
     fireEvent.click(s.getByRole('checkbox', { name: '开机自启' }))
     await waitFor(() => expect(api.setAppSettings).toHaveBeenCalledWith({ launchAtLogin: true }))
   })
@@ -543,44 +799,68 @@ describe('设置弹窗基线', () => {
 
 // ── S14 双栏导航（左分类+当前值摘要；右内容条件渲染） ──────────────────────
 
-describe('设置双栏导航（S14）', () => {
-  it('默认选中「外观」：其内容可见，终端内容不可见；active 项带 aria-current', async () => {
+describe('设置双栏导航（S14；v1.4 终端并入外观）', () => {
+  it('默认选中「通用」：主题/终端/通知/启动四组同页可见（v1.4 合并）', async () => {
     await renderApp()
     const s = await openSettings()
-    expect(s.getByRole('radio', { name: '深色' })).toBeDefined() // 外观内容在
-    expect(s.queryByLabelText('终端字号')).toBeNull() // 终端内容不在（条件渲染）
-    expect(s.getByRole('button', { name: '外观' }).getAttribute('aria-current')).toBe('true')
-    expect(s.getByRole('button', { name: '终端' }).getAttribute('aria-current')).toBeNull()
+    expect(s.getByRole('radio', { name: '深色' })).toBeDefined() // 外观组
+    expect(s.getByLabelText('终端字号')).toBeDefined() // 终端组
+    expect(s.getByLabelText('webhook URL')).toBeDefined() // 通知组
+    expect(s.getByRole('radio', { name: '退出应用' })).toBeDefined() // 启动组
+    expect(s.queryByRole('button', { name: '外观' })).toBeNull() // 旧分类已删
+    expect(s.getByRole('button', { name: '通用' }).getAttribute('aria-current')).toBe('true')
+    expect(s.getByRole('button', { name: '模型服务' }).getAttribute('aria-current')).toBeNull()
   })
 
-  it('点「终端」导航：内容更替（外观内容消失、终端内容出现且 aria-current 转移）', async () => {
+  it('点「模型服务」导航：内容更替（通用内容消失、aria-current 转移）', async () => {
     await renderApp()
     const s = await openSettings()
-    gotoSection(s, '终端')
-    expect(s.getByLabelText('终端字号')).toBeDefined()
+    gotoSection(s, '模型服务')
+    expect(s.getByRole('button', { name: '新增 provider' })).toBeDefined()
     expect(s.queryByRole('radio', { name: '深色' })).toBeNull()
-    expect(s.getByRole('button', { name: '终端' }).getAttribute('aria-current')).toBe('true')
-    expect(s.getByRole('button', { name: '外观' }).getAttribute('aria-current')).toBeNull()
+    expect(s.getByRole('button', { name: '模型服务' }).getAttribute('aria-current')).toBe('true')
+    expect(s.getByRole('button', { name: '通用' }).getAttribute('aria-current')).toBeNull()
   })
 
-  it('左栏当前值摘要：终端 "Cascadia Mono · 15"、外观随主题实时更新、cli 版本、启动托盘常驻、通知未配置', async () => {
-    const api = await renderApp()
+  it('左栏当前值摘要：通用含主题+字号、随主题实时更新、cli 版本（v1.4 四页合并后）', async () => {
+    await renderApp()
     const s = await openSettings()
-    // 终端：默认字体族/字号派生
-    expect(s.getByRole('button', { name: '终端' }).textContent).toContain('Cascadia Mono · 15')
-    // 外观：摘要随 radio 实时更新
-    expect(s.getByRole('button', { name: '外观' }).textContent).toContain('深色')
+    // 通用：主题+字号派生（吸收原外观/终端摘要）
+    expect(s.getByRole('button', { name: '通用' }).textContent).toContain('15px')
+    expect(s.getByRole('button', { name: '通用' }).textContent).toContain('深色')
     fireEvent.click(s.getByRole('radio', { name: '浅色' }))
-    expect(s.getByRole('button', { name: '外观' }).textContent).toContain('浅色')
+    expect(s.getByRole('button', { name: '通用' }).textContent).toContain('浅色')
     // claude CLI：摘要 = 版本号（getClaudeVersionInfo 异步返回后）
     await waitFor(() =>
       expect(s.getByRole('button', { name: 'claude CLI' }).textContent).toContain('2.1.301')
     )
-    // 启动：mock getAppSettings 默认 closeToTray=true
-    await waitFor(() => expect(api.getAppSettings).toHaveBeenCalledTimes(1))
-    expect(s.getByRole('button', { name: '启动' }).textContent).toContain('托盘常驻')
-    // 通知：mock getNotifyConfig 默认空 URL → 未配置
-    expect(s.getByRole('button', { name: '通知' }).textContent).toContain('未配置')
+    // 旧分类（外观/通知/启动）已并入通用——左栏不再出现
+    expect(s.queryByRole('button', { name: '外观' })).toBeNull()
+    expect(s.queryByRole('button', { name: '通知' })).toBeNull()
+    expect(s.queryByRole('button', { name: '启动' })).toBeNull()
+  })
+
+  it('v1.4 本地代理状态卡：运行中显示端口/统计，停止调 IPC；随应用启动写设置', async () => {
+    const api = await renderApp()
+    vi.mocked(api.getProxyStatus).mockResolvedValue({
+      running: true,
+      port: 12700,
+      startedAt: new Date(Date.now() - 90_000).toISOString(),
+      stats: { total: 12, active: 2, direct: 9, viaProxy: 3 }
+    })
+    const s = await openSettings()
+    gotoSection(s, '模型服务')
+    expect(await s.findByText('本地代理')).toBeDefined()
+    expect(s.getByText(/127\.0\.0\.1:12700/)).toBeDefined()
+    expect(s.getByText(/请求 12/)).toBeDefined()
+
+    // 停止 → stopProxy
+    fireEvent.click(s.getByRole('button', { name: '停止' }))
+    await waitFor(() => expect(api.stopProxy).toHaveBeenCalledTimes(1))
+
+    // 随应用启动 → setAppSettings({proxyAutoStart:true})
+    fireEvent.click(s.getByRole('checkbox', { name: '随应用启动' }))
+    await waitFor(() => expect(api.setAppSettings).toHaveBeenCalledWith({ proxyAutoStart: true }))
   })
 })
 
@@ -608,7 +888,7 @@ describe('v0.9.4 字体下拉只显示本机已装（用户指令）', () => {
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: '设置' }))
     const dialog = await screen.findByRole('dialog', { name: '设置' })
-    fireEvent.click(within(dialog).getByRole('button', { name: '终端' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '通用' }))
     const select = await screen.findByLabelText('终端字体')
     const values = within(select)
       .getAllByRole('option')

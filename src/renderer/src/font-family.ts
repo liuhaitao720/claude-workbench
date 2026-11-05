@@ -3,7 +3,8 @@
  * localStorage（键 cwb-font-family）持久化。纯函数独立成模块便于单测（仿
  * font-size.ts 先例）；应用入口（遍历 terminalCache set options.fontFamily +
  * 活动 fit/ptyResize + 隐藏实例 dirty 补偿）见 TerminalPanel.changeFontFamily。
- * 白名单外一律回 'Cascadia Mono'（默认——Windows Terminal 默认字体，观感基准）。
+ * 白名单外一律回平台默认字体（v1.3：win/darwin=Cascadia Mono 观感基准不变；
+ * linux=DejaVu Sans Mono——Ubuntu 预装）。
  *
  * v0.9.3：扩容免费商用（OFL/Apache/MIT 许可）等宽字体。本机未安装的字体
  * 浏览器自动回退系统等宽（xterm 按实际渲染字体测量栅格，不错位）；
@@ -44,7 +45,15 @@ export const FONT_FAMILY_WHITELIST = [
 
 export type FontFamily = (typeof FONT_FAMILY_WHITELIST)[number]
 
-export const FONT_FAMILY_DEFAULT: FontFamily = 'Cascadia Mono'
+/**
+ * 平台默认字体（v1.3 Linux 适配）：win/darwin 保持 Cascadia Mono（观感基准不变），
+ * linux 用 DejaVu Sans Mono（Ubuntu 预装、已在白名单；Cascadia 在 Linux 多半未装，
+ * 浏览器虽会回退系统等宽，但显式默认更可预期）。
+ */
+export function fontFamilyDefault(): FontFamily {
+  const platform = (window as unknown as { cwb?: { platform?: string } }).cwb?.platform
+  return platform === 'linux' ? 'DejaVu Sans Mono' : 'Cascadia Mono'
+}
 
 /** localStorage 持久化键（v0.9 契约） */
 const STORAGE_KEY = 'cwb-font-family'
@@ -72,15 +81,15 @@ export function isValidFontFamily(v: string): boolean {
   return isFontFamily(v) || isFontInstalled(v) === true
 }
 
-/** 读取持久化字体族；缺失/无效（白名单外且未安装）→ 默认值 */
+/** 读取持久化字体族；缺失/无效（白名单外且未安装）→ 默认值（按平台，v1.3） */
 export function loadFontFamily(): string {
   let raw: string | null = null
   try {
     raw = window.localStorage.getItem(STORAGE_KEY)
   } catch {
-    return FONT_FAMILY_DEFAULT
+    return fontFamilyDefault()
   }
-  if (raw === null || !isValidFontFamily(raw)) return FONT_FAMILY_DEFAULT
+  if (raw === null || !isValidFontFamily(raw)) return fontFamilyDefault()
   return raw
 }
 

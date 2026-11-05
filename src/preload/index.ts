@@ -6,7 +6,10 @@ import type {
   AppUpdateProgressEvent,
   CWBApi,
   CliOutputEvent,
+  LocalProxyStatus,
   NotifyConfig,
+  ProviderConfig,
+  ProviderRegistryState,
   SkillInfo,
   SkillMarketEntry,
   SkillMarketplaceInfo,
@@ -24,6 +27,8 @@ import { IpcChannels } from '../shared/ipc-channels'
  * （其返回 ipcRenderer 自身，无法穿过 contextBridge）。
  */
 const api: CWBApi = {
+  // v1.3 运行平台（renderer 按平台分支：默认字体/安装命令/windowsPty/更新角标门禁）
+  platform: process.platform,
   // projects
   listProjects: () => ipcRenderer.invoke(IpcChannels.ProjectsList) as Promise<ProjectRecord[]>,
   addProject: (dir) => ipcRenderer.invoke(IpcChannels.ProjectsAdd, dir) as Promise<ProjectRecord>,
@@ -154,6 +159,27 @@ const api: CWBApi = {
     ipcRenderer.invoke(IpcChannels.NotifySet, url, enabled) as Promise<NotifyConfig>,
   sendTestNotify: () =>
     ipcRenderer.invoke(IpcChannels.NotifyTest) as Promise<{ ok: boolean; error?: string }>,
+  // v1.4 模型服务 provider（参考 cc-switch：档案 CRUD + 默认切换；仅配置注入）
+  listProviders: () =>
+    ipcRenderer.invoke(IpcChannels.ProvidersList) as Promise<ProviderRegistryState>,
+  saveProvider: (provider) =>
+    ipcRenderer.invoke(IpcChannels.ProvidersSave, provider) as Promise<ProviderConfig>,
+  removeProvider: (id) => ipcRenderer.invoke(IpcChannels.ProvidersRemove, id) as Promise<void>,
+  setDefaultProvider: (id) =>
+    ipcRenderer.invoke(IpcChannels.ProvidersSetDefault, id) as Promise<void>,
+  probeProviderModels: (id) =>
+    ipcRenderer.invoke(IpcChannels.ProvidersProbeModels, id) as Promise<{
+      ok: boolean
+      models?: string[]
+      error?: string
+    }>,
+  setTaskProvider: (taskId, opts) =>
+    ipcRenderer.invoke(IpcChannels.TasksSetProvider, taskId, opts) as Promise<TaskRecord>,
+  // v1.4 本地代理（纯隧道）
+  getProxyStatus: () =>
+    ipcRenderer.invoke(IpcChannels.ProxyStatus) as Promise<LocalProxyStatus>,
+  startProxy: () => ipcRenderer.invoke(IpcChannels.ProxyStart) as Promise<LocalProxyStatus>,
+  stopProxy: () => ipcRenderer.invoke(IpcChannels.ProxyStop) as Promise<LocalProxyStatus>,
   reportSmoke: (payload) => {
     void ipcRenderer.send(IpcChannels.SmokeReport, payload)
   }
