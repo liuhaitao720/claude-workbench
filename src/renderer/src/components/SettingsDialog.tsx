@@ -18,7 +18,12 @@ import type {
   ProviderRegistryState
 } from '../../../shared/types'
 
-/** v1.4 provider 表单态（编辑中间层：models 以逗号文本维护，保存时拆分归一） */
+/** v1.4.1 provider 表单态（models 单行一模型：每行 {name, oneM}；oneM=声明支持 1M 上下文） */
+interface ModelRow {
+  name: string
+  oneM: boolean
+}
+
 interface ProviderFormState {
   id: string
   name: string
@@ -26,7 +31,7 @@ interface ProviderFormState {
   baseUrl: string
   apiKey: string
   apiKeyType: 'auth_token' | 'api_key'
-  modelsText: string
+  modelRows: ModelRow[]
   defaultModel: string
   proxyUrl: string
   slotSonnet: string
@@ -42,7 +47,7 @@ const emptyProviderForm = (): ProviderFormState => ({
   baseUrl: '',
   apiKey: '',
   apiKeyType: 'auth_token',
-  modelsText: '',
+  modelRows: [],
   defaultModel: '',
   proxyUrl: '',
   slotSonnet: '',
@@ -51,13 +56,51 @@ const emptyProviderForm = (): ProviderFormState => ({
   slotHaiku: ''
 })
 
-/** v1.4 表单态 → 档案对象（models 逗号文本拆数组；保存与 JSON 序列化共用） */
+/** v1.4.1 [1m] 类命名自动预勾（如 claude-sonnet-4-5[1m]、xxx-1m-pro）——仅默认值，行内可手动改 */
+function looksLike1M(name: string): boolean {
+  return /\[1m\]/i.test(name) || /(^|[^a-z0-9])1m([^a-z0-9]|$)/i.test(name)
+}
+
+/** 档案 → 行（models1M 已存=以存值为准（空数组=明确全否）；未存（旧档案/探测新行）=按命名预勾） */
+function providerModelRows(p: Pick<ProviderConfig, 'models' | 'models1M'>): ModelRow[] {
+  return p.models.map((n) => ({
+    name: n,
+    oneM: p.models1M !== undefined ? p.models1M.includes(n) : looksLike1M(n)
+  }))
+}
+
+/** v1.4.1 下拉候选：模型行 trim 去重保序（oneM 随行供选项标注） */
+function modelSelectOptions(rows: ModelRow[]): ModelRow[] {
+  const seen = new Set<string>()
+  const out: ModelRow[] = []
+  for (const r of rows) {
+    const name = r.name.trim()
+    if (name === '' || seen.has(name)) continue
+    seen.add(name)
+    out.push({ name, oneM: r.oneM })
+  }
+  return out
+}
+
+/** v1.4.1 档位下拉候选：预设模型行 + 兜底保留当前值（旧档案手填、不在预设列表时不丢数据） */
+function slotSelectOptions(rows: ModelRow[], current: string): ModelRow[] {
+  const opts = modelSelectOptions(rows)
+  const cur = current.trim()
+  if (cur !== '' && !opts.some((o) => o.name === cur)) opts.push({ name: cur, oneM: false })
+  return opts
+}
+
+/** v1.4.1 表单态 → 档案对象（行名 trim 去空去重；models 非空时恒写 models1M——空数组=明确声明全不支持） */
 function providerFormToConfig(f: ProviderFormState): ProviderConfig {
   const slots: NonNullable<ProviderConfig['slotModels']> = {}
   if (f.slotSonnet.trim() !== '') slots['sonnet'] = f.slotSonnet.trim()
   if (f.slotOpus.trim() !== '') slots['opus'] = f.slotOpus.trim()
   if (f.slotFable.trim() !== '') slots['fable'] = f.slotFable.trim()
   if (f.slotHaiku.trim() !== '') slots['haiku'] = f.slotHaiku.trim()
+  const names = [...new Set(f.modelRows.map((r) => r.name.trim()).filter((s) => s !== ''))]
+  const declared1M = [
+    ...new Set(f.modelRows.filter((r) => r.oneM && r.name.trim() !== '').map((r) => r.name.trim()))
+  ].filter((n) => names.includes(n))
   return {
     id: f.id,
     name: f.name.trim(),
@@ -65,21 +108,26 @@ function providerFormToConfig(f: ProviderFormState): ProviderConfig {
     baseUrl: f.baseUrl.trim(),
     apiKey: f.apiKey.trim(),
     apiKeyType: f.apiKeyType,
-    models: f.modelsText
-      .split(',')
-      .map((s) => s.trim())
-      .filter((s) => s !== ''),
+    models: names,
+    ...(names.length > 0 ? { models1M: declared1M } : {}),
     ...(f.defaultModel !== '' ? { defaultModel: f.defaultModel } : {}),
     ...(f.proxyUrl.trim() !== '' ? { proxyUrl: f.proxyUrl.trim() } : {}),
     ...(Object.keys(slots).length > 0 ? { slotModels: slots } : {})
   }
 }
 
-/** v1.4 已解析 JSON（unknown，main 侧同链校验）→ 表单态（models 数组并回逗号文本） */
+/** v1.4 已解析 JSON（unknown，main 侧同链校验）→ 表单态（models 数组并回行；models1M 同 providerModelRows 语义） */
 function providerConfigToForm(raw: Record<string, unknown>, fallbackId: string): ProviderFormState {
   const str = (k: string): string => (typeof raw[k] === 'string' ? (raw[k] as string) : '')
   const slots = (raw['slotModels'] as Record<string, unknown> | undefined) ?? {}
   const slotStr = (k: string): string => (typeof slots[k] === 'string' ? (slots[k] as string) : '')
+  const modelNames = Array.isArray(raw['models'])
+    ? (raw['models'] as unknown[]).filter((m): m is string => typeof m === 'string')
+    : []
+  const declared1M =
+    raw['models1M'] !== undefined && Array.isArray(raw['models1M'])
+      ? (raw['models1M'] as unknown[]).filter((m): m is string => typeof m === 'string')
+      : undefined
   return {
     id: str('id') !== '' ? str('id') : fallbackId,
     name: str('name'),
@@ -87,9 +135,10 @@ function providerConfigToForm(raw: Record<string, unknown>, fallbackId: string):
     baseUrl: str('baseUrl'),
     apiKey: str('apiKey'),
     apiKeyType: raw['apiKeyType'] === 'api_key' ? 'api_key' : 'auth_token',
-    modelsText: Array.isArray(raw['models'])
-      ? (raw['models'] as unknown[]).filter((m): m is string => typeof m === 'string').join(', ')
-      : '',
+    modelRows: modelNames.map((n) => ({
+      name: n,
+      oneM: declared1M !== undefined ? declared1M.includes(n) : looksLike1M(n)
+    })),
     defaultModel: str('defaultModel'),
     proxyUrl: str('proxyUrl'),
     slotSonnet: slotStr('sonnet'),
@@ -531,7 +580,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       baseUrl: p.baseUrl,
       apiKey: p.apiKey,
       apiKeyType: p.apiKeyType ?? 'auth_token',
-      modelsText: p.models.join(', '),
+      modelRows: providerModelRows(p),
       defaultModel: p.defaultModel ?? '',
       proxyUrl: p.proxyUrl ?? '',
       slotSonnet: p.slotModels?.sonnet ?? '',
@@ -556,12 +605,15 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         return
       }
       const fetched = r.models ?? []
-      const existing = providerForm.modelsText
-        .split(',')
-        .map((s) => s.trim())
-        .filter((s) => s !== '')
-      const merged = [...new Set([...existing, ...fetched])]
-      setProviderForm({ ...providerForm, modelsText: merged.join(', ') })
+      const existing = new Set(
+        providerForm.modelRows.map((r) => r.name.trim()).filter((n) => n !== '')
+      )
+      // v1.4.1 新探测到的模型追加为新行（[1m] 类命名预勾），已有行（含勾选态）不动
+      const appended = fetched
+        .map((n) => n.trim())
+        .filter((n) => n !== '' && !existing.has(n))
+        .map((n) => ({ name: n, oneM: looksLike1M(n) }))
+      setProviderForm({ ...providerForm, modelRows: [...providerForm.modelRows, ...appended] })
       setProviderMsg(t('settings.providerProbeOk', { count: fetched.length }))
     } catch (err) {
       setProviderError(t('settings.providerProbeFailed', { error: errMsg(err) }))
@@ -581,7 +633,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       baseUrl: p.baseUrl,
       apiKey: p.apiKey,
       apiKeyType: p.apiKeyType ?? 'auth_token',
-      modelsText: p.models.join(', '),
+      modelRows: providerModelRows(p),
       defaultModel: p.defaultModel ?? '',
       proxyUrl: p.proxyUrl ?? '',
       slotSonnet: p.slotModels?.sonnet ?? '',
@@ -1155,41 +1207,101 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     <div className="form-row">
                       <span className="form-label">{t('settings.providerModels')}</span>
                       <div className="form-control">
-                        <input
-                          className="settings-input grow mono"
-                          type="text"
-                          aria-label={t('settings.providerModels')}
-                          placeholder={t('settings.providerModelsPlaceholder')}
-                          value={providerForm.modelsText}
-                          onChange={(e) => {
-                            const modelsText = e.target.value
-                            // defaultModel 跟随：当前值不在新列表时清空，避免悬空选择
-                            const models = modelsText
-                              .split(',')
-                              .map((x) => x.trim())
-                              .filter((x) => x !== '')
-                            if (
-                              providerForm.defaultModel !== '' &&
-                              !models.includes(providerForm.defaultModel)
-                            ) {
-                              setProviderForm({ ...providerForm, modelsText, defaultModel: '' })
-                              return
+                        {/* v1.4.1 单行一模型：每行 = 模型名 + 1M 上下文声明勾选 + 移除；defaultModel 跟随清空 */}
+                        {providerForm.modelRows.map((row, i) => (
+                          <div className="model-row" key={i}>
+                            <input
+                              className="settings-input grow mono"
+                              type="text"
+                              aria-label={t('settings.providerModelName')}
+                              placeholder={t('settings.providerModelsPlaceholder')}
+                              value={row.name}
+                              onChange={(e) => {
+                                const name = e.target.value
+                                const modelRows = providerForm.modelRows.map((r, j) =>
+                                  j === i ? { ...r, name } : r
+                                )
+                                // defaultModel 跟随：当前值不在新列表时清空，避免悬空选择
+                                const names = modelRows
+                                  .map((r) => r.name.trim())
+                                  .filter((x) => x !== '')
+                                if (
+                                  providerForm.defaultModel !== '' &&
+                                  !names.includes(providerForm.defaultModel)
+                                ) {
+                                  setProviderForm({ ...providerForm, modelRows, defaultModel: '' })
+                                  return
+                                }
+                                setProviderForm({ ...providerForm, modelRows })
+                              }}
+                            />
+                            <label className="model-1m" title={t('settings.providerModel1MHint')}>
+                              <input
+                                type="checkbox"
+                                checked={row.oneM}
+                                onChange={(e) => {
+                                  const oneM = e.target.checked
+                                  setProviderForm({
+                                    ...providerForm,
+                                    modelRows: providerForm.modelRows.map((r, j) =>
+                                      j === i ? { ...r, oneM } : r
+                                    )
+                                  })
+                                }}
+                              />
+                              {t('settings.providerModel1M')}
+                            </label>
+                            <button
+                              type="button"
+                              className="btn small"
+                              aria-label={t('settings.providerModelRemove')}
+                              onClick={() => {
+                                const modelRows = providerForm.modelRows.filter((_, j) => j !== i)
+                                const names = modelRows
+                                  .map((r) => r.name.trim())
+                                  .filter((x) => x !== '')
+                                if (
+                                  providerForm.defaultModel !== '' &&
+                                  !names.includes(providerForm.defaultModel)
+                                ) {
+                                  setProviderForm({ ...providerForm, modelRows, defaultModel: '' })
+                                  return
+                                }
+                                setProviderForm({ ...providerForm, modelRows })
+                              }}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                        <div className="model-row-actions">
+                          <button
+                            type="button"
+                            className="btn small"
+                            onClick={() =>
+                              setProviderForm({
+                                ...providerForm,
+                                modelRows: [...providerForm.modelRows, { name: '', oneM: false }]
+                              })
                             }
-                            setProviderForm({ ...providerForm, modelsText })
-                          }}
-                        />
-                        {/* v1.4 探测：GET {baseUrl}/v1/models（官方端点经代理出口）；须先保存 */}
-                        <button
-                          type="button"
-                          className="btn small"
-                          disabled={providerProbing || providerForm.id === ''}
-                          title={
-                            providerForm.id === '' ? t('settings.providerProbeNeedSave') : undefined
-                          }
-                          onClick={() => void probeModels()}
-                        >
-                          {providerProbing ? t('common.detecting') : t('settings.providerProbe')}
-                        </button>
+                          >
+                            {t('settings.providerModelAdd')}
+                          </button>
+                          {/* v1.4 探测：GET {baseUrl}/v1/models（官方端点经代理出口）；须先保存 */}
+                          <button
+                            type="button"
+                            className="btn small"
+                            disabled={providerProbing || providerForm.id === ''}
+                            title={
+                              providerForm.id === ''
+                                ? t('settings.providerProbeNeedSave')
+                                : undefined
+                            }
+                            onClick={() => void probeModels()}
+                          >
+                            {providerProbing ? t('common.detecting') : t('settings.providerProbe')}
+                          </button>
+                        </div>
                       </div>
                     </div>
                     <div className="form-row">
@@ -1204,15 +1316,12 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                           }
                         >
                           <option value="">{t('settings.providerDefaultModelNone')}</option>
-                          {providerForm.modelsText
-                            .split(',')
-                            .map((x) => x.trim())
-                            .filter((x) => x !== '')
-                            .map((m) => (
-                              <option key={m} value={m}>
-                                {m}
-                              </option>
-                            ))}
+                          {modelSelectOptions(providerForm.modelRows).map((o) => (
+                            <option key={o.name} value={o.name}>
+                              {o.name}
+                              {o.oneM ? t('settings.providerModel1MTag') : ''}
+                            </option>
+                          ))}
                         </select>
                       </div>
                     </div>
@@ -1229,49 +1338,86 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                         <div className="form-row">
                           <span className="form-label">　</span>
                           <div className="form-control slots">
+                            {/* v1.4.1 档位=从预设模型行下拉选择（含 1M 标注；不在列表的旧值兜底保留） */}
                             <div className="slot">
                               <span>Sonnet</span>
-                              <input
-                                type="text"
+                              <select
                                 aria-label={t('settings.providerSlotSonnet')}
                                 value={providerForm.slotSonnet}
                                 onChange={(e) =>
                                   setProviderForm({ ...providerForm, slotSonnet: e.target.value })
                                 }
-                              />
+                              >
+                                <option value="">{t('settings.providerSlotNone')}</option>
+                                {slotSelectOptions(providerForm.modelRows, providerForm.slotSonnet).map(
+                                  (o) => (
+                                    <option key={o.name} value={o.name}>
+                                      {o.name}
+                                      {o.oneM ? t('settings.providerModel1MTag') : ''}
+                                    </option>
+                                  )
+                                )}
+                              </select>
                             </div>
                             <div className="slot">
                               <span>Opus</span>
-                              <input
-                                type="text"
+                              <select
                                 aria-label={t('settings.providerSlotOpus')}
                                 value={providerForm.slotOpus}
                                 onChange={(e) =>
                                   setProviderForm({ ...providerForm, slotOpus: e.target.value })
                                 }
-                              />
+                              >
+                                <option value="">{t('settings.providerSlotNone')}</option>
+                                {slotSelectOptions(providerForm.modelRows, providerForm.slotOpus).map(
+                                  (o) => (
+                                    <option key={o.name} value={o.name}>
+                                      {o.name}
+                                      {o.oneM ? t('settings.providerModel1MTag') : ''}
+                                    </option>
+                                  )
+                                )}
+                              </select>
                             </div>
                             <div className="slot">
                               <span>Fable</span>
-                              <input
-                                type="text"
+                              <select
                                 aria-label={t('settings.providerSlotFable')}
                                 value={providerForm.slotFable}
                                 onChange={(e) =>
                                   setProviderForm({ ...providerForm, slotFable: e.target.value })
                                 }
-                              />
+                              >
+                                <option value="">{t('settings.providerSlotNone')}</option>
+                                {slotSelectOptions(providerForm.modelRows, providerForm.slotFable).map(
+                                  (o) => (
+                                    <option key={o.name} value={o.name}>
+                                      {o.name}
+                                      {o.oneM ? t('settings.providerModel1MTag') : ''}
+                                    </option>
+                                  )
+                                )}
+                              </select>
                             </div>
                             <div className="slot">
                               <span>Haiku</span>
-                              <input
-                                type="text"
+                              <select
                                 aria-label={t('settings.providerSlotHaiku')}
                                 value={providerForm.slotHaiku}
                                 onChange={(e) =>
                                   setProviderForm({ ...providerForm, slotHaiku: e.target.value })
                                 }
-                              />
+                              >
+                                <option value="">{t('settings.providerSlotNone')}</option>
+                                {slotSelectOptions(providerForm.modelRows, providerForm.slotHaiku).map(
+                                  (o) => (
+                                    <option key={o.name} value={o.name}>
+                                      {o.name}
+                                      {o.oneM ? t('settings.providerModel1MTag') : ''}
+                                    </option>
+                                  )
+                                )}
+                              </select>
                             </div>
                           </div>
                         </div>

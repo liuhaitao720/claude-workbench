@@ -25,7 +25,9 @@ const h = vi.hoisted(() => {
 vi.mock('electron', () => ({
   app: { quit: () => void (h.quitCalls += 1) },
   dialog: {
-    showMessageBox: vi.fn(async (_win: unknown, opts: { message: string; detail: string }) => {
+    // v1.4.1 兼容两种签名：带父窗口 (win, opts) 与无父 (opts)——隐藏窗口走无父路径
+    showMessageBox: vi.fn(async (a: unknown, b?: unknown) => {
+      const opts = (b ?? a) as { message: string; detail: string }
       h.dialogCalls.push({ message: opts.message, detail: opts.detail })
       return { response: h.dialogResponse }
     })
@@ -65,8 +67,10 @@ vi.mock('electron', () => ({
 
 import { attachCloseToTray, setupTray, trayTooltip } from '../tray'
 
-/** 假窗口（记录 on/close/hide/show，可手动派发事件） */
-function fakeWindow(): {
+/** 假窗口（记录 on/close/hide/show，可手动派发事件；缺省可见、未销毁） */
+function fakeWindow(
+  overrides: { visible?: boolean } = {}
+): {
   win: BrowserWindow
   events: Map<string, Array<(e: { preventDefault: () => void }) => void>>
   hidden: () => number
@@ -85,7 +89,9 @@ function fakeWindow(): {
     show: () => void (shown += 1),
     focus: () => {},
     isMinimized: () => false,
-    restore: () => {}
+    restore: () => {},
+    isDestroyed: () => false,
+    isVisible: () => overrides.visible ?? true
   } as unknown as BrowserWindow
   return { win, events, hidden: () => hidden, shown: () => shown }
 }
@@ -182,6 +188,28 @@ describe('setupTray（菜单/还原/退出确认/tooltip）', () => {
     h.dialogResponse = 0 // 确认退出
     click()
     await vi.waitFor(() => expect(h.quitCalls).toBe(before + 1))
+  })
+
+  // v1.4.1 修复「托盘退出无反应」：窗口隐藏驻留托盘时确认框挂隐藏父窗在 Wayland 不映射
+  it('退出：窗口隐藏（关窗驻留）→ 无父对话框 + markQuitOrigin 回执；确认后照样退出', async () => {
+    const origins: string[] = []
+    const { win } = fakeWindow({ visible: false })
+    await setupTray({ win, runningCount: () => 1, markQuitOrigin: () => origins.push('tray-quit') })
+    const click = menuItem('退出（结束所有任务）')['click'] as () => void
+    const before = h.quitCalls
+    const dialogBefore = h.dialogCalls.length
+
+    h.dialogResponse = 1 // 取消 → 不退出、不记 origin
+    click()
+    await vi.waitFor(() => expect(h.dialogCalls.length).toBe(dialogBefore + 1))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(h.quitCalls).toBe(before)
+    expect(origins).toEqual([])
+
+    h.dialogResponse = 0 // 确认 → app.quit + origin 回执
+    click()
+    await vi.waitFor(() => expect(h.quitCalls).toBe(before + 1))
+    expect(origins).toEqual(['tray-quit'])
   })
 
   it('「显示」菜单项 → 还原窗口', async () => {

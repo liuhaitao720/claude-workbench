@@ -14,10 +14,19 @@ import { attachCloseToTray, setupTray, type TrayHandle } from './tray'
 
 const execFileAsync = promisify(execFile)
 
+/**
+ * v1.4.x Linux 等待加成：真实 Linux/VM 下 claude TUI 首字节与渲染回执比 Win 慢
+ * （nvm shim + node 冷启动 + Wayland 终端挂载），实测偶发逼近原窗口上限。
+ * 回显等待窗口 x1.5（仅放宽等待，不改变判定）；waitForBytes 轮询 200→100ms
+ * （同等窗口内多等几次，缩短首字节落地的感知延迟）。Win 保持原值。
+ */
+const SMOKE_WAIT_SCALE = process.platform === 'win32' ? 1 : 1.5
+const smokeWait = (ms: number): number => Math.round(ms * SMOKE_WAIT_SCALE)
+
 /** S4 冒烟全程超时（app 内自守；驱动脚本另设更宽的外层超时兜底） */
-const SMOKE_TIMEOUT_MS = 60_000
+const SMOKE_TIMEOUT_MS = smokeWait(60_000)
 /** 等待 PTY 首字节/回执的窗口 */
-const WAIT_DATA_MS = 50_000
+const WAIT_DATA_MS = smokeWait(50_000)
 /** renderer did-finish-load 后的缓冲（React mount + initListeners 订阅完成余量） */
 const RENDERER_SETTLE_MS = 300
 /** 自动升级开始检查的延迟（等窗口/托盘稳定；避免与首屏渲染抢网络与 CPU） */
@@ -109,7 +118,7 @@ class PtyByteSink {
     while (Date.now() < deadline) {
       const data = this.bytes(taskId)
       if (Buffer.byteLength(data, 'utf8') >= minBytes) return data
-      await sleep(200)
+      await sleep(100) // v1.4.x 200→100ms：同等窗口内多等几次回显
     }
     smokeFail(`task ${taskId} produced < ${minBytes} bytes within ${timeoutMs}ms`)
   }
@@ -256,7 +265,7 @@ async function runInputProbe(ctx: AppContext, sink: PtyByteSink): Promise<void> 
   // 对话框验证（v0.4.4 剥离子会话标记后，首启对话框在探针环境也可见）：
   // 两个特殊默认项——"type something"（行内直输+占位隐藏）与 "chat about this"（选中+回车）
   if (!/❯/.test(await readRows())) {
-    const dialogReady = await waitForRows(/type something|chat about/i, 30_000, 'welcome dialog (type something / chat about)')
+    const dialogReady = await waitForRows(/type something|chat about/i, smokeWait(30_000), 'welcome dialog (type something / chat about)')
     if (!dialogReady) smokeFail('neither welcome dialog nor input line rendered within 30s')
     const dialogRows = await readRows()
     console.log('[input-probe] dialog options evidence:',
@@ -273,7 +282,7 @@ async function runInputProbe(ctx: AppContext, sink: PtyByteSink): Promise<void> 
     console.log('[input-probe] ① inline typing in dialog: echo=', norm.includes('hiprobe'),
       'placeholder-hidden=', !/typesomething/i.test(norm))
     key('Return')
-    const inputReady = await waitForRows(/❯/, 30_000, 'input line (❯) after dialog submit')
+    const inputReady = await waitForRows(/❯/, smokeWait(30_000), 'input line (❯) after dialog submit')
     if (!inputReady) smokeFail('input line ❯ not shown after Enter within 30s')
   } else {
     console.log('[input-probe] phase reached: input line already present (env skips dialog)')
@@ -361,7 +370,7 @@ async function runRecoveryPhaseA(ctx: AppContext, sink: PtyByteSink): Promise<vo
   console.log(`[recovery-a] task created: id=${task.id} status=${task.status} cwd=${task.cwd}`)
   console.log(`[recovery-a] tasks.json persisted: ${JSON.stringify(ctx.tasks.get(task.id))}`)
 
-  await sink.waitForBytes(task.id, 1, 10_000)
+  await sink.waitForBytes(task.id, 1, smokeWait(10_000))
   console.log(`[recovery-a] PTY produced ${Buffer.byteLength(sink.bytes(task.id), 'utf8')} bytes (claude alive)`)
 
   const pid = ctx.pty.pid(task.id)
@@ -384,7 +393,7 @@ async function runRecoveryPhaseB(ctx: AppContext, sink: PtyByteSink): Promise<vo
   if (resumed.status !== 'running') smokeFail(`resumeTask returned status='${resumed.status}', expected 'running'`)
   console.log(`[recovery-b] resumeTask -> status=${resumed.status} (claude --resume ${resumed.sessionId} spawned at cwd=${resumed.cwd})`)
 
-  await sink.waitForBytes(task.id, 1, 10_000)
+  await sink.waitForBytes(task.id, 1, smokeWait(10_000))
   const data = sink.bytes(task.id)
   const exitedEarly = !ctx.pty.isRunning(task.id)
   console.log(
@@ -547,7 +556,8 @@ app.whenReady().then(async () => {
     trayHandle = await setupTray({
       win,
       runningCount: () => runningCountOf(currentCtx),
-      language: mainLanguage
+      language: mainLanguage,
+      markQuitOrigin: () => crashLog.markOrigin('tray-quit')
     })
     trayHandle.setRunningCount(runningCountOf(currentCtx))
   })()

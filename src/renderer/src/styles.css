@@ -1281,8 +1281,11 @@ button {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 56vh;
-  overflow-y: auto;
+  /* v1.4.3 布局修正：取消 rail 独立滚动（嵌套滚动条）——吸附在滚动区顶部，
+     整页只保留 .settings-body 一层滚动条 */
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
 }
 
 .providers-rail-item {
@@ -1337,9 +1340,8 @@ button {
 .providers-main {
   flex: 1;
   min-width: 0;
-  /* 编辑器独立滚动：设置页整体不再随表单/JSON 变长而滚动 */
-  max-height: 56vh;
-  overflow-y: auto;
+  /* v1.4.3 布局修正：编辑器不再独立滚动（max-height 56vh 与 rail 叠加造成三层滚动条），
+     随内容展开，滚动统一收敛到 .settings-body */
 }
 
 /* 表单双列网格：字段成对排布，高度减半 */
@@ -1553,6 +1555,31 @@ button {
   gap: 8px 14px;
 }
 
+/* v1.4.1 模型行：单行一模型（名称输入 + 1M 声明勾选 + 移除按钮） */
+.model-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.model-1m {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  cursor: pointer;
+  user-select: none;
+}
+
+.model-row-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .slot {
   display: grid;
   grid-template-columns: 52px minmax(0, 1fr);
@@ -1565,7 +1592,8 @@ button {
   color: var(--text-3);
 }
 
-.slot input {
+.slot input,
+.slot select {
   width: 100%;
   padding: 4px 8px;
   border-radius: 6px;

@@ -268,6 +268,11 @@ export interface ProviderConfig {
   apiKeyType?: 'auth_token' | 'api_key'
   /** 预设模型列表（任务级下拉候选；空列表允许——纯手填） */
   models: string[]
+  /**
+   * v1.4.1 每模型声明：支持 1M 长上下文（设置页单行勾选；[1m] 类命名自动预勾）。
+   * 仅本机标记展示（模型行/下拉候选提示），不改变 spawn 注入的模型名。
+   */
+  models1M?: string[]
   /** 该 provider 的缺省模型（任务未指定 model 时注入 ANTHROPIC_MODEL） */
   defaultModel?: string
   /**

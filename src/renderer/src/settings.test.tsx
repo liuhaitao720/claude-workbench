@@ -297,7 +297,7 @@ describe('模型服务（v1.4 providers）', () => {
     })
   })
 
-  it('新增：空名/空 URL 禁用保存；models 逗号文本拆分归一后提交', async () => {
+  it('新增：空名/空 URL 禁用保存；models 单行一模型逐行录入（含 1M 声明）后提交', async () => {
     const api = await renderApp()
     const s = await openSettings()
     gotoSection(s, '模型服务')
@@ -311,9 +311,12 @@ describe('模型服务（v1.4 providers）', () => {
       target: { value: 'https://api.moonshot.cn/anthropic' }
     })
     fireEvent.change(s.getByLabelText('API Key'), { target: { value: 'sk-kimi' } })
-    fireEvent.change(s.getByLabelText('预设模型（逗号分隔）'), {
-      target: { value: ' kimi-k2,  kimi-latest ,' }
-    })
+    fireEvent.click(s.getByRole('button', { name: '添加模型' }))
+    fireEvent.click(s.getByRole('button', { name: '添加模型' }))
+    const nameInputs = s.getAllByLabelText('模型名')
+    fireEvent.change(nameInputs[0], { target: { value: ' kimi-k2 ' } })
+    fireEvent.change(nameInputs[1], { target: { value: 'kimi-latest' } })
+    fireEvent.click(s.getAllByLabelText('1M 上下文')[0]) // 声明 kimi-k2 支持 1M
     expect((saveBtn as HTMLButtonElement).disabled).toBe(false)
     fireEvent.click(saveBtn)
     await waitFor(() => expect(api.saveProvider).toHaveBeenCalledTimes(1))
@@ -322,7 +325,8 @@ describe('模型服务（v1.4 providers）', () => {
       baseUrl: 'https://api.moonshot.cn/anthropic',
       apiKey: 'sk-kimi',
       apiKeyType: 'auth_token',
-      models: ['kimi-k2', 'kimi-latest']
+      models: ['kimi-k2', 'kimi-latest'],
+      models1M: ['kimi-k2']
     })
   })
 
@@ -415,7 +419,7 @@ describe('模型服务（v1.4 providers）', () => {
     })
     fireEvent.click(s.getByRole('tab', { name: '表单' }))
     expect((s.getByLabelText('名称') as HTMLInputElement).value).toBe('GLM-3')
-    expect((s.getByLabelText('预设模型（逗号分隔）') as HTMLInputElement).value).toBe('m1')
+    expect((s.getAllByLabelText('模型名')[0] as HTMLInputElement).value).toBe('m1')
   })
 
   it('v1.4 网络代理（anthropic 原生需开代理，照搬 cc-switch）：字段随格式显隐；填写随保存提交', async () => {
@@ -459,8 +463,10 @@ describe('模型服务（v1.4 providers）', () => {
 
     fireEvent.click(await s.findByRole('button', { name: '探测模型' }))
     expect(await s.findByText('探测到 2 个模型')).toBeDefined()
-    const modelsInput = (s.getByLabelText('预设模型（逗号分隔）') as HTMLInputElement).value
-    expect(modelsInput).toBe('glm-4.6, glm-4.5-air, glm-4.7') // 已有项去重保序 + 新增追加
+    const rowNames = s
+      .getAllByLabelText('模型名')
+      .map((el: HTMLElement) => (el as HTMLInputElement).value)
+    expect(rowNames).toEqual(['glm-4.6', 'glm-4.5-air', 'glm-4.7']) // 已有行不动 + 新增追加
 
     // 失败 → 行内错误
     vi.mocked(api.probeProviderModels).mockResolvedValue({ ok: false, error: 'HTTP 401' })
@@ -468,7 +474,7 @@ describe('模型服务（v1.4 providers）', () => {
     expect(await s.findByText('探测失败：HTTP 401')).toBeDefined()
   })
 
-  it('v1.4 档位映射（Sonnet/Opus/Fable/Haiku）：anthropic 显示、保存 payload 带 slotModels', async () => {
+  it('v1.4.1 档位映射：从预设模型行下拉选择（含 1M 标注）；保存 payload 带 slotModels', async () => {
     const api = await renderApp()
     vi.mocked(api.listProviders).mockResolvedValue({ providers: [glm] })
     const s = await openSettings()
@@ -477,14 +483,23 @@ describe('模型服务（v1.4 providers）', () => {
       within(s.getByTitle('https://open.bigmodel.cn/api/anthropic').closest('li') as HTMLElement).getByRole('button', { name: '编辑' })
     )
 
+    // 先补一行声明 1M 的模型（glm-5[1m]），档位下拉应出现带（1M）标注的选项
+    fireEvent.click(s.getByRole('button', { name: '添加模型' }))
+    const nameInputs = s.getAllByLabelText('模型名')
+    fireEvent.change(nameInputs[nameInputs.length - 1], { target: { value: 'glm-5[1m]' } })
+    fireEvent.click(s.getAllByLabelText('1M 上下文')[nameInputs.length - 1])
+    expect(s.getAllByText('glm-5[1m]（1M）').length).toBeGreaterThan(0)
+
     fireEvent.change(await s.findByLabelText('Sonnet 档位模型'), { target: { value: 'glm-4.6' } })
-    fireEvent.change(s.getByLabelText('Opus 档位模型'), { target: { value: ' glm-4.5 ' } })
-    fireEvent.change(s.getByLabelText('Haiku 档位模型'), { target: { value: ' glm-4.5-air ' } })
+    fireEvent.change(s.getByLabelText('Opus 档位模型'), { target: { value: 'glm-4.5-air' } })
+    fireEvent.change(s.getByLabelText('Fable 档位模型'), { target: { value: 'glm-5[1m]' } })
     fireEvent.click(s.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(api.saveProvider).toHaveBeenCalledTimes(1))
     expect(vi.mocked(api.saveProvider).mock.calls[0][0]).toMatchObject({
       id: 'p-glm',
-      slotModels: { sonnet: 'glm-4.6', opus: 'glm-4.5', haiku: 'glm-4.5-air' } // trim 归一；fable 空省略
+      models: ['glm-4.6', 'glm-4.5-air', 'glm-5[1m]'],
+      models1M: ['glm-5[1m]'],
+      slotModels: { sonnet: 'glm-4.6', opus: 'glm-4.5-air', fable: 'glm-5[1m]' } // haiku 空省略
     })
 
     // openai 格式 → 档位组常驻置灰（配置保留不丢）

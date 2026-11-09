@@ -706,6 +706,56 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
     })
   })
 
+  it('v1.4.2 1M 声明：声明模型注入时追加 [1m] 后缀（主模型/档位/defaultModel）；未声明不动、已带后缀不重复', async () => {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+      id: '',
+      name: '1M 网关',
+      format: 'anthropic',
+      baseUrl: 'https://one.example/anthropic',
+      apiKey: 'k',
+      models: ['glm-5.3', 'glm-4.6', 'kimi-k2[1m]'],
+      models1M: ['glm-5.3', 'kimi-k2[1m]'],
+      defaultModel: 'glm-5.3',
+      slotModels: { opus: 'glm-5.3', sonnet: 'glm-4.6' }
+    })
+    const projDir = join(h.tempDir, 'work', 'onem')
+    mkdirSync(projDir, { recursive: true })
+    const proj = await invoke<ProjectRecord>(IpcChannels.ProjectsAdd, projDir)
+
+    // 任务模型命中声明 → [1m]；档位同样按声明处理（opus 命中、sonnet 未声明）
+    await invoke(IpcChannels.TasksCreate, proj.id, 't1', {
+      isolation: 'shared',
+      providerId: provider.id,
+      model: 'glm-5.3'
+    })
+    expect(currentPty().spawnCalls[0].providerEnv).toMatchObject({
+      ANTHROPIC_MODEL: 'glm-5.3[1m]',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-4.6'
+    })
+
+    // 未声明 → 原样；模型本身已带后缀 → 不重复追加
+    await invoke(IpcChannels.TasksCreate, proj.id, 't2', {
+      isolation: 'shared',
+      providerId: provider.id,
+      model: 'glm-4.6'
+    })
+    expect(currentPty().spawnCalls[1].providerEnv).toMatchObject({ ANTHROPIC_MODEL: 'glm-4.6' })
+    await invoke(IpcChannels.TasksCreate, proj.id, 't3', {
+      isolation: 'shared',
+      providerId: provider.id,
+      model: 'kimi-k2[1m]'
+    })
+    expect(currentPty().spawnCalls[2].providerEnv).toMatchObject({ ANTHROPIC_MODEL: 'kimi-k2[1m]' })
+
+    // 任务未指定模型 → defaultModel 命中声明同样追加
+    await invoke(IpcChannels.TasksCreate, proj.id, 't4', {
+      isolation: 'shared',
+      providerId: provider.id
+    })
+    expect(currentPty().spawnCalls[3].providerEnv).toMatchObject({ ANTHROPIC_MODEL: 'glm-5.3[1m]' })
+  })
+
   it('v1.4 模型探测：按 id 取档案请求 /v1/models（端点拼装+鉴权头+去重）；未知 id 报错', async () => {
     const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
       id: '',

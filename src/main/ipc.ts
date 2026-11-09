@@ -91,6 +91,15 @@ export function validateProviderInput(lang: 'zh' | 'en', raw: unknown): Provider
     models = (o['models'] as unknown[]).map((m) => (typeof m === 'string' ? m.trim() : ''))
     if (models.some((m) => m === '' || m.length > 128)) throw new Error(t('provider.errModels'))
   }
+  // v1.4.1 1M 声明（可选；字符串数组，归一为 models 内子集去重）
+  let models1M: string[] | undefined
+  if (o['models1M'] !== undefined) {
+    if (!Array.isArray(o['models1M'])) throw new Error(t('provider.errModels'))
+    const declared = (o['models1M'] as unknown[])
+      .map((m) => (typeof m === 'string' ? m.trim() : ''))
+      .filter((m) => m !== '' && m.length <= 128 && models.includes(m))
+    models1M = [...new Set(declared)]
+  }
   let defaultModel: string | undefined
   if (o['defaultModel'] !== undefined) {
     if (typeof o['defaultModel'] !== 'string' || o['defaultModel'].length > 128) {
@@ -142,6 +151,7 @@ export function validateProviderInput(lang: 'zh' | 'en', raw: unknown): Provider
     apiKey,
     ...(apiKeyType !== undefined ? { apiKeyType } : {}),
     models,
+    ...(models1M !== undefined && models1M.length > 0 ? { models1M } : {}),
     ...(defaultModel !== undefined ? { defaultModel } : {}),
     ...(slotModels !== undefined ? { slotModels } : {}),
     ...(proxyUrl !== undefined ? { proxyUrl } : {})
@@ -579,6 +589,20 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   }
 
   /**
+   * v1.4.2 1M 声明 → Claude Code `[1m]` 后缀（设置页「1M 上下文」勾选的模型注入前追加）。
+   * 依据官方 model-config 文档：给模型 ID 追加 [1m] 后，CLI 按 1M 记账、请求前剥离后缀
+   * （网关收到的仍是原模型名），同时显式开启 1m beta 头；200K 未识别警告随之消失。
+   * 比对用去后缀形式：声明写成 glm-5.3 或 glm-5.3[1m] 均命中；模型本身已有后缀不重复追加。
+   */
+  function with1mSuffix(model: string, provider: ProviderConfig): string {
+    const declared = provider.models1M
+    if (declared === undefined || declared.length === 0) return model
+    if (/\[1m\]/i.test(model)) return model
+    const bare = (m: string): string => m.replace(/\[1m\]/gi, '').trim()
+    return declared.some((d) => bare(d) === bare(model)) ? `${model}[1m]` : model
+  }
+
+  /**
    * v1.4 provider 解析 → spawn 注入 env。
    * 解析链（用户确认的语义）：任务 providerId > 默认 provider > 不注入（v1.3 前
    * 行为——继承 env 原样透传）；任务引用的 provider 已删除 → 回退默认链。
@@ -604,23 +628,23 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     if (modelMode !== 'auto') {
       const effectiveModel = model !== undefined && model !== '' ? model : provider.defaultModel
       if (effectiveModel !== undefined && effectiveModel !== '') {
-        env['ANTHROPIC_MODEL'] = effectiveModel
+        env['ANTHROPIC_MODEL'] = with1mSuffix(effectiveModel, provider)
       }
     }
     // 档位映射（Anthropic 格式）：CLI 按档位选模型时落到具体模型
     const slots = provider.slotModels
     if (slots !== undefined) {
       if (slots.sonnet !== undefined && slots.sonnet !== '') {
-        env['ANTHROPIC_DEFAULT_SONNET_MODEL'] = slots.sonnet
+        env['ANTHROPIC_DEFAULT_SONNET_MODEL'] = with1mSuffix(slots.sonnet, provider)
       }
       if (slots.opus !== undefined && slots.opus !== '') {
-        env['ANTHROPIC_DEFAULT_OPUS_MODEL'] = slots.opus
+        env['ANTHROPIC_DEFAULT_OPUS_MODEL'] = with1mSuffix(slots.opus, provider)
       }
       if (slots.fable !== undefined && slots.fable !== '') {
-        env['ANTHROPIC_DEFAULT_FABLE_MODEL'] = slots.fable
+        env['ANTHROPIC_DEFAULT_FABLE_MODEL'] = with1mSuffix(slots.fable, provider)
       }
       if (slots.haiku !== undefined && slots.haiku !== '') {
-        env['ANTHROPIC_DEFAULT_HAIKU_MODEL'] = slots.haiku
+        env['ANTHROPIC_DEFAULT_HAIKU_MODEL'] = with1mSuffix(slots.haiku, provider)
       }
     }
     // v1.4 网络代理（照搬 cc-switch：Anthropic 原生格式直连官方需代理）：

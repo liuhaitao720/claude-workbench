@@ -55,6 +55,8 @@ export interface TrayOptions {
   runningCount: () => number
   /** 当前界面语言（缺省读 main 进程级 mainLanguage()） */
   language?: () => Language
+  /** v1.4.1 真退出触发点回执（组合根传 crashLog.markOrigin——before-quit 取证区分退出来源） */
+  markQuitOrigin?: () => void
 }
 
 /** 创建托盘（图标+右键菜单+左键/双击还原）；返回 tooltip 刷新与销毁句柄 */
@@ -91,20 +93,30 @@ export async function setupTray(opts: TrayOptions): Promise<TrayHandle> {
     win.show()
     win.focus()
   }
-  /** 退出流程：有运行任务先 confirm（误点保护）；取消则不退出 */
+  /**
+   * 退出流程：有运行任务先 confirm（误点保护）；取消则不退出。
+   * v1.4.1 修复「托盘退出无反应」：关窗驻留托盘时 win 已 hide——模态确认框挂在隐藏窗口上
+   * 在 Wayland/GNOME 不映射（用户看不到框，await 永不落定，app.quit 永不执行）。
+   * 窗口不可见/已销毁时改用无父对话框（始终独立成窗）。
+   */
   const requestQuit = async (): Promise<void> => {
     const running = opts.runningCount()
     if (running > 0) {
-      const choice = await dialog.showMessageBox(opts.win, {
-        type: 'warning',
+      const box = {
+        type: 'warning' as const,
         buttons: [t('quit.confirm'), t('quit.cancel')],
         defaultId: 1,
         cancelId: 1,
         message: t('quit.message', { count: running }),
         detail: t('quit.detail')
-      })
+      }
+      const parentUsable = !opts.win.isDestroyed() && opts.win.isVisible()
+      const choice = await (parentUsable
+        ? dialog.showMessageBox(opts.win, box)
+        : dialog.showMessageBox(box))
       if (choice.response !== 0) return
     }
+    opts.markQuitOrigin?.()
     app.quit()
   }
   /** 菜单与 tooltip 同源重建（语言切换时整体刷新，避免半中半英） */
