@@ -92,10 +92,12 @@ function genPrivateKeyPem(): string {
 const HOST_KEY_A = genPrivateKeyPem()
 const HOST_KEY_B = genPrivateKeyPem()
 
-/** 自检通过形态的 exec 脚本（claude/node 版本探测命令 → 成功输出） */
+/** 自检通过形态的 exec 脚本（claude/node 探测命令 → 成功输出；S4 起命令包 bash -ic） */
+const CHECK_CLAUDE = `bash -ic 'command -v claude && claude --version'`
+const CHECK_NODE = `bash -ic 'command -v node && node --version'`
 const SELF_CHECK_EXEC_OK: Record<string, { out?: string; err?: string; code?: number }> = {
-  'claude --version': { out: '1.0.72 (Claude Code)\n' },
-  'node --version': { out: 'v22.14.0\n' }
+  [CHECK_CLAUDE]: { out: '/home/vm/.nvm/versions/node/v22.14.0/bin/claude\n1.0.72 (Claude Code)\n' },
+  [CHECK_NODE]: { out: 'v22.14.0\n' }
 }
 
 interface ExecScript {
@@ -710,7 +712,7 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
     const sshd = await startMockSshd({
       hostKeyPem: HOST_KEY_A,
       expectedPassword: 'pw-ok',
-      exec: { ...SELF_CHECK_EXEC_OK, 'claude --version': { code: 127, err: 'claude: command not found\n' } }
+      exec: { ...SELF_CHECK_EXEC_OK, [CHECK_CLAUDE]: { code: 127, err: 'claude: command not found\n' } }
     })
     const store = makeStore(newTempDir())
     const mgr = makeManager(store)
@@ -931,8 +933,13 @@ describe('L2.5 S2 装配（createAppContext 注入 Real 栈 / broadcast 到 EVEN
       'server:unknown'
     ])
 
-    // Connect：真实状态机 → connecting/connected 经 EVENT 面到达（A2 全链）
-    await invoke(IpcChannels.ConnectionsConnect, saved.id)
+    // Connect：真实状态机 → connecting/connected 经 EVENT 面到达（A2 全链）。
+    // S4：SSH 连通后连接流程做 cwb-server 健康检查（WS+ping）——mock sshd 无
+    // server 监听 17717 → needInstall token 错误上抛（S6 安装弹窗触发源）；
+    // SSH 层状态机不受影响（仍 connected——SFTP/注册等非 server 用途可用）
+    await expect(invoke(IpcChannels.ConnectionsConnect, saved.id)).rejects.toThrow(
+      /need-server-install/
+    )
     expect(stack.getState(saved.id)).toBe('connected')
     const states = h.sentEvents
       .filter(([c]) => c === IpcChannels.ConnectionStateChanged)

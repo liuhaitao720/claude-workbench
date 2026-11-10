@@ -11,6 +11,8 @@ import type {
   ProjectRecord,
   ProviderConfig,
   PtyDataEvent,
+  RemoteProxyConfig,
+  RemoteProxyStatus,
   RemoteServerLogEvent,
   RemoveTaskOptions,
   SkillInfo,
@@ -30,6 +32,8 @@ import { createModelsProbe, type ModelsProbeResult } from './provider-models'
 import { createLocalProxy, type LocalProxyHandle } from './local-proxy'
 import { mainLanguage, setMainLanguage } from './language'
 import { PtyManager, buildNewSessionArgs, buildResumeArgs } from './pty-manager'
+import type { PtyBackend } from './pty-backend'
+import { RemotePtyHub } from './remote-pty'
 import { importTasksFromSessionsImpl } from './session-import'
 import { SkillsStore } from './skills-store'
 import { PluginSkills, isValidPluginId } from './plugin-skills'
@@ -45,6 +49,7 @@ import {
 } from './connections-store'
 import { testConnectionRecord } from './ssh/test-connection'
 import { browseRemoteDir } from './ssh/manager'
+import { ensureServer } from './server-installer'
 
 /** main→renderer 推送：广播到全部窗口 */
 function broadcast(channel: string, payload: unknown): void {
@@ -78,14 +83,6 @@ export function broadcastConnectionState(e: ConnectionStateChangedEvent): void {
 /** 远程 server 日志 → cwb:event:remote-server-log【S4 桥接（S2 连接层同路）/ S6 消费】 */
 export function broadcastRemoteServerLog(e: RemoteServerLogEvent): void {
   broadcastEvent(IpcChannels.RemoteServerLog, e)
-}
-
-/**
- * S1 接线桩：SSH 远程模式新 HANDLE 通道统一占位——invoke 即抛 NotImplemented
- * （实现子任务落位后由真实 handler 替换，见 registerIpcHandlers 各注册处注释）。
- */
-function notImplementedStub(channel: string, owner: string): never {
-  throw new Error(`NotImplemented: ${channel}（${owner} 实现前不可用）`)
 }
 
 /**
@@ -212,7 +209,12 @@ export function validateProviderInput(lang: 'zh' | 'en', raw: unknown): Provider
 export interface AppContext {
   readonly projects: ProjectStore
   readonly tasks: TaskStore
-  readonly pty: PtyManager
+  /**
+   * PTY 后端（S4 路由）：按 task→project.connectionId 分派 Local（PtyManager）/
+   * Remote（RemotePtyManager，经 RemotePtyHub per-connection 懒建）——renderer
+   * 通道面零改动（4.1=A：PtyWrite/PtyResize 等经此自动路由）。
+   */
+  readonly pty: PtyBackend
   /** 任务活动裁决器 + hooks HTTP 接收端（v3.2；ptyWrite Esc 检测等经此消费） */
   readonly activity: TaskActivityHandle
   /** v0.5③ skill 扫描/导入/移除（回收站） */
@@ -268,6 +270,12 @@ export interface AppContext {
    * exec/sftp/forwardOut/forwardIn 经它承载。
    */
   readonly connection: ConnectionManager
+  /**
+   * S4 远程 PTY 枢纽：per-connection RemotePtyManager（协议帧驱动的远程 PTY
+   * 生命周期）+ hooks 反向转发接线（forwardIn→task-activity 接收端）+ 代理帧
+   * 透传（proxy.* 三通道）+ 连接流程健康检查（needInstall 判定）。
+   */
+  readonly remotePty: RemotePtyHub
 }
 
 export interface AppContextOptions {
@@ -285,13 +293,98 @@ export interface AppContextOptions {
   connection?: ConnectionManager
 }
 
+/** S4 远程任务 settings 落点（VM 侧；4.6=A 单轨——客户端构造+SFTP 写入） */
+const REMOTE_SETTINGS_DIR = '.cwb-server/task-settings'
+
+/**
+ * S4 路由 PTY 后端：按 task→project.connectionId 分派 Local（PtyManager）/ Remote
+ * （RemotePtyManager，hub per-connection 懒建）——4.1=A：renderer 通道面零改动
+ * （PtyWrite/PtyResize/stopTask 等经 ctx.pty 自动路由）。
+ *
+ * spawn/spawnClaude 的远程分支不经此（createTask 时任务记录尚未落盘、且需 SFTP
+ * 写 settings 的参数化路径——ipc 显式走 remotePtyHub.managerFor）；本类按已落盘
+ * 记录路由（resume 后的 write/resize/kill 等全在记录存在后发生）。
+ */
+export class RoutingPtyManager implements PtyBackend {
+  constructor(
+    private readonly local: PtyBackend,
+    private readonly hub: RemotePtyHub,
+    private readonly connectionIdOf: (taskId: string) => string | undefined
+  ) {}
+
+  private backendFor(taskId: string): PtyBackend {
+    const cid = this.connectionIdOf(taskId)
+    return cid !== undefined ? this.hub.managerFor(cid) : this.local
+  }
+
+  async spawnClaude(
+    taskId: string,
+    claudeArgs: string[],
+    cwd: string,
+    providerEnv?: Record<string, string>
+  ): Promise<void> {
+    await this.backendFor(taskId).spawnClaude(taskId, claudeArgs, cwd, providerEnv)
+  }
+
+  spawn(
+    taskId: string,
+    file: string,
+    args: string[],
+    cwd: string,
+    providerEnv?: Record<string, string>
+  ): void {
+    this.backendFor(taskId).spawn(taskId, file, args, cwd, providerEnv)
+  }
+
+  write(taskId: string, data: string): void {
+    this.backendFor(taskId).write(taskId, data)
+  }
+
+  resize(taskId: string, cols: number, rows: number): void {
+    this.backendFor(taskId).resize(taskId, cols, rows)
+  }
+
+  kill(taskId: string): void {
+    this.backendFor(taskId).kill(taskId)
+  }
+
+  isRunning(taskId: string): boolean {
+    return this.backendFor(taskId).isRunning(taskId)
+  }
+
+  pid(taskId: string): number | undefined {
+    return this.backendFor(taskId).pid(taskId)
+  }
+
+  /**
+   * 双语义分发（H2 契约）：Local=定点杀树（退出清理）；Remote=detach-only
+   * （5.9=b server 保活，禁杀）——各自后端实现自己的语义。
+   */
+  killAllTrees(): void {
+    this.local.killAllTrees()
+    this.hub.detachAll()
+  }
+
+  currentSize(taskId: string): { cols: number; rows: number } | undefined {
+    return this.backendFor(taskId).currentSize(taskId)
+  }
+
+  forget(taskId: string): void {
+    this.backendFor(taskId).forget(taskId)
+  }
+}
+
 /** 创建 app 上下文（含启动归一化 running→stopped）；registerIpcHandlers 默认调它 */
 export function createAppContext(options: AppContextOptions = {}): AppContext {
   const baseDir = app.getPath('userData')
   const projects = new ProjectStore(baseDir)
   const tasks = new TaskStore(baseDir)
-  // 应用重启后 PTY 已死：历史 running 一律归位 stopped
-  tasks.normalizeOnStartup()
+  // 应用重启归一：本地任务 PTY 已死 → stopped；远程任务不归一（5.9=b server 保活，
+  // 保持 running 语义——重连后 5.6 自动恢复视图，M11 分流）
+  tasks.normalizeOnStartup((t) => {
+    const cid = projects.get(t.projectId)?.connectionId
+    return cid !== undefined && cid !== ''
+  })
 
   const smokeReports: string[] = []
   /** v1.2.1：任务记录变更后的补钩（appUpdate 在下方创建，避免 TDZ；自动升级等任务结束时续上） */
@@ -409,14 +502,72 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   // R8 启动孤儿清扫：settings 目录下不在 tasks.json 的文件删除（崩溃残留/spawn 失败遗留）
   activity.cleanupOrphans(tasks.list().map((t) => t.id))
 
-  const pty = new PtyManager({
-    onData: (event: PtyDataEvent) => {
-      activity.noteBytes(event.taskId) // v3.2 字节兜底信号（先记时间戳再广播）
-      broadcast(IpcChannels.PtyData, event)
-      options.onPtyData?.(event)
-    },
-    onExit: (taskId) => markStatus(taskId, 'exited')
+  // SSH 远程连接（S1 桩占位 / S2 真实 ssh2 实现——注入缝见 AppContextOptions.connection；
+  // 状态/日志事件由组合根 main.ts 经 broadcastConnectionState/broadcastRemoteServerLog 挂钩外送）
+  const connection = options.connection ?? new StubConnectionManager()
+
+  // PTY 输出/退出外送（Local 与 Remote 同源——noteBytes 字节兜底、broadcast、
+  // markStatus 终态迁移链路完全一致；远程 task.exit 帧驱动 onExit，H6）
+  const ptyOnData = (event: PtyDataEvent): void => {
+    activity.noteBytes(event.taskId) // v3.2 字节兜底信号（先记时间戳再广播）
+    broadcast(IpcChannels.PtyData, event)
+    options.onPtyData?.(event)
+  }
+  const ptyOnExit = (taskId: string): void => {
+    markStatus(taskId, 'exited')
+  }
+  const localPty = new PtyManager({
+    onData: ptyOnData,
+    onExit: ptyOnExit
   })
+
+  // S4 远程 PTY 枢纽：per-connection RemotePtyManager（协议帧生命周期）+ hooks
+  // forwardIn 接线（入站流 pipe 回 task-activity 接收端）+ server.log 帧桥
+  const remotePty = new RemotePtyHub({
+    connection,
+    callbacks: { onData: ptyOnData, onExit: ptyOnExit },
+    onServerLog: broadcastRemoteServerLog,
+    // claude 裸名（server 侧登录 PATH 解析 nvm shim）；CWB_REMOTE_CLAUDE_BIN 测试注入缝
+    claudeBin: process.env['CWB_REMOTE_CLAUDE_BIN'] ?? 'claude',
+    hookSink: async () => {
+      await activity.ready()
+      return { host: '127.0.0.1', port: activity.port }
+    }
+  })
+  /** task→project.connectionId 路由解析（远程=指向 hub 的 per-connection manager） */
+  const connectionIdOfTask = (taskId: string): string | undefined => {
+    const task = tasks.get(taskId)
+    if (task === undefined) return undefined
+    const cid = projects.get(task.projectId)?.connectionId
+    return cid !== undefined && cid !== '' ? cid : undefined
+  }
+  // ctx.pty = 路由后端（本地/远程按 connectionId 分派；spawn 前的显式远程分支
+  // 直接用 remotePty.managerFor——记录未落盘时路由查不到归属）
+  const pty: PtyBackend = new RoutingPtyManager(localPty, remotePty, connectionIdOfTask)
+
+  /**
+   * S4 远程任务 settings（4.6=A 单轨）：
+   * 1) hooks URL base=VM 侧 forwardIn 转发口（hub 接线，入站流回本机接收端）；
+   * 2) 文件经 SFTP 写 VM ~/.cwb-server/task-settings/<taskId>.json（exec 预建目录+
+   *    取 $HOME，一次往返；taskId 为 uuid 无注入面）；返回远端路径作 --settings 参数。
+   * epoch 顺序照本地先例：调用方先 activity.noteSpawn 再调本函数（捕获新 epoch）。
+   */
+  async function buildRemoteSettings(connectionId: string, taskId: string): Promise<string> {
+    const hookPort = await remotePty.hookPortFor(connectionId)
+    const prep = await connection.exec(
+      connectionId,
+      `h=$(printf %s "$HOME"); mkdir -p "$h/${REMOTE_SETTINGS_DIR}" && printf %s "$h"`
+    )
+    if (prep.code !== 0) throw new Error(`remote settings dir prepare failed (exit ${prep.code})`)
+    const home = prep.stdout.trim().split('\n').pop() ?? ''
+    if (home === '') throw new Error('remote HOME unavailable')
+    const path = `${home}/${REMOTE_SETTINGS_DIR}/${taskId}.json`
+    const sftp = await connection.sftp(connectionId)
+    return activity.buildSettings(taskId, {
+      urlBase: `http://127.0.0.1:${hookPort}`,
+      sink: { path, write: (content) => sftp.writeFile(path, content) }
+    })
+  }
 
   // v1.2.0 skill 市场 / v1.2.1 插件 skill 的注入缝（同 CWB_SKILLS_USER_ROOT 先例，防读真实 ~/.claude）
   const skillMarketHome = process.env['CWB_SKILL_MARKET_HOME']
@@ -432,10 +583,6 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       broadcast(IpcChannels.CliOutput, { commandId, type: 'exit', exitCode }),
     language: mainLanguage
   })
-
-  // SSH 远程连接（S1 批0）：桩占位——S2 以真实 ssh2 ConnectionManager 替换（注入缝见
-  // AppContextOptions.connection；状态/日志事件届时经 broadcastConnectionState 等挂钩外送）
-  const connection = options.connection ?? new StubConnectionManager()
 
   // v1.2.0 skill 市场：只读本机 marketplace 目录（搜索/过滤）；安装与刷新复用 CLI 受控执行面
   const skillMarket = new SkillMarket(skillMarketHome ? { home: skillMarketHome } : {})
@@ -464,11 +611,19 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   }
 
   async function removeProject(id: string): Promise<void> {
-    // 其任务逐个停止并删记录；worktree 保留磁盘，由用户手清（spec 约定）
+    // 其任务逐个停止并删记录；worktree 保留磁盘，由用户手清（spec 约定）。
+    // S4：远程项目经 hub 定向后端清理（kill=协议 task.kill；本地任务照旧杀树）
+    const remoteCid = projects.get(id)?.connectionId
     for (const task of tasks.list(id)) {
-      if (pty.isRunning(task.id)) pty.kill(task.id)
+      if (remoteCid !== undefined && remoteCid !== '') {
+        const m = remotePty.managerFor(remoteCid)
+        if (m.isRunning(task.id)) m.kill(task.id)
+        m.forget(task.id)
+      } else {
+        if (pty.isRunning(task.id)) pty.kill(task.id)
+        pty.forget(task.id)
+      }
       tasks.remove(task.id)
-      pty.forget(task.id)
       activity.forget(task.id)
     }
     projects.remove(id)
@@ -488,29 +643,54 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     const project = projects.get(projectId)
     if (!project) throw new Error(`project not found: ${projectId}`)
     const taskId = randomUUID()
+    // S4 远程路由（project.connectionId 非空 → RemotePtyManager）：argv=Linux 形态
+    // （claude 裸名，server 侧登录 PATH 解析）、settings SFTP 写 VM、hooks URL 指向
+    // VM 侧 forwardIn 转发口、不注入任何 ANTHROPIC_*（3.3=A，providerEnv 不解析）。
+    // 远程项目暂不支持 worktree 隔离（本地 git worktree 操作不适用于 VM 路径——S5 域）。
+    const remoteCid =
+      project.connectionId !== undefined && project.connectionId !== ''
+        ? project.connectionId
+        : undefined
     let cwd = project.dir
     let worktreePath: string | undefined
-    if (opts.isolation === 'worktree') {
+    if (remoteCid === undefined && opts.isolation === 'worktree') {
       if (!project.isGit) throw new Error(`worktree isolation requires a git project: ${project.dir}`)
       worktreePath = await worktreeAdd(project.dir, taskId)
       cwd = worktreePath
     }
-    // v3.2：epoch+1（作废旧 PTY 迟到 hook）+ 本地合成 idle（绿）
+    if (remoteCid !== undefined && opts.isolation === 'worktree') {
+      throw new Error('remote project does not support worktree isolation (planned with S5)')
+    }
+    // v3.2：epoch+1（作废旧 PTY 迟到 hook）+ 本地合成 idle（绿）——本地/远程同序：
+    // 先 noteSpawn 拿新 epoch 再构造 settings（URL 捕获该 epoch）
     activity.noteSpawn(taskId)
     try {
-      // settings 写盘入 try：失败与 spawn 失败同路径清理 worktree/states（评审 #5）
-      const settingsPath = await activity.buildSettings(taskId)
-      // v1.4：任务指定 provider/model/modelMode（缺省走默认链）→ spawn env 注入
-      const providerEnv = resolveProviderEnv(opts.providerId, opts.model, opts.modelMode)
-      await pty.spawnClaude(
-        taskId,
-        buildNewSessionArgs(taskId, name, {
-          skipPermissions: opts.skipPermissions,
-          settingsPath
-        }),
-        cwd,
-        providerEnv
-      )
+      if (remoteCid !== undefined) {
+        // settings 写 VM 入 try：失败与 spawn 失败同路径清理（评审 #5 同语义）
+        const settingsPath = await buildRemoteSettings(remoteCid, taskId)
+        await remotePty.managerFor(remoteCid).spawnClaude(
+          taskId,
+          buildNewSessionArgs(taskId, name, {
+            skipPermissions: opts.skipPermissions,
+            settingsPath
+          }),
+          cwd
+        )
+      } else {
+        // settings 写盘入 try：失败与 spawn 失败同路径清理 worktree/states（评审 #5）
+        const settingsPath = await activity.buildSettings(taskId)
+        // v1.4：任务指定 provider/model/modelMode（缺省走默认链）→ spawn env 注入
+        const providerEnv = resolveProviderEnv(opts.providerId, opts.model, opts.modelMode)
+        await pty.spawnClaude(
+          taskId,
+          buildNewSessionArgs(taskId, name, {
+            skipPermissions: opts.skipPermissions,
+            settingsPath
+          }),
+          cwd,
+          providerEnv
+        )
+      }
     } catch (err) {
       // spawn 失败不留孤儿 worktree/settings（尽力清理）
       activity.forget(taskId)
@@ -550,6 +730,9 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     const task = tasks.get(taskId)
     if (!task) throw new Error(`task not found: ${taskId}`)
     if (task.status === 'running') throw new Error(`task ${taskId} is running, cannot resume`)
+    // S4：远程任务的 resume 语义=5.9=b 保活恢复——server 侧仍存活则 re-attach（不
+    // 重复 spawn，RemotePtyManager 内 task.list 对账），已消亡则正常重 spawn
+    const remoteCid = connectionIdOfTask(taskId)
     // stop 后 PTY 异步 teardown（onExit 才清句柄）而状态是同步广播——恢复按钮立即可点。
     // 短暂等待句柄释放，关闭"点恢复撞上半退出态 → spawn 抛 already running → 静默失败"窗口（评审 F1）
     for (let waited = 0; pty.isRunning(taskId) && waited < 3000; waited += 100) {
@@ -559,18 +742,30 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     // v3.2：resume 同路径——epoch+1 + 本地合成 idle + settings 重写（捕获新 epoch）
     activity.noteSpawn(task.id)
     try {
-      const settingsPath = await activity.buildSettings(task.id)
-      // v1.4：沿用任务记录的 provider/model 元数据（与 skipPermissions 同语义——切换在下次恢复生效）
-      const providerEnv = resolveProviderEnv(task.providerId, task.model, task.modelMode)
-      await pty.spawnClaude(
-        task.id,
-        buildResumeArgs(task.sessionId, task.name, {
-          skipPermissions: task.skipPermissions === true,
-          settingsPath
-        }),
-        task.cwd,
-        providerEnv
-      )
+      if (remoteCid !== undefined) {
+        const settingsPath = await buildRemoteSettings(remoteCid, task.id)
+        await remotePty.managerFor(remoteCid).spawnClaude(
+          task.id,
+          buildResumeArgs(task.sessionId, task.name, {
+            skipPermissions: task.skipPermissions === true,
+            settingsPath
+          }),
+          task.cwd
+        )
+      } else {
+        const settingsPath = await activity.buildSettings(task.id)
+        // v1.4：沿用任务记录的 provider/model 元数据（与 skipPermissions 同语义——切换在下次恢复生效）
+        const providerEnv = resolveProviderEnv(task.providerId, task.model, task.modelMode)
+        await pty.spawnClaude(
+          task.id,
+          buildResumeArgs(task.sessionId, task.name, {
+            skipPermissions: task.skipPermissions === true,
+            settingsPath
+          }),
+          task.cwd,
+          providerEnv
+        )
+      }
     } catch (err) {
       // spawn 失败清理 settings/内存态（评审 #4，与 createTask 对称）
       activity.forget(task.id)
@@ -592,10 +787,18 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   async function removeTask(taskId: string, opts: RemoveTaskOptions): Promise<void> {
     const task = tasks.get(taskId)
     if (!task) throw new Error(`task not found: ${taskId}`)
-    if (pty.isRunning(taskId)) pty.kill(taskId)
+    // S4：远程任务经 hub 定向后端（记录删除前解析归属——路由查 store 会落空）
+    const remoteCid = connectionIdOfTask(taskId)
+    if (remoteCid !== undefined) {
+      const m = remotePty.managerFor(remoteCid)
+      if (m.isRunning(taskId)) m.kill(taskId)
+      m.forget(taskId)
+    } else {
+      if (pty.isRunning(taskId)) pty.kill(taskId)
+      pty.forget(taskId)
+    }
     tasks.remove(taskId)
-    pty.forget(taskId)
-    activity.forget(taskId) // v3.2 R8：settings 文件 + 内存态清理
+    activity.forget(taskId) // v3.2 R8：settings 文件 + 内存态清理（远端文件留置——见 S4 concerns）
     if (opts.deleteWorktree && task.worktreePath) {
       const project = projects.get(task.projectId)
       if (project) await worktreeRemove(project.dir, taskId)
@@ -761,7 +964,8 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     appSettings,
     fontScanner,
     appUpdate,
-    connection
+    connection,
+    remotePty
   }
 }
 
@@ -977,12 +1181,18 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     if (record === undefined) return { ok: false, error: connectionMessage(mainLanguage(), 'notFound') }
     return testConnectionRecord(record, { store: connectionsStore, language: mainLanguage })
   })
-  // 用户显式连接控制（手动重试=重连循环中再次 connect 即清退避立即重连）
-  ipcMain.handle(IpcChannels.ConnectionsConnect, (_e, id: unknown) => {
+  // 用户显式连接控制（手动重试=重连循环中再次 connect 即清退避立即重连）。
+  // S4：SSH 连接成功后做 cwb-server 健康检查（WS+真实协议 ping，O6 语义）——
+  // SSH 通而 server 不可达 → [cwb:need-server-install] token 错误上抛（S6
+  // connectFlow 的 NEED_INSTALL_RE 命中 → 安装弹窗；S7 装完重连即通）。
+  // SSH 层失败（VM 未启/认证错）仍是 S2 分级错误——不误触安装弹窗。
+  ipcMain.handle(IpcChannels.ConnectionsConnect, async (_e, id: unknown) => {
     if (typeof id !== 'string' || id === '') {
       throw new Error(connectionMessage(mainLanguage(), 'shape'))
     }
-    return ctx.connection.connect(id)
+    await ctx.connection.connect(id)
+    // S4 健康检查（SSH 已通前提下）：不可达 → needInstall token 错误（见上方注释）
+    await ctx.remotePty.ensureConnected(id)
   })
   ipcMain.handle(IpcChannels.ConnectionsDisconnect, (_e, id: unknown) => {
     if (typeof id !== 'string' || id === '') {
@@ -1001,20 +1211,69 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       typeof path === 'string' && path !== '' ? path : undefined
     )
   })
-  // S7：首连推送/升级 cwb-server（6.7=A；确认弹窗 UI=S6，本通道为 main 侧 promise 接口）
-  ipcMain.handle(IpcChannels.ServerInstall, (_e, _connectionId: unknown) =>
-    notImplementedStub(IpcChannels.ServerInstall, 'S7')
+  // S7：首连推送/升级 cwb-server（6.7=A；确认弹窗 UI=S6，本通道为 main 侧 promise 接口）。
+  // mode='install'=用户已在弹窗确认 → 推送/升级全流程；进度经 broadcastRemoteServerLog
+  // → S6 安装弹窗日志区（onRemoteServerLog）；返回对齐 preload 声明 {ok,error?}
+  ipcMain.handle(IpcChannels.ServerInstall, async (_e, connectionId: unknown) => {
+    if (typeof connectionId !== 'string' || connectionId === '') {
+      return { ok: false, error: connectionMessage(mainLanguage(), 'shape') }
+    }
+    try {
+      const r = await ensureServer(ctx.connection, connectionId, {
+        mode: 'install',
+        onProgress: (p) =>
+          broadcastRemoteServerLog({
+            connectionId,
+            level: p.stage === 'error' ? 'error' : p.stage === 'health' ? 'warn' : 'info',
+            message: p.message
+          })
+      })
+      return r.ok ? { ok: true } : { ok: false, error: r.message }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+  // S4：远程代理三通道（6.4=c；经 server 协议 proxy.* 帧转发——hub.proxyRequest
+  // 先建立 server-client 再透传帧；payload 形状=server 侧终态。不可达时错误带
+  // [cwb:need-server-install]（ensureConnected 同源判定），renderer 设置页展示）
+  const requireConnectionId = (v: unknown): string => {
+    if (typeof v !== 'string' || v === '') {
+      throw new Error(connectionMessage(mainLanguage(), 'shape'))
+    }
+    return v
+  }
+  ipcMain.handle(IpcChannels.RemoteProxyStatus, (_e, connectionId: unknown) =>
+    ctx.remotePty.proxyRequest<RemoteProxyStatus>(
+      requireConnectionId(connectionId),
+      { type: 'proxy.status' }
+    )
   )
-  // S4：远程代理三通道（6.4=c；经 server 协议 proxy.* 帧转发，remote-proxy-glue 归 S4）
-  ipcMain.handle(IpcChannels.RemoteProxyStatus, (_e, _connectionId: unknown) =>
-    notImplementedStub(IpcChannels.RemoteProxyStatus, 'S4')
+  ipcMain.handle(IpcChannels.RemoteProxyConfigGet, (_e, connectionId: unknown) =>
+    ctx.remotePty.proxyRequest<RemoteProxyConfig>(
+      requireConnectionId(connectionId),
+      { type: 'proxy.config.get' }
+    )
   )
-  ipcMain.handle(IpcChannels.RemoteProxyConfigGet, (_e, _connectionId: unknown) =>
-    notImplementedStub(IpcChannels.RemoteProxyConfigGet, 'S4')
-  )
-  ipcMain.handle(IpcChannels.RemoteProxyConfigSet, (_e, _connectionId: unknown, _patch: unknown) =>
-    notImplementedStub(IpcChannels.RemoteProxyConfigSet, 'S4')
-  )
+  ipcMain.handle(IpcChannels.RemoteProxyConfigSet, (_e, connectionId: unknown, patch: unknown) => {
+    const id = requireConnectionId(connectionId)
+    // 白名单字段过滤（契约只有 proxyUrl；server 侧 ConfigStore 二次过滤兜底）
+    if (typeof patch !== 'object' || patch === null) {
+      throw new Error(connectionMessage(mainLanguage(), 'shape'))
+    }
+    const raw = patch as Record<string, unknown>
+    if (raw['proxyUrl'] !== undefined && typeof raw['proxyUrl'] !== 'string') {
+      throw new Error(connectionMessage(mainLanguage(), 'shape'))
+    }
+    if (typeof raw['proxyUrl'] === 'string' && raw['proxyUrl'].length > 512) {
+      throw new Error(connectionMessage(mainLanguage(), 'shape'))
+    }
+    const clean: Partial<RemoteProxyConfig> =
+      typeof raw['proxyUrl'] === 'string' ? { proxyUrl: raw['proxyUrl'].trim() } : {}
+    return ctx.remotePty.proxyRequest<RemoteProxyConfig>(id, {
+      type: 'proxy.config.set',
+      patch: clean
+    })
+  })
   // on（renderer send，无返回值）
   ipcMain.on(IpcChannels.PtyWrite, (_e, taskId: string, data: string) => {
     // v0.4.2 输入回显抑制：记录用户键入时刻（键入后 2s 内的 PTY 字节=TUI 重绘，不点亮 busy）

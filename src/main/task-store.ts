@@ -48,12 +48,17 @@ export class TaskStore {
     return this.upsert({ ...task, name })
   }
 
-  /** 应用启动归一：全部 running → stopped（重启后 PTY 已死） */
-  normalizeOnStartup(): void {
+  /**
+   * 应用启动归一：running → stopped（重启后本地 PTY 已死）。
+   * S4 分流（M11）：isRemote 返回 true 的任务（远程项目——project.connectionId
+   * 非空）**不归一**——远端 PTY 由 cwb-server 保活（5.9=b），保持 running 语义，
+   * 重连后按 5.6 自动恢复视图（S6 store 消费 ConnectionStateChanged）。
+   */
+  normalizeOnStartup(isRemote?: (task: TaskRecord) => boolean): void {
     const all = this.load()
     let changed = false
     for (const task of all) {
-      if (task.status === 'running') {
+      if (task.status === 'running' && isRemote?.(task) !== true) {
         task.status = 'stopped'
         changed = true
       }

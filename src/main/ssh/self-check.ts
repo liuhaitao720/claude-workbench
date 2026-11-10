@@ -19,9 +19,16 @@ export interface SelfCheckItem {
 /** 2.2 阻断清单：这些项 missing = 连接阻断（server=unknown 不阻断） */
 export const BLOCKING_CHECK_IDS: readonly SelfCheckItemId[] = ['claude', 'node']
 
+/**
+ * 只读探测命令集（S5 白名单路由复用 exec 通道时以本表为界）。
+ * S4 窄改：nvm PATH 墙——非交互 exec 的 PATH 不含 nvm shim（S2 L3 实证：nvm 装的
+ * claude/node 在 `ssh host 'claude --version'` 形态下不可见），探测命令包
+ * `bash -ic '...'`（交互 shell 读 .bashrc 的 nvm 初始化段）。bash -ic 的 stderr
+ * 噪音（job control 等）由 checkCommand 的 stdout 优先 + bash: 前缀行剥离兜住。
+ */
 const CHECK_COMMANDS: Partial<Record<SelfCheckItemId, string>> = {
-  claude: 'claude --version',
-  node: 'node --version'
+  claude: `bash -ic 'command -v claude && claude --version'`,
+  node: `bash -ic 'command -v node && node --version'`
 }
 
 /** 单项探测超时（远端 PATH 挂起等异常时防连接流程卡死） */
@@ -42,6 +49,23 @@ export async function runSelfCheck(
   return items
 }
 
+/**
+ * 版本摘要提取：stdout 优先；取末条非空且非 bash -ic 噪音行（`bash:` 前缀——
+ * 「no job control in this shell」等交互 shell 告警，S4）。
+ */
+function versionDetail(stdout: string, stderr: string): string {
+  for (const text of [stdout, stderr]) {
+    if (text === '') continue
+    const lines = text
+      .trim()
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l !== '' && !l.startsWith('bash:'))
+    if (lines.length > 0) return lines[lines.length - 1]!
+  }
+  return ''
+}
+
 async function checkCommand(
   id: 'claude' | 'node',
   exec: (command: string) => Promise<SshExecResult>
@@ -49,7 +73,7 @@ async function checkCommand(
   const command = CHECK_COMMANDS[id]!
   try {
     const r = await withTimeout(exec(command), CHECK_TIMEOUT_MS, `${command} timed out`)
-    const version = (r.stdout !== '' ? r.stdout : r.stderr).trim().split('\n').pop()?.trim() ?? ''
+    const version = versionDetail(r.stdout, r.stderr)
     return r.code === 0
       ? { id, status: 'ok', ...(version !== '' ? { detail: version } : {}) }
       : { id, status: 'missing', ...(version !== '' ? { detail: version } : { detail: `exit ${r.code}` }) }

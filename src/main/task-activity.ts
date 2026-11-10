@@ -53,13 +53,37 @@ export interface TaskActivityOptions {
   now?: () => number
 }
 
+/**
+ * 远端 settings 落点（S4 远程分支）：settings 内容仍由本模块构造（epoch 捕获/
+ * hooks 事件集不变），URL base 与写入落点参数化——远程任务 URL 指向 VM 侧
+ * forwardIn 转发口（入站流由 ipc 接线 pipe 回本机接收端），文件经 SFTP 写 VM
+ * （~/.cwb-server/task-settings/<taskId>.json），返回远端路径作 --settings 参数。
+ */
+export interface RemoteSettingsSink {
+  /** 远端 settings 文件绝对路径（--settings 参数值与 buildSettings 返回值） */
+  path: string
+  /** 写远端文件（SFTP writeFile；内容与本地写逐字节一致） */
+  write(content: string): Promise<void>
+}
+
+export interface BuildSettingsOptions {
+  /** hooks URL base（协议+主机+端口；缺省=本机接收端 http://127.0.0.1:<port>） */
+  urlBase?: string
+  /** 远端写落点（提供时跳过本地写，返回 sink.path；缺省=本地 settingsDir 原子写） */
+  sink?: RemoteSettingsSink
+}
+
 export interface TaskActivityHandle {
   /** 实际监听端口（ready 前为 0） */
   readonly port: number
   /** 监听就绪（端口确定）；失败也 resolve（降级：hook 不通，字节兜底仍可用） */
   ready(): Promise<void>
-  /** 写 per-task settings（原子写 tmp+rename）并返回路径；URL 捕获当前 epoch */
-  buildSettings(taskId: string): Promise<string>
+  /**
+   * 写 per-task settings（原子写 tmp+rename）并返回路径；URL 捕获当前 epoch。
+   * S4 参数化：opts.urlBase 注入 VM 侧转发口 / opts.sink 改经 SFTP 写远端
+   * （4.6=A 单轨——settings 由客户端构造，server 不注入 hooks 端口）。
+   */
+  buildSettings(taskId: string, opts?: BuildSettingsOptions): Promise<string>
   /** spawn/resume 时刻：epoch+1 + 本地合成 idle（绿）+ 重置字节钟 */
   noteSpawn(taskId: string): void
   /** PTY onData 字节记录；awaiting 粘滞解除（宽限后的新字节→busy） */
@@ -288,16 +312,17 @@ export function startTaskActivityServer(opts: TaskActivityOptions): TaskActivity
       return port
     },
     ready,
-    async buildSettings(taskId) {
+    async buildSettings(taskId, buildOpts) {
       await ready()
       const st = ensureState(taskId)
       const epoch = st.epoch
+      const base = buildOpts?.urlBase ?? `http://127.0.0.1:${port}`
       const hook = (event: string, matcher?: string) => ({
         ...(matcher ? { matcher } : {}),
         hooks: [
           {
             type: 'http',
-            url: `http://127.0.0.1:${port}/hook/${event}?e=${epoch}&t=${encodeURIComponent(taskId)}`,
+            url: `${base}/hook/${event}?e=${epoch}&t=${encodeURIComponent(taskId)}`,
             timeout: 3
           }
         ]
@@ -311,6 +336,11 @@ export function startTaskActivityServer(opts: TaskActivityOptions): TaskActivity
           Elicitation: [hook('Elicitation')],
           PreToolUse: [hook('PreToolUse', 'AskUserQuestion|ExitPlanMode')]
         }
+      }
+      // S4 远程分支：SFTP 写 VM（sink.path 即 --settings 参数），跳过本地写
+      if (buildOpts?.sink !== undefined) {
+        await buildOpts.sink.write(JSON.stringify(settings, null, 2))
+        return buildOpts.sink.path
       }
       mkdirSync(opts.settingsDir, { recursive: true })
       const file = join(opts.settingsDir, `${taskId}.json`)

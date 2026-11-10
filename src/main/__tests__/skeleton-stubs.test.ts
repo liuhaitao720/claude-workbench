@@ -51,8 +51,10 @@ vi.mock('electron', () => ({
 
 /**
  * S1 新增的 SSH 远程模式 HANDLE 通道全集（与 ipc-channels.ts 契约同步维护）。
- * S2 落地后连接族 8 通道已实装（见 connection-manager.test.ts L2.5）——此处仅
- * 断言仍属桩的 S4/S7 通道。
+ * S2 连接族 8 通道 + S4 远程代理 3 通道 + S7 ServerInstall 均已实装——此处断言
+ * 注册完整性；默认 Stub 注入下的行为边界：RemoteProxy* 经 hub→managerFor→
+ * Stub.onStateChange 抛「S2 未实现」（无连接不可用，语义正确）；ServerInstall
+ * 的具体行为断言归 S7 测试文件（server-installer.test.ts）。
  */
 const REMOTE_STUB_HANDLE_CHANNELS = [
   IpcChannels.ServerInstall,
@@ -107,7 +109,7 @@ describe('S1 契约骨架接线桩（AppContext.connection / NotImplemented / Pt
     expect(() => ctx.connection.getState('any-id')).toThrow(/S2 未实现/)
   })
 
-  it('② S4/S7 通道仍为 NotImplemented 桩；S2 连接族 8 通道已实装（CRUD 直接可用）', async () => {
+  it('② S4 远程代理三通道已实装（Stub 注入下经 hub 报 S2 未实现）；S7 ServerInstall 已实装；S2 连接族 8 通道可用', async () => {
     // 通道已入 HANDLE_CHANNELS 契约（ipc.test.ts 的注册集完整性断言据此覆盖注册数）
     expect(HANDLE_CHANNELS).toEqual(
       expect.arrayContaining([...REMOTE_STUB_HANDLE_CHANNELS, ...S2_HANDLE_CHANNELS])
@@ -115,8 +117,21 @@ describe('S1 契约骨架接线桩（AppContext.connection / NotImplemented / Pt
     for (const channel of REMOTE_STUB_HANDLE_CHANNELS) {
       const entry = h.handleCalls.find(([c]) => c === channel)
       expect(entry, `handler 未注册：${channel}`).toBeDefined()
-      await expect(invoke(channel, 'test-connection-id')).rejects.toThrow(/^NotImplemented:/)
     }
+    // S4：代理通道经 remotePty.proxyRequest → managerFor → 订阅连接状态——
+    // StubConnectionManager 下明确报「S2 未实现」（无连接不可用），不再是桩
+    await expect(invoke(IpcChannels.RemoteProxyStatus, 'test-connection-id')).rejects.toThrow(
+      /S2 未实现/
+    )
+    await expect(invoke(IpcChannels.RemoteProxyConfigGet, 'test-connection-id')).rejects.toThrow(
+      /S2 未实现/
+    )
+    await expect(
+      invoke(IpcChannels.RemoteProxyConfigSet, 'test-connection-id', { proxyUrl: '' })
+    ).rejects.toThrow(/S2 未实现/)
+    // S7：ServerInstall 已实装（返回 {ok:false,...} 形态——细节断言归 S7 测试域）
+    const install = (await invoke(IpcChannels.ServerInstall, 'test-connection-id')) as unknown
+    expect(install).toMatchObject({ ok: expect.any(Boolean) })
     // S2 实装面：默认注入（StubConnectionManager）下 CRUD 走 connections-store
     // 可用（temp userData 空清单）；连接操作类委托 ctx.connection=Stub → 明确报错
     for (const channel of S2_HANDLE_CHANNELS) {

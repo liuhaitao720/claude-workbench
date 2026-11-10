@@ -10,6 +10,7 @@
     "test": "vitest run",
     "smoke": "node scripts/smoke/run-smoke.mjs",
     "smoke:recovery": "node scripts/smoke/run-recovery.mjs",
+    "build:server": "node tools/build-server.mjs",
     "pack": "electron-builder --dir",
     "pack:full": "npm run build && node scripts/package-verify/run-full-pack.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p server/tsconfig.json",
@@ -28,6 +29,7 @@
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "ssh2": "^1.16.0",
+    "ws": "^8.22.2",
     "zustand": "5.0.15"
   },
   "devDependencies": {
@@ -36,6 +38,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@types/ssh2": "^1.15.6",
+    "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^44.9.3",
     "electron-builder": "26.15.3",
