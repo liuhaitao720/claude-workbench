@@ -3,14 +3,20 @@ import { execFile } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { createAppContext, registerIpcHandlers, type AppContext } from './ipc'
+import {
+  broadcastConnectionState,
+  broadcastRemoteServerLog,
+  createAppContext,
+  registerIpcHandlers,
+  type AppContext
+} from './ipc'
 import { CrashLogger } from './crash-log'
 import { countLiveRunningTasks } from './running-count'
 import { mainLanguage } from './language'
 import { resolveClaudeCommand } from './pty-manager'
 import { versionProbeCommand } from './platform'
 import { initSingleInstance } from './single-instance'
-import { StubConnectionManager } from './ssh/connection-manager'
+import { createSshConnectionStack } from './ssh'
 import { attachCloseToTray, setupTray, type TrayHandle } from './tray'
 
 const execFileAsync = promisify(execFile)
@@ -536,14 +542,23 @@ app.whenReady().then(async () => {
   currentCtx = registerIpcHandlers(
     isSmokeRun
       ? createAppContext({
-          // SSH 远程连接（S1 批0 组合根注入桩；S2 以真实 ssh2 ConnectionManager 替换）
-          connection: new StubConnectionManager(),
+          // SSH 远程连接（S2 实装）：RealConnectionManager（ssh2）+ 事件挂钩——
+          // ConnectionStateChanged/RemoteServerLog 经 ipc broadcast 外送（A2 权属）
+          connection: createSshConnectionStack({
+            baseDir: app.getPath('userData'),
+            onStateChange: broadcastConnectionState,
+            onLog: broadcastRemoteServerLog
+          }),
           onPtyData: sink.onPtyData,
           onTaskUpdate: refreshTrayCount,
           onSettingsChange: syncTrayLanguage
         })
       : createAppContext({
-          connection: new StubConnectionManager(),
+          connection: createSshConnectionStack({
+            baseDir: app.getPath('userData'),
+            onStateChange: broadcastConnectionState,
+            onLog: broadcastRemoteServerLog
+          }),
           onTaskUpdate: refreshTrayCount,
           onSettingsChange: syncTrayLanguage
         })

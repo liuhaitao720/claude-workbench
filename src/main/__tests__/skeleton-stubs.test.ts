@@ -23,6 +23,11 @@ const h = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({
+  safeStorage: {
+    isEncryptionAvailable: () => true,
+    encryptString: (s: string) => Buffer.from(`enc:${s}`),
+    decryptString: (b: Buffer) => b.toString().replace(/^enc:/, '')
+  },
   app: {
     getPath: (_name: string) => h.tempDir,
     getVersion: () => '1.1.0-test',
@@ -44,19 +49,27 @@ vi.mock('electron', () => ({
   }
 }))
 
-/** S1 新增的 SSH 远程模式 HANDLE 通道全集（与 ipc-channels.ts 契约同步维护） */
-const REMOTE_HANDLE_CHANNELS = [
+/**
+ * S1 新增的 SSH 远程模式 HANDLE 通道全集（与 ipc-channels.ts 契约同步维护）。
+ * S2 落地后连接族 8 通道已实装（见 connection-manager.test.ts L2.5）——此处仅
+ * 断言仍属桩的 S4/S7 通道。
+ */
+const REMOTE_STUB_HANDLE_CHANNELS = [
+  IpcChannels.ServerInstall,
+  IpcChannels.RemoteProxyStatus,
+  IpcChannels.RemoteProxyConfigGet,
+  IpcChannels.RemoteProxyConfigSet
+] as const
+
+/** S2 已实装的连接族通道（注册完整性 + 默认 Stub 注入下的行为边界） */
+const S2_HANDLE_CHANNELS = [
   IpcChannels.ConnectionsList,
   IpcChannels.ConnectionsSave,
   IpcChannels.ConnectionsDelete,
   IpcChannels.ConnectionsTest,
   IpcChannels.ConnectionsConnect,
   IpcChannels.ConnectionsDisconnect,
-  IpcChannels.SftpBrowse,
-  IpcChannels.ServerInstall,
-  IpcChannels.RemoteProxyStatus,
-  IpcChannels.RemoteProxyConfigGet,
-  IpcChannels.RemoteProxyConfigSet
+  IpcChannels.SftpBrowse
 ] as const
 
 /** invoke：async 包一层——同步 throw 也转 rejection（与 renderer invoke 语义一致） */
@@ -94,14 +107,30 @@ describe('S1 契约骨架接线桩（AppContext.connection / NotImplemented / Pt
     expect(() => ctx.connection.getState('any-id')).toThrow(/S2 未实现/)
   })
 
-  it('② 新 HANDLE 通道全部注册于契约全集，且 invoke 抛 NotImplemented', async () => {
+  it('② S4/S7 通道仍为 NotImplemented 桩；S2 连接族 8 通道已实装（CRUD 直接可用）', async () => {
     // 通道已入 HANDLE_CHANNELS 契约（ipc.test.ts 的注册集完整性断言据此覆盖注册数）
-    expect(HANDLE_CHANNELS).toEqual(expect.arrayContaining([...REMOTE_HANDLE_CHANNELS]))
-    for (const channel of REMOTE_HANDLE_CHANNELS) {
+    expect(HANDLE_CHANNELS).toEqual(
+      expect.arrayContaining([...REMOTE_STUB_HANDLE_CHANNELS, ...S2_HANDLE_CHANNELS])
+    )
+    for (const channel of REMOTE_STUB_HANDLE_CHANNELS) {
       const entry = h.handleCalls.find(([c]) => c === channel)
       expect(entry, `handler 未注册：${channel}`).toBeDefined()
       await expect(invoke(channel, 'test-connection-id')).rejects.toThrow(/^NotImplemented:/)
     }
+    // S2 实装面：默认注入（StubConnectionManager）下 CRUD 走 connections-store
+    // 可用（temp userData 空清单）；连接操作类委托 ctx.connection=Stub → 明确报错
+    for (const channel of S2_HANDLE_CHANNELS) {
+      const entry = h.handleCalls.find(([c]) => c === channel)
+      expect(entry, `handler 未注册：${channel}`).toBeDefined()
+    }
+    expect(await invoke(IpcChannels.ConnectionsList)).toEqual([])
+    await expect(invoke(IpcChannels.ConnectionsTest, 'no-such-id')).resolves.toMatchObject({
+      ok: false
+    })
+    await expect(invoke(IpcChannels.ConnectionsConnect, 'no-such-id')).rejects.toThrow()
+    await expect(invoke(IpcChannels.SftpBrowse, 'no-such-id')).resolves.toMatchObject({
+      ok: false
+    })
   })
 
   it('③ PtyManager 实例满足 PtyBackend（编译期赋值断言 + 运行时 instanceof）', () => {

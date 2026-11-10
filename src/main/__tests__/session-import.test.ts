@@ -376,6 +376,11 @@ const h = vi.hoisted(() => {
 })
 
 vi.mock('electron', () => ({
+  safeStorage: {
+    isEncryptionAvailable: () => true,
+    encryptString: (s: string) => Buffer.from(`enc:${s}`),
+    decryptString: (b: Buffer) => b.toString().replace(/^enc:/, '')
+  },
   app: { getPath: (_name: string) => h.tempDir, getVersion: () => '1.1.0-test', isPackaged: false, quit: vi.fn() },
   dialog: { showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })) },
   BrowserWindow: {

@@ -37,6 +37,14 @@ import { SkillMarket, validateInstallTarget } from './skill-market'
 import { startTaskActivityServer, type TaskActivityHandle } from './task-activity'
 import { TaskStore } from './task-store'
 import { StubConnectionManager, type ConnectionManager } from './ssh/connection-manager'
+import {
+  ConnectionsStore,
+  connectionMessage,
+  electronSafeStorage,
+  parseConnectionInput
+} from './connections-store'
+import { testConnectionRecord } from './ssh/test-connection'
+import { browseRemoteDir } from './ssh/manager'
 
 /** main→renderer 推送：广播到全部窗口 */
 function broadcast(channel: string, payload: unknown): void {
@@ -941,30 +949,58 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   ipcMain.handle(IpcChannels.ProxyStatus, () => ctx.localProxy.status())
   ipcMain.handle(IpcChannels.ProxyStart, () => ctx.localProxy.start())
   ipcMain.handle(IpcChannels.ProxyStop, () => ctx.localProxy.stop())
-  // ── SSH 远程模式（S1 批0 接线桩：全部 NotImplemented，实现子任务见注释）────
-  // S2：连接档案 CRUD + 只读测试 + 懒连接/断开（connections-store/safeStorage/TOFU/分级文案）
-  ipcMain.handle(IpcChannels.ConnectionsList, () =>
-    notImplementedStub(IpcChannels.ConnectionsList, 'S2')
-  )
-  ipcMain.handle(IpcChannels.ConnectionsSave, (_e, _raw: unknown) =>
-    notImplementedStub(IpcChannels.ConnectionsSave, 'S2')
-  )
-  ipcMain.handle(IpcChannels.ConnectionsDelete, (_e, _id: unknown) =>
-    notImplementedStub(IpcChannels.ConnectionsDelete, 'S2')
-  )
-  ipcMain.handle(IpcChannels.ConnectionsTest, (_e, _id: unknown) =>
-    notImplementedStub(IpcChannels.ConnectionsTest, 'S2')
-  )
-  ipcMain.handle(IpcChannels.ConnectionsConnect, (_e, _id: unknown) =>
-    notImplementedStub(IpcChannels.ConnectionsConnect, 'S2')
-  )
-  ipcMain.handle(IpcChannels.ConnectionsDisconnect, (_e, _id: unknown) =>
-    notImplementedStub(IpcChannels.ConnectionsDisconnect, 'S2')
-  )
-  // S2：SFTP 目录浏览（3.1=C 注册对话框；payload {connectionId, path?}）
-  ipcMain.handle(IpcChannels.SftpBrowse, (_e, _connectionId: unknown, _path?: unknown) =>
-    notImplementedStub(IpcChannels.SftpBrowse, 'S2')
-  )
+  // ── SSH 远程模式（S2 连接层已实现；S4/S7 通道仍为桩，见各自注释）────────
+  // S2：连接档案 CRUD（connections-store：userData/connections.json 原子写 +
+  // safeStorage 密文，明文 password 仅在 main 侧出现一次即加密丢弃）。
+  // CRUD/Test 不经 ctx.connection（桩注入下也可用）；Connect/Disconnect/SftpBrowse
+  // 委托 ctx.connection（RealConnectionManager——懒连接/TOFU/自检/重连状态机）。
+  const connectionsStore = new ConnectionsStore(app.getPath('userData'), electronSafeStorage())
+  ipcMain.handle(IpcChannels.ConnectionsList, () => connectionsStore.list())
+  ipcMain.handle(IpcChannels.ConnectionsSave, (_e, raw: unknown) => {
+    const parsed = parseConnectionInput(mainLanguage(), raw)
+    return connectionsStore.save(parsed.record, parsed.plainPassword)
+  })
+  ipcMain.handle(IpcChannels.ConnectionsDelete, (_e, id: unknown) => {
+    if (typeof id !== 'string' || id === '') {
+      throw new Error(connectionMessage(mainLanguage(), 'shape'))
+    }
+    if (!connectionsStore.remove(id)) {
+      throw new Error(connectionMessage(mainLanguage(), 'notFound'))
+    }
+  })
+  // 只读测试（一次性连接 + 自检清单，分级错误文案；TOFU 未确认 → kind=hostKeyConfirm + 指纹）
+  ipcMain.handle(IpcChannels.ConnectionsTest, async (_e, id: unknown) => {
+    if (typeof id !== 'string' || id === '') {
+      return { ok: false, error: connectionMessage(mainLanguage(), 'shape') }
+    }
+    const record = connectionsStore.get(id)
+    if (record === undefined) return { ok: false, error: connectionMessage(mainLanguage(), 'notFound') }
+    return testConnectionRecord(record, { store: connectionsStore, language: mainLanguage })
+  })
+  // 用户显式连接控制（手动重试=重连循环中再次 connect 即清退避立即重连）
+  ipcMain.handle(IpcChannels.ConnectionsConnect, (_e, id: unknown) => {
+    if (typeof id !== 'string' || id === '') {
+      throw new Error(connectionMessage(mainLanguage(), 'shape'))
+    }
+    return ctx.connection.connect(id)
+  })
+  ipcMain.handle(IpcChannels.ConnectionsDisconnect, (_e, id: unknown) => {
+    if (typeof id !== 'string' || id === '') {
+      throw new Error(connectionMessage(mainLanguage(), 'shape'))
+    }
+    return ctx.connection.disconnect(id)
+  })
+  // S2：SFTP 目录浏览（3.1=C 注册对话框；payload {connectionId, path?}；缺省=远端 home）
+  ipcMain.handle(IpcChannels.SftpBrowse, (_e, connectionId: unknown, path?: unknown) => {
+    if (typeof connectionId !== 'string' || connectionId === '') {
+      return Promise.resolve({ ok: false, error: connectionMessage(mainLanguage(), 'shape') })
+    }
+    return browseRemoteDir(
+      ctx.connection,
+      connectionId,
+      typeof path === 'string' && path !== '' ? path : undefined
+    )
+  })
   // S7：首连推送/升级 cwb-server（6.7=A；确认弹窗 UI=S6，本通道为 main 侧 promise 接口）
   ipcMain.handle(IpcChannels.ServerInstall, (_e, _connectionId: unknown) =>
     notImplementedStub(IpcChannels.ServerInstall, 'S7')
