@@ -59,7 +59,6 @@
   └ 认证（私钥/密码）→ host key 校验（首连 TOFU 确认）→ 只读前置自检
      （sshd 可达 / claude CLI 存在 / node 可用）
      分支：自检缺失 → 阻断+修复指引   连接失败 → 分级文案（拒绝/超时/认证失败）
-     分支：首次启用 → 合规确认弹窗
 3 项目与任务管理 [C↔VM]
   └ 注册远端项目（录入 VM 内路径 → 远端存在性/git 检测）→ 创建任务
      （隔离选择 → SSH shell channel spawn 远端 claude：--session-id/-n/…）
