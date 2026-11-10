@@ -33,3 +33,10 @@ linux:
 extraResources:
   - from: assets/icon.png
     to: icon.png
+  # S7 cwb-server 交付包（npm run build:server 产出到 release/server-dist/）：
+  # manifest.json + server-<v>.tgz（含 Linux 编译 node-pty——O6：tgz 绑定构建机 ABI，
+  # 故 linux 包必须在 Linux 环境先跑 build:server 再打包）。win nsis/zip 与
+  # linux deb/AppImage 全 target 生效（extraResources 全局）。from 目录缺失时
+  # electron-builder 直接报错——先 npm run build:server。
+  - from: release/server-dist
+    to: server
