@@ -613,7 +613,7 @@ async function collectDiagnostics(
   }
   try {
     const log = await withTimeout(
-      transport.exec(connectionId, `tail -n 15 ${q(L.logFile)} 2>/dev/null`),
+      transport.exec(connectionId, `tail -n 40 ${q(L.logFile)} 2>/dev/null`),
       8_000,
       'tail timeout'
     )

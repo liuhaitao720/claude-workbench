@@ -26,6 +26,13 @@ sudo apt-get install -y build-essential python3 libnss3 libgtk-3-0 libgbm1 libas
 
 # 3. 一键构建（依赖检查 → npm ci → build → test → 打包）
 ./build-linux.sh
+
+# 4. cwb-server 交付包（v1.5.0 SSH 远程模式需要——首连推送安装用的 server tgz）
+npm run build:server
+# 产物 release/server-dist/{server-<v>.tgz, manifest.json}（确定性打包，已 gitignore）。
+# electron-builder 打正式包时会经 extraResources 自动携带；开发态首连推送自动从
+# release/server-dist 解析。必须在 Linux 构建机跑（tgz 内 node-pty 原生产物绑定
+# 构建机 node 大版本——ABI 策略见 README「SSH 远程模式」O6 说明）。
 ```
 
 产物：`release/claude-workbench-<版本>.AppImage` 与 `release/claude-workbench-<版本>.deb`。
@@ -67,6 +74,30 @@ xvfb-run -a ./node_modules/.bin/electron out/main/index.js --smoke
 - **不要用 `npm run smoke`**——它指向 `scripts/run-smoke.mjs`，而 `scripts/` 目录被 .gitignore 排除不在仓库（pre-existing 断链）
 - smoke 需要 `claude` CLI 可被解析（见下节 PATH 说明）
 - root / 容器内跑 Electron 需追加 `--no-sandbox`（Chrome sandbox 需非 root 或 setuid chrome-sandbox）
+
+### SSH 远程模式端到端冒烟（v1.5.0 `--smoke-remote`）
+
+本机 sshd（22 端口）可用时，可再跑远程全链冒烟（CWB_USER_DATA 隔离 + 临时密钥对
+authorized_keys marker 追加/测毕 surgical 清理；远端=本机回环）。两相位分属两个进程：
+
+```bash
+# 相位 A：连接→server 推送安装→远程项目注册（注册即导入）→createTask 真实 claude
+#        →hooks 反向转发 awaiting→击键回显延迟采样（localhost 基线 P50/P95/P99）
+#        →断连冻结→重连 re-attach→app.quit 留远端 PTY 存活（退出码 0）
+CWB_USER_DATA=/tmp/cwb-smoke npx electron out/main/index.js --smoke-remote=phase-a
+# 驱动复核（独立 ssh 进程——证明 server 保活与客户端进程无关）：
+ssh -i /tmp/cwb-smoke/smoke-remote/id_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null 127.0.0.1 "ps -o args= -p <相位A日志中的 SMOKE-REMOTE-PTY-PID>"
+# 相位 B：二次启动（远程 running 不归一）→server 保活对账→显式 stopTask→远端进程
+#        退出→环境清理（退出码 0；authorized_keys 行数复核见日志）
+CWB_USER_DATA=/tmp/cwb-smoke npx electron out/main/index.js --smoke-remote=phase-b
+```
+
+相位 A 中途失败（退出码 1）会留下环境残留：本机 17717 端口的 server 进程、
+authorized_keys 里的 marker+key 两行、`~/.cwb-server/task-settings/<taskId>.json` 与
+种子会话目录——手动清理后再重跑（authorized_keys 只删 `# cwb-smoke-remote` marker
+及其后一行；server 用 `kill $(cat <serverHome>/server.pid)`）。成功路径相位 B 自带
+全量清理。
 
 ## 五、claude CLI 在 Linux 下的解析（PATH 发现）
 

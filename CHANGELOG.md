@@ -2,6 +2,19 @@
 
 Claude Workbench 版本更新说明（新版本在前；应用内「设置 → 应用更新」读取本文件展示）。
 
+## 1.5.0
+
+- **SSH 远程客户端模式**：每个项目可独立选择本机或远程（源码与 claude 会话跑在 Linux VM、客户端在 Windows/桌面端）——远程项目的任务终端、会话、hooks、skills、模型服务出口全部落在 VM 侧，客户端经 SSH 隧道驱动；断线或关闭客户端任务不丢（远端 cwb-server 保活），重连/重启后点击任务自动恢复现场（re-attach 重绘 + 断连期间输入冻结层）
+- 连接管理：设置新增「远程连接」分类（连接档案 CRUD + 只读自检四项 sshd/claude/node/cwb-server + 分级错误文案与四类排障提示）；密钥/密码凭据经系统凭据保护（safeStorage）加密落盘；主机指纹 TOFU 首连确认与变更阻断；keepalive 判死 + 指数退避自动重连 + 手动立即重试
+- cwb-server 首连推送安装与滚动升级：SFTP 推送 tgz（sha256 校验）→ 解压 `~/.cwb-server/versions/<v>/` → 启动 → 真实协议 ping 健康探测 → 自动重连；升级保留最近 2 个版本；诊断含 node 路径/进程/日志尾部（node-pty ABI 不匹配时给出 VM 内 npm rebuild 指引）
+- 侧栏分组树：服务器轻分组头（连接四态胶囊/连接/断开/编辑/新建远程项目/删除级联确认）、本机项目根级平铺、孤儿远程项目回根级兜底；分组折叠与侧栏宽度持久化
+- 远程项目注册（VM 绝对路径 + SFTP 目录浏览）注册即导入历史会话；会话导入/skills/插件/skill 市场/claude 版本检测与更新均支持远端执行（runCliCommand 远程路由）；远程任务暂不支持 worktree 隔离（显式拒绝）
+- 远程代理：VM 侧内置代理（配置存 VM），客户端经 SSH/server 协议读写远程代理配置（设置「远程连接」分类内的远程代理面板）
+- 安全边界：远程任务绝不注入客户端的 ANTHROPIC_* 端点/密钥/模型（以 VM 内 ~/.claude 与 shell 环境为准）；hooks 事件经 SSH 反向转发回流（URL epoch 防旧会话迟到事件）；server 日志仅脱敏元数据、终端内容不落盘
+- 打包前置新增 `npm run build:server`（cwb-server 交付包，须在 Linux 构建机执行——node-pty ABI 绑定构建机）；使用说明与前置条件见 README「SSH 远程模式」
+- 端到端冒烟新增 `--smoke-remote`（localhost sshd 全链：推送安装→注册导入→真实 claude→hooks awaiting→击键回显延迟基线 P50/P95/P99→断连冻结→重连 re-attach→客户端退出后远端保活→二次启动不归一→显式停止）；localhost 延迟基线 P50≈60ms/P95≈60-65ms（真实 Windows↔VM 链路须 Windows 侧实测）
+- 版本号事实源同步：app-info.ts 与 package.json 统一为 1.5.0
+
 ## 1.4.2
 
 - 设置「模型服务」预设模型改为单行一模型：每行 模型名 + 「1M 上下文」声明勾选 + 移除，下方「添加模型」；档位映射与缺省模型改下拉选择（选项带 1M 标注）；探测结果只追加新行

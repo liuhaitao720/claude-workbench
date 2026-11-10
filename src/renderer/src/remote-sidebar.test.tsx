@@ -113,6 +113,21 @@ describe('分组树渲染（3.5/3.6/3.11=a 轻分组头）', () => {
     expect(document.querySelector('.server-node')).toBeNull()
   })
 
+  // S8 升级兼容（9.1）UI 半边：孤儿远程项目（connectionId 指向已删/不存在档案）
+  // 回根级兜底——升级/删除档案后树仍可管理，项目不消失
+  it('孤儿远程项目回根级平铺（connectionId 指向不存在档案）', async () => {
+    const orphan = makeProject({
+      id: 'p-orphan', name: 'OrphanRemote', dir: '/home/dev/gone', connectionId: 'ghost-conn'
+    })
+    await renderApp({ projects: [pLocal, orphan], tasks: [], connections: [conn] })
+    expect(serverNode('ghost-conn')).toBeNull() // 不凭空造服务器分组
+    const node = projectNode('p-orphan') as HTMLElement
+    expect(node).not.toBeNull()
+    const sidebar = document.querySelector('.sidebar') as HTMLElement
+    expect(sidebar.contains(node)).toBe(true) // 根级可达可管理
+    expect((node.closest('ul') as HTMLElement).className).toContain('project-list') // 与本机项目同列表
+  })
+
   it('状态胶囊随 onConnectionState 事件更新（reconnecting 附第 n 次）', async () => {
     const api = await renderApp()
     act(() => {
@@ -666,6 +681,43 @@ describe('设置中心「远程连接」分类', () => {
     fireEvent.change(urlInput, { target: { value: '' } })
     fireEvent.click(within(panel).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(api.setRemoteProxyConfig).toHaveBeenCalledWith('c1', { proxyUrl: '' }))
+  })
+
+  // S8 A5 UI 侧联测补桩：set→get 回环——保存后经状态重读（切换连接触发 refresh）
+  // 拿回同一值（mock 升级为有状态：get 返回最近一次 set 的终态，等价 server 持久化）
+  it('远程代理面板（A5 联测）：set→get 回环——保存后重读回填同值', async () => {
+    const conn2 = makeConnection({ id: 'c2', name: 'VM-2' })
+    const api = await renderApp({ connections: [conn, conn2] })
+    let savedConfig: { proxyUrl?: string } | undefined = undefined
+    vi.mocked(api.setRemoteProxyConfig).mockImplementation(
+      async (_id: string, patch: { proxyUrl?: string }) => {
+        savedConfig = { ...patch }
+        return { ...patch }
+      }
+    )
+    vi.mocked(api.getRemoteProxyStatus).mockImplementation(async () => ({
+      running: false,
+      stats: { total: 0, active: 0, direct: 0, viaProxy: 0 },
+      config: savedConfig
+    }))
+    fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
+    const dialog = await screen.findByRole('dialog', { name: '设置' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '远程连接' }))
+    const panel = await screen.findByTestId('remote-proxy-panel')
+    const urlInput = within(panel).getByLabelText('网络代理（HTTP_PROXY）') as HTMLInputElement
+    await waitFor(() => expect(urlInput.value).toBe('')) // 初始无配置
+    // set：填值保存
+    fireEvent.change(urlInput, { target: { value: 'http://10.0.0.9:7890' } })
+    fireEvent.click(within(panel).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(api.setRemoteProxyConfig).toHaveBeenCalledWith('c1', {
+      proxyUrl: 'http://10.0.0.9:7890'
+    }))
+    expect(await within(panel).findByText('已保存')).toBeDefined()
+    // get：切走再切回 c1（connId 变化触发 refresh）→ 拿回 set 的终态并回填
+    fireEvent.change(within(panel).getByLabelText('远程连接'), { target: { value: 'c2' } })
+    await waitFor(() => expect(api.getRemoteProxyStatus).toHaveBeenCalledWith('c2'))
+    fireEvent.change(within(panel).getByLabelText('远程连接'), { target: { value: 'c1' } })
+    await waitFor(() => expect(urlInput.value).toBe('http://10.0.0.9:7890'))
   })
 
   it('claude CLI 分类远程上下文占位说明（6.3/6.5）', async () => {

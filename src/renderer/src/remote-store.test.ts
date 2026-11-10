@@ -153,6 +153,23 @@ describe('connectFlow needInstall 信号（6.7=A 弹窗触发）', () => {
     })
     expect(useAppStore.getState().pendingServerInstall).toBeNull()
   })
+
+  // S8 遗留清理（S6 报告建议）：安装成功 → 自动重连 → connected 迁移即收弹窗
+  it('安装弹窗自动收窗：pendingServerInstall 在同连接 connected 迁移时清空（他连接不动）', async () => {
+    const api = installCwbMock({ projects: [pRemote], tasks: [] })
+    useAppStore.setState({ connections: [conn], pendingServerInstall: { connectionId: 'c1' } })
+    dispose = initListeners()
+    // 他连接 connected → 不收（弹窗仍指向 c1）
+    act(() => {
+      api.connectionStateCallbacks.forEach((cb) => cb({ connectionId: 'c9', state: 'connected' }))
+    })
+    expect(useAppStore.getState().pendingServerInstall).toEqual({ connectionId: 'c1' })
+    // c1 connected 迁移 → 收窗
+    act(() => {
+      api.connectionStateCallbacks.forEach((cb) => cb({ connectionId: 'c1', state: 'connected' }))
+    })
+    expect(useAppStore.getState().pendingServerInstall).toBeNull()
+  })
 })
 
 describe('侧栏持久化键（3.7/3.10/3.8：getAppSettings → uiSettings 映射）', () => {

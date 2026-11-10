@@ -469,6 +469,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // server 保活——断连期间 status 仍为 running，含应用重启后的远程 running 记录）
     // 批量恢复视图。openTaskAutoResume 对 running 任务只开 tab 不重复 resume。
     if (e.state === 'connected' && prev?.state !== 'connected') {
+      // S8 遗留清理（S6 报告建议）：安装成功 → 自动重连 → connected 迁移即收安装
+      // 弹窗（pendingServerInstall 只服务「待确认安装」这一瞬时状态）
+      if (get().pendingServerInstall?.connectionId === e.connectionId) {
+        set({ pendingServerInstall: null })
+      }
       const s = get()
       const connProjectIds = new Set(
         s.projects.filter((p) => p.connectionId === e.connectionId).map((p) => p.id)

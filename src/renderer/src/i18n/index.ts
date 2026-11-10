@@ -1,25 +1,24 @@
 import { create } from 'zustand'
 import { useCallback } from 'react'
 import { LANGUAGE_LABELS, translate, type Language, type MessageKey } from '../../../shared/i18n'
-import { isS6Key, translateS6, type AnyMessageKey, type S6MessageKey } from './s6'
 
 export { LANGUAGE_LABELS, translate }
 export type { Language, MessageKey }
-export { translateS6 }
-export type { AnyMessageKey, S6MessageKey }
 
 /**
- * renderer 统一取文案：shared 全量键优先，`s6.` 前缀键走 S6 补充字典（见 ./s6.ts
- * 头注——S6 填值区 20 键之外的界面文案落 renderer 侧，待主控契约流程并入 shared）。
+ * S8 遗留清理：原 renderer 侧 s6 补充字典（src/renderer/src/i18n/s6.ts）的 40 键已
+ * 逐字升格进 src/shared/i18n.ts「S6 升格区」——键名/文案零变化，取文案统一走
+ * shared translate（本文件不再有第二字典路由）。
  */
+export type AnyMessageKey = MessageKey
+
+/** 统一取文案（升格后=shared translate 直通；保留别名避免全量改调用点） */
 export function translateAny(
   lang: Language,
   key: AnyMessageKey,
   params?: Record<string, string | number>
 ): string {
-  return isS6Key(key)
-    ? translateS6(lang, key as S6MessageKey, params)
-    : translate(lang, key, params)
+  return translate(lang, key, params)
 }
 
 /**
@@ -71,7 +70,7 @@ export const useLanguageStore = create<LanguageState>()((set) => ({
   }
 }))
 
-/** 组件内取翻译函数：`const t = useI18n()`（键=shared 全量 + S6 补充） */
+/** 组件内取翻译函数：`const t = useI18n()`（键=shared 全量，含 S6 升格区） */
 export type TFn = (key: AnyMessageKey, params?: Record<string, string | number>) => string
 
 export function useI18n(): TFn {

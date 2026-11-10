@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu } from 'electron'
-import { execFile } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { execFile, execFileSync } from 'node:child_process'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import {
@@ -17,6 +18,13 @@ import { resolveClaudeCommand } from './pty-manager'
 import { versionProbeCommand } from './platform'
 import { initSingleInstance } from './single-instance'
 import { createSshConnectionStack } from './ssh'
+import { ConnectionError } from './ssh/errors'
+import { ConnectionsStore, parseConnectionInput } from './connections-store'
+import {
+  DEFAULT_SERVER_PORT,
+  ensureServer,
+  resolveLocalServerPackage
+} from './server-installer'
 import { attachCloseToTray, setupTray, type TrayHandle } from './tray'
 
 const execFileAsync = promisify(execFile)
@@ -59,8 +67,25 @@ function recoveryPhase(): 'a' | 'b' | null {
 
 const RECOVERY = recoveryPhase()
 
+/**
+ * S8 --smoke-remote[=phase-a|phase-b]：SSH 远程模式端到端冒烟（localhost sshd 全链）。
+ * phase-a：连接→server 推送安装→远程项目注册（注册即导入）→createTask 真实 claude
+ * →hooks 反向转发 awaiting→击键回显延迟采样→断连冻结→重连 re-attach→app.quit 留
+ * 远端 PTY 存活（驱动脚本经独立 ssh 断言）；phase-b：二次启动（normalizeOnStartup
+ * 不归一远程 running）→server 侧存活取证→显式 stopTask→远端进程退出→环境清理。
+ * 无值默认 phase-a（两相位分属两个进程——app.quit 是相位边界）。
+ */
+function remoteSmokePhase(): 'a' | 'b' | null {
+  const arg = process.argv.find((a) => a === '--smoke-remote' || a.startsWith('--smoke-remote='))
+  if (!arg) return null
+  return arg.endsWith('=phase-b') ? 'b' : 'a'
+}
+
+const REMOTE_SMOKE = remoteSmokePhase()
+
 /** 冒烟编排模式（--smoke 或 --smoke-recovery） */
-const isSmokeRun = SMOKE_FLAG || RECOVERY !== null || INPUT_PROBE_FLAG || WEBGL_PROBE_FLAG
+const isSmokeRun =
+  SMOKE_FLAG || RECOVERY !== null || INPUT_PROBE_FLAG || WEBGL_PROBE_FLAG || REMOTE_SMOKE !== null
 
 /** --no-auto-update：显式关闭启动自动升级（打包产物验收探针用——探针进程不该下载/替换自身） */
 const NO_AUTO_UPDATE_FLAG = process.argv.includes('--no-auto-update')
@@ -387,6 +412,411 @@ async function runSmoke(ctx: AppContext): Promise<void> {
   app.exit(0)
 }
 
+// ── ⑥ --smoke-remote：SSH 远程模式端到端（S8）───────────────────────
+
+/** 远端（=本机 localhost）项目目录与种子会话（phase-a 预置、phase-b 清理） */
+const RS_PROJECT_DIR = '/tmp/cwb-smoke-remote-proj'
+const RS_SESSION_DIR = join(homedir(), '.claude', 'projects', '-tmp-cwb-smoke-remote-proj')
+const RS_SESSION_FILE = 'smoke8a1-0000-4000-8000-000000000001.jsonl'
+const RS_KEY_COMMENT = 'cwb-smoke-remote'
+
+/** 冒烟工作目录（密钥/连接档案标记/seed-created 旗标——userData 隔离区内） */
+const rsWorkDir = (): string => join(app.getPath('userData'), 'smoke-remote')
+
+/** authorized_keys 的 marker 行（phase 追加/清理均以本行定位——并发测试纪律） */
+const rsMarkerLine = (): string => `# ${RS_KEY_COMMENT} ${rsWorkDir()}/`
+
+/** 临时密钥对 + authorized_keys 追加（marker+key 两行）；返回私钥路径 */
+function rsMakeKeyPair(): string {
+  const dir = rsWorkDir()
+  mkdirSync(dir, { recursive: true })
+  const keyPath = join(dir, 'id_ed25519')
+  execFileSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-f', keyPath, '-C', RS_KEY_COMMENT], {
+    stdio: 'ignore'
+  })
+  const akPath = join(homedir(), '.ssh', 'authorized_keys')
+  const pub = readFileSync(`${keyPath}.pub`, 'utf8').trim()
+  appendFileSync(akPath, `${rsMarkerLine()}\n${pub}\n`)
+  return keyPath
+}
+
+/** authorized_keys surgical 删除（marker+key 两行，可能多次运行累积——循环全清）+ 行数复核日志 */
+function rsRemoveAuthorizedKey(): void {
+  const akPath = join(homedir(), '.ssh', 'authorized_keys')
+  const lines = readFileSync(akPath, 'utf8').split('\n')
+  let removed = 0
+  for (let idx = lines.findIndex((l) => l === rsMarkerLine()); idx >= 0; idx = lines.findIndex((l) => l === rsMarkerLine())) {
+    lines.splice(idx, 2)
+    removed++
+  }
+  if (removed === 0) {
+    console.log('[smoke-remote] authorized_keys marker 不在（可能已清理）')
+    return
+  }
+  writeFileSync(akPath, lines.join('\n'))
+  const remaining = readFileSync(akPath, 'utf8').split('\n').filter((l) => l !== '').length
+  console.log(`[smoke-remote] authorized_keys 已 surgical 清理 ${removed} 组，剩余非空行 ${remaining}`)
+  if (remaining < 1) console.error('[smoke-remote] WARN: authorized_keys 清空（异常——复核用户自身公钥）')
+}
+
+/** 远端项目目录 + 种子会话（注册即导入的断言依据）；返回是否新建了种子目录 */
+function rsSeedRemoteProject(): boolean {
+  if (!existsSync(join(RS_PROJECT_DIR, '.git'))) {
+    mkdirSync(RS_PROJECT_DIR, { recursive: true })
+    execFileSync('git', ['-C', RS_PROJECT_DIR, 'init'], { stdio: 'ignore' })
+  }
+  if (existsSync(RS_SESSION_DIR)) return false
+  mkdirSync(RS_SESSION_DIR, { recursive: true })
+  writeFileSync(
+    join(RS_SESSION_DIR, RS_SESSION_FILE),
+    [
+      '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"S8 远程冒烟种子会话"}]},"timestamp":"2026-11-10T08:00:00.000Z"}',
+      '{"type":"ai-title","aiTitle":"S8 冒烟种子"}',
+      '{"type":"assistant","message":{"role":"assistant","content":[]},"timestamp":"2026-11-10T08:00:01.000Z"}'
+    ].join('\n') + '\n'
+  )
+  return true
+}
+
+/** 连接档案落盘（与 ctx.connection 同源的 userData/connections.json——store 逐次读盘） */
+function rsSaveProfile(keyPath: string): { id: string; fingerprintLock: (fp: string) => void } {
+  const store = new ConnectionsStore(app.getPath('userData'))
+  const parsed = parseConnectionInput('zh', {
+    name: 'smoke-remote',
+    host: '127.0.0.1',
+    port: 22,
+    user: process.env['USER'] ?? 'nobody',
+    authMethod: 'key',
+    keyPath
+  })
+  const record = store.save(parsed.record)
+  return { id: record.id, fingerprintLock: (fp) => store.save({ ...record, lastHostKeyFingerprint: fp }) }
+}
+
+/** 连接 + TOFU 两步锁定（首连 hostKeyConfirm → 档案锁指纹 → 二连通过） */
+async function rsConnect(ctx: AppContext, connectionId: string, lockFingerprint: (fp: string) => void): Promise<void> {
+  try {
+    await ctx.connection.connect(connectionId)
+  } catch (err) {
+    if (
+      err instanceof ConnectionError &&
+      err.kind === 'hostKeyConfirm' &&
+      err.hostKeyFingerprint !== undefined
+    ) {
+      console.log(`[smoke-remote] TOFU 首连待确认（${err.hostKeyFingerprint}）→ 锁定后二连`)
+      lockFingerprint(err.hostKeyFingerprint)
+      await ctx.connection.connect(connectionId)
+    } else {
+      throw err
+    }
+  }
+  if (ctx.connection.getState(connectionId) !== 'connected') {
+    smokeFail(`connect 后状态非 connected: ${ctx.connection.getState(connectionId)}`)
+  }
+}
+
+/** 轮询直到条件满足（超时 smokeFail） */
+async function rsWaitFor(what: string, timeoutMs: number, pred: () => boolean): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (pred()) return
+    await sleep(100)
+  }
+  smokeFail(`等待超时: ${what} (${timeoutMs}ms)`)
+}
+
+/** ANSI 剥离（终端原始字节 → 可读文本；信任对话框选中态判定用） */
+const rsAnsiStrip = (s: string): string =>
+  s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '')
+
+/**
+ * 信任对话框处置：claude 首次打开 git 目录显示 folder trust 对话框且默认选中
+ * 「No, exit」——直接采样击键无回显、误按 Enter 会退出。Down 切到「Yes, I trust
+ * this folder」（校验选中标记 ❯ 落在 Yes——防默认序变化误选）→ Enter 进入工作区
+ * → 等待输入框就绪后再采样。
+ */
+async function rsDismissTrustDialog(ctx: AppContext, sink: PtyByteSink, taskId: string): Promise<void> {
+  const byteLen = (): number => Buffer.byteLength(sink.bytes(taskId), 'utf8')
+  // Ink 渲染用光标移动序列代替空格分词——剥离 ANSI 后再折叠全部空白再匹配
+  const tailText = (): string => rsAnsiStrip(sink.bytes(taskId)).replace(/\s+/g, '').slice(-500)
+  // 信任态按项目目录记忆（~/.claude.json）：已信任过的目录跳过对话框直达输入框
+  // ——首跑与复跑两种形态都接受（等首屏字节，3s 内无 trust 字样即视为已信任）
+  const deadline = Date.now() + smokeWait(10_000)
+  while (Date.now() < deadline && !/trustthisfolder/i.test(tailText())) await sleep(200)
+  if (!/trustthisfolder/i.test(tailText())) {
+    console.log('[smoke-remote] 目录已信任（复跑形态）——无信任对话框')
+    await rsWaitScreenSettled(sink, taskId)
+    return
+  }
+  for (let i = 0; i < 2; i++) {
+    if (/❯Yes/i.test(tailText())) break
+    const before = byteLen()
+    ctx.pty.write(taskId, '\x1b[B') // Down：选中下移一项
+    const waitRedraw = Date.now() + smokeWait(3_000)
+    while (Date.now() < waitRedraw && byteLen() <= before) await sleep(50)
+  }
+  if (!/❯Yes/i.test(tailText())) {
+    smokeFail(`信任对话框选中态未到 Yes（tail=${JSON.stringify(tailText().slice(-200))}）`)
+  }
+  ctx.pty.write(taskId, '\r') // Enter：信任并进入工作区
+  await rsWaitScreenSettled(sink, taskId)
+  console.log('[smoke-remote] 信任对话框已确认（Down→Yes→Enter），工作区就绪')
+}
+
+/** 等首屏动画/工作区准备收敛（1.5s 无新字节即认为静息；下限 2s 上限 15s） */
+async function rsWaitScreenSettled(sink: PtyByteSink, taskId: string): Promise<void> {
+  const byteLen = (): number => Buffer.byteLength(sink.bytes(taskId), 'utf8')
+  await sleep(2_000)
+  const deadline = Date.now() + smokeWait(13_000)
+  let last = byteLen()
+  let lastAt = Date.now()
+  while (Date.now() < deadline) {
+    await sleep(250)
+    const now = byteLen()
+    if (now > last) {
+      last = now
+      lastAt = Date.now()
+    } else if (Date.now() - lastAt >= 1_500) {
+      return // 静息 1.5s——输入框就绪
+    }
+  }
+  console.log('[smoke-remote] WARN: 首屏 15s 未完全静息（继续采样——按实际回显计数）')
+}
+
+/** 击键→回显延迟采样（O7 显式边界：localhost 上限基线） */
+async function rsLatencySamples(
+  ctx: AppContext,
+  sink: PtyByteSink,
+  taskId: string,
+  attempts: number
+): Promise<void> {
+  const byteLen = (): number => Buffer.byteLength(sink.bytes(taskId), 'utf8')
+  const samples: number[] = []
+  let misses = 0
+  for (let i = 0; i < attempts; i++) {
+    const before = byteLen()
+    const t0 = Date.now()
+    // 纯可见字符（不回删）：每键必然扩展输入框文本 → TUI 重绘字节（实测 \x7f 退格
+    // 在 claude TUI 的 Ink diff 下常零输出——只采必然回显的键；绝不发 Enter）
+    ctx.pty.write(taskId, 'x')
+    const deadline = Date.now() + smokeWait(5_000)
+    while (Date.now() < deadline && byteLen() <= before) await sleep(30)
+    if (byteLen() > before) samples.push(Date.now() - t0)
+    else misses++
+    await sleep(250)
+  }
+  const pct = (q: number): number => {
+    const sorted = [...samples].sort((a, b) => a - b)
+    return sorted[Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1)] ?? -1
+  }
+  console.log(
+    `[smoke-remote] 延迟采样（击键→首字节回显，localhost）：n=${samples.length}/${attempts} ` +
+      `miss=${misses} P50=${pct(0.5)}ms P95=${pct(0.95)}ms P99=${pct(0.99)}ms ` +
+      `max=${Math.max(...samples, -1)}ms`
+  )
+  console.log(
+    '[smoke-remote] O7 边界：以上为 localhost 环回上限基线（本机回显微秒~毫秒级）；' +
+      '真实 Windows 客户端↔VM 链路指标含 SSH 隧道与物理网络往返，须 Windows 侧实测，本环境不伪造结论。'
+  )
+  if (samples.length < 20) smokeFail(`延迟采样成功数 ${samples.length} < 20（miss=${misses}）`)
+}
+
+/** phase-a：全链主相位（以 app.quit 结束——PTY 留远端保活，退出码 0） */
+async function runSmokeRemoteA(ctx: AppContext, sink: PtyByteSink): Promise<void> {
+  console.log('[smoke-remote] phase-a start（CWB_USER_DATA 隔离 + 本机 sshd 真链）')
+  // 1) 环境预置：密钥对/authorized_keys marker、远端项目+种子会话、连接档案
+  const keyPath = rsMakeKeyPair()
+  const seedCreated = rsSeedRemoteProject()
+  if (seedCreated) writeFileSync(join(rsWorkDir(), 'seed-created'), '1')
+  const profile = rsSaveProfile(keyPath)
+  const cid = profile.id
+  console.log(`[smoke-remote] profile=${cid} key=${keyPath} seedSession=${seedCreated}`)
+
+  // 2) 连接（TOFU 两步）+ server 推送安装（check=needInstall → install=installed）
+  await rsConnect(ctx, cid, profile.fingerprintLock)
+  console.log('[smoke-remote] SSH connected（真实 sshd + key 认证 + 自检通过）')
+  const pkg = resolveLocalServerPackage()
+  const serverHome = join(rsWorkDir(), 'server-home')
+  const installOpts = {
+    serverHome,
+    port: DEFAULT_SERVER_PORT,
+    healthAttempts: 8,
+    healthIntervalMs: 3_000,
+    localPackage: pkg,
+    onProgress: (p: { stage: string; message: string }): void => {
+      console.log(`[smoke-remote] install[${p.stage}] ${p.message}`)
+    }
+  }
+  const check1 = await ensureServer(ctx.connection, cid, { ...installOpts, mode: 'check' })
+  console.log(`[smoke-remote] ensureServer check → ${JSON.stringify(check1)}`)
+  if (!(check1.ok === false && check1.reason === 'needInstall')) {
+    smokeFail(`全新环境 check 应为 needInstall，实得 ${JSON.stringify(check1)}`)
+  }
+  const install = await ensureServer(ctx.connection, cid, { ...installOpts, mode: 'install' })
+  if (!install.ok) smokeFail(`server 安装失败: ${JSON.stringify(install)}`)
+  console.log(`[smoke-remote] ensureServer install → ${JSON.stringify(install)}（tgz=release/server-dist 现产物）`)
+  await ctx.remotePty.ensureConnected(cid)
+  console.log('[smoke-remote] server WS 隧道 + 协议 ping 通过（ensureConnected）')
+
+  // 3) 远程项目注册：注册即导入（种子会话 ≥1）
+  const project = await ctx.addProject(RS_PROJECT_DIR, cid)
+  if (project.connectionId !== cid || !project.isGit) {
+    smokeFail(`注册形态异常: ${JSON.stringify(project)}`)
+  }
+  const imported = ctx.tasks.list(project.id)
+  console.log(`[smoke-remote] 注册即导入：${imported.length} 条（isGit=${project.isGit}）`)
+  if (imported.length < 1) smokeFail('注册即导入断言失败（任务数 < 1）')
+
+  // 4) createTask：真实 claude 经 SSH spawn，--settings hooks 生效（SFTP 落 VM）
+  const task = await ctx.createTask(project.id, 'smoke-remote-task', { isolation: 'shared' })
+  console.log(`[smoke-remote] task created: ${task.id}（真实 claude @ ${task.cwd}）`)
+  await sink.waitForBytes(task.id, 1, WAIT_DATA_MS)
+  console.log(`[smoke-remote] PTY 首字节已回流（累计 ${Buffer.byteLength(sink.bytes(task.id), 'utf8')}B）`)
+  const hookPort = await ctx.remotePty.hookPortFor(cid)
+  const settingsCat = await ctx.connection.exec(
+    cid,
+    `cat "$HOME/.cwb-server/task-settings/${task.id}.json"`
+  )
+  const expectedUrl = `http://127.0.0.1:${hookPort}/hook/PermissionRequest?e=1&t=${task.id}`
+  if (!settingsCat.stdout.includes(expectedUrl)) {
+    smokeFail(`远端 settings 缺 hooks URL（期望含 ${expectedUrl}）: ${settingsCat.stdout.slice(0, 300)}`)
+  }
+  console.log(`[smoke-remote] --settings hooks 已落 VM（URL base=forwardIn:${hookPort}）`)
+
+  // 5) PermissionRequest 事件回流断言 awaiting（VM 侧→forwardIn 隧道→接收端→裁决）
+  const post = await fetch(
+    `http://127.0.0.1:${hookPort}/hook/PermissionRequest?e=1&t=${task.id}`,
+    { method: 'POST', body: '{}' }
+  )
+  console.log(`[smoke-remote] VM 侧 PermissionRequest POST → HTTP ${post.status}`)
+  if (post.status !== 200) smokeFail(`PermissionRequest POST 状态 ${post.status}`)
+  await rsWaitFor('PermissionRequest → awaiting', smokeWait(10_000), () => ctx.activity.current(task.id) === 'awaiting')
+  console.log(`[smoke-remote] 事件回流裁决 awaiting（activity=${ctx.activity.current(task.id)}）`)
+
+  // 6) 信任对话框处置 + 击键→回显延迟采样（≥20 有效样本）
+  await rsDismissTrustDialog(ctx, sink, task.id)
+  await rsLatencySamples(ctx, sink, task.id, 24)
+
+  // 7) 断开 → 冻结态（记录/注册表保持 running 语义）
+  await ctx.connection.disconnect(cid)
+  await rsWaitFor('disconnect → offline', smokeWait(5_000), () => ctx.connection.getState(cid) === 'offline')
+  const frozenTask = ctx.tasks.get(task.id)
+  if (frozenTask?.status !== 'running' || !ctx.pty.isRunning(task.id)) {
+    smokeFail(`冻结态异常: status=${frozenTask?.status} isRunning=${ctx.pty.isRunning(task.id)}`)
+  }
+  console.log('[smoke-remote] 断连冻结：state=offline task=running(isRunning=true)')
+
+  // 8) 重连 → re-attach → 收到数据（attach 的 resize toggle 逼重绘；无输出则显式 toggle）
+  await ctx.connection.connect(cid)
+  await rsWaitFor('重连 → connected', smokeWait(30_000), () => ctx.connection.getState(cid) === 'connected')
+  const bytesBeforeReattach = Buffer.byteLength(sink.bytes(task.id), 'utf8')
+  let via = ''
+  try {
+    await rsWaitFor('re-attach 自动重绘字节', smokeWait(15_000), () =>
+      Buffer.byteLength(sink.bytes(task.id), 'utf8') > bytesBeforeReattach
+    )
+    via = 'attach 自动重绘'
+  } catch {
+    // toggle 兜底（S3 语义：同尺寸 resize 是 no-op，±1 强制 SIGWINCH）
+    const size = ctx.pty.currentSize(task.id) ?? { cols: 80, rows: 24 }
+    ctx.pty.resize(task.id, size.cols + 1, size.rows)
+    ctx.pty.resize(task.id, size.cols, size.rows)
+    await rsWaitFor('toggle 重绘字节', smokeWait(15_000), () =>
+      Buffer.byteLength(sink.bytes(task.id), 'utf8') > bytesBeforeReattach
+    )
+    via = '显式 toggle'
+  }
+  console.log(
+    `[smoke-remote] 重连 re-attach（${via}）：新增 ` +
+      `${Buffer.byteLength(sink.bytes(task.id), 'utf8') - bytesBeforeReattach}B`
+  )
+
+  // 9) 客户端仍在线时远端 PTY 存活取证（pid 打点——驱动脚本在 app.quit 后独立复核）
+  const pid = ctx.pty.pid(task.id)
+  console.log(`SMOKE-REMOTE-PTY-PID ${pid ?? 'unknown'}`)
+  if (pid !== undefined) {
+    const ps = await ctx.connection.exec(cid, `ps -o args= -p ${pid}`)
+    if (!ps.stdout.includes('claude')) smokeFail(`远端 PTY 进程形态异常: ${JSON.stringify(ps.stdout)}`)
+    console.log(`[smoke-remote] 远端 PTY 存活（ps: ${ps.stdout.trim().slice(0, 120)}）`)
+  }
+  console.log('[smoke-remote] phase-a OK — app.quit()（远端 PTY 由 cwb-server 保活，请驱动脚本独立复核后跑 phase-b）')
+  app.quit()
+}
+
+/** phase-b：重启相位（normalizeOnStartup 不归一远程 running）+ 显式停止 + 环境清理 */
+async function runSmokeRemoteB(ctx: AppContext): Promise<void> {
+  console.log('[smoke-remote] phase-b start（二次启动——重启相位模拟）')
+  // 1) 重启归一分流断言：远程 running 保留（5.9=b），不归一为 stopped
+  const all = ctx.tasks.list()
+  const projects = ctx.projects.list()
+  const remoteRunning = all.filter((t) => {
+    const cid = projects.find((p) => p.id === t.projectId)?.connectionId
+    return cid !== undefined && cid !== '' && t.status === 'running'
+  })
+  if (remoteRunning.length !== 1) {
+    smokeFail(`重启后远程 running 任务数异常（期望 1，实得 ${remoteRunning.length}）: ${JSON.stringify(all.map((t) => [t.id, t.status]))}`)
+  }
+  const task = remoteRunning[0]
+  const cid = projects.find((p) => p.id === task.projectId)?.connectionId ?? ''
+  console.log(`[smoke-remote] normalizeOnStartup 分流生效：${task.id} 保持 running（其余 ${all.length - remoteRunning.length} 条保持原状，其中 stopped=${all.filter((t) => t.status === 'stopped').length}——导入的种子会话任务）`)
+
+  // 2) 重连（档案/指纹/密钥均持久化——无 TOFU）+ 协议 ping
+  await ctx.connection.connect(cid)
+  await rsWaitFor('重连 → connected', smokeWait(30_000), () => ctx.connection.getState(cid) === 'connected')
+  await ctx.remotePty.ensureConnected(cid)
+  console.log('[smoke-remote] 二次连接 + ensureConnected 通过（持久化档案免 TOFU）')
+
+  // 3) server 侧存活取证：task.list 对账 + ps（客户端已退出过一次——5.9=b 跨退出保活）
+  const list = (await ctx.remotePty.managerFor(cid).request<Array<{ taskId?: unknown; pid?: unknown }>>({
+    type: 'task.list'
+  })) ?? []
+  const alive = list.find((s) => typeof s === 'object' && s?.['taskId'] === task.id)
+  if (alive === undefined) smokeFail(`server 侧无该任务（保活失败）: ${JSON.stringify(list)}`)
+  const pid = typeof alive?.['pid'] === 'number' ? alive['pid'] : undefined
+  console.log(`[smoke-remote] server 保活对账：task.list 含 ${task.id}（pid=${pid}）`)
+  if (pid !== undefined) {
+    const ps = await ctx.connection.exec(cid, `ps -o args= -p ${pid}`)
+    if (!ps.stdout.includes('claude')) smokeFail(`跨客户端退出的远端 PTY 不存活: ${JSON.stringify(ps)}`)
+    console.log('[smoke-remote] 客户端退出后远端 PTY 仍存活（ssh exec ps 取证）')
+  }
+
+  // 4) 显式 stopTask → 远端进程退出
+  await ctx.stopTask(task.id)
+  await rsWaitFor('stopTask → tasks.json stopped', smokeWait(10_000), () => ctx.tasks.get(task.id)?.status === 'stopped')
+  if (ctx.pty.isRunning(task.id)) {
+    await rsWaitFor('远端 PTY 退出（注册表清空）', smokeWait(15_000), () => !ctx.pty.isRunning(task.id))
+  }
+  console.log('[smoke-remote] stopTask 生效：任务记录 stopped + 远端注册表已清')
+  if (pid !== undefined) {
+    const deadline = Date.now() + smokeWait(15_000)
+    let psOut = ''
+    while (Date.now() < deadline) {
+      const ps = await ctx.connection.exec(cid, `ps -o args= -p ${pid}`)
+      psOut = ps.stdout
+      if (!ps.stdout.includes('claude')) break
+      await sleep(300)
+    }
+    if (psOut.includes('claude')) smokeFail(`远端进程 ${pid} 未随 task.kill 退出: ${psOut}`)
+    console.log(`[smoke-remote] 远端进程 ${pid} 已随显式 stopTask 退出（ps 空）`)
+  }
+
+  // 5) 环境清理：远端 server 停止/目录、种子会话、task-settings 文件、authorized_keys
+  //    （路径全部受控——serverHome=固定 userData 子目录、RS_SESSION_DIR=常量、
+  //    task.id=uuid；仍按远端命令惯例单引号包裹）
+  const serverHome = join(rsWorkDir(), 'server-home')
+  const rq = (p: string): string => `'${p.replace(/'/g, `'\\''`)}'`
+  await ctx.connection.exec(cid, `kill $(cat ${rq(serverHome)}/server.pid) 2>/dev/null; rm -rf ${rq(serverHome)}`)
+  await ctx.connection.exec(cid, `rm -f "$HOME"/.cwb-server/task-settings/${rq(task.id)}.json`)
+  if (existsSync(join(rsWorkDir(), 'seed-created'))) {
+    await ctx.connection.exec(cid, `rm -rf ${rq(RS_SESSION_DIR)}`)
+    console.log('[smoke-remote] 种子会话目录已清（phase-a 创建）')
+  }
+  await ctx.connection.disconnect(cid)
+  rsRemoveAuthorizedKey()
+  console.log('[smoke-remote] phase-b OK')
+  app.exit(0)
+}
+
 // ── ⑤ --smoke-recovery 两阶段 ────────────────────────────────────────
 
 /** Phase A：建 temp git 项目 + createTask(shared)，待首字节证明 PTY 真跑后直接 exit(0)（不 kill——tasks.json 留 running，模拟应用退出前 PTY 在跑） */
@@ -570,13 +1000,19 @@ app.whenReady().then(async () => {
   // dev getFileIcon 挂起曾导致 smoke 编排永不注册）；托盘后台初始化
   win.webContents.once('did-finish-load', () => {
     if (!isSmokeRun) return // 正常模式：窗口常驻，无冒烟编排
-    // 冒烟全程超时守卫（仅冒烟模式启用；成功路径由编排方清算）
+    // 冒烟全程超时守卫（仅冒烟模式启用；成功路径由编排方清算）。
+    // --smoke-remote 全链含 server 推送安装/真实 claude/断连重连，窗口按相位放宽
+    const guardMs = REMOTE_SMOKE === null ? SMOKE_TIMEOUT_MS : REMOTE_SMOKE === 'a' ? smokeWait(300_000) : smokeWait(180_000)
     const guard = setTimeout(() => {
-      console.error('[smoke] FAIL: global 60s timeout exceeded')
+      console.error(`[smoke] FAIL: global ${guardMs}ms timeout exceeded`)
       app.exit(1)
-    }, SMOKE_TIMEOUT_MS)
+    }, guardMs)
     setTimeout(() => {
-      const flow = WEBGL_PROBE_FLAG
+      const flow = REMOTE_SMOKE !== null
+        ? REMOTE_SMOKE === 'a'
+          ? runSmokeRemoteA(currentCtx!, sink)
+          : runSmokeRemoteB(currentCtx!)
+        : WEBGL_PROBE_FLAG
         ? runWebglProbe(currentCtx!)
         : INPUT_PROBE_FLAG
         ? runInputProbe(currentCtx!, sink)
