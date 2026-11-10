@@ -65,6 +65,18 @@ if (injectedUserData) {
 }
 
 /**
+ * v1.4.2 Linux 渲染节流禁用：VM/GNOME Wayland 下 Chromium 帧回调偶发停滞时，
+ * 遮挡/后台节流会把重绘挂起到下一个输入事件（表现为「切换页面不刷新，再点一次
+ * 才正常」）。三个开关让 Chromium 在任何可见性判定下都保持主动重绘。
+ * CWB_NO_THROTTLE_FIX=1 可关闭本修正（排查用）。
+ */
+if (process.platform === 'linux' && process.env['CWB_NO_THROTTLE_FIX'] !== '1') {
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+  app.commandLine.appendSwitch('disable-renderer-backgrounding')
+  app.commandLine.appendSwitch('disable-background-timer-throttling')
+}
+
+/**
  * v1.4.2 CWB_OZONE=x11 可选 XWayland 实验：GNOME Wayland 下 Chromium 帧回调在
  * 突发输入后可能卡死（显示永久慢一拍），X11 路径仅瞬态且自恢复（实测对比）。
  * 但 VM 环境强制 X11 时窗口无法映射（GPU 禁用也救不回），故不设默认——默认仍
