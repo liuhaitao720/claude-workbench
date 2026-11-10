@@ -38,7 +38,7 @@ export const zh = {
   'sidebar.empty': '尚未注册项目，点击“打开目录”开始',
   'sidebar.recent': '最近',
   'sidebar.newVersion': '有新版本 v{version}',
-  'sidebar.versionTitle': 'Claude Workbench v{version}',
+  'sidebar.versionTitle': 'SSH Workbench v{version}',
   'sidebar.skipPermsTitle':
     '该任务启动 claude 时附加 --dangerously-skip-permissions：跳过全部权限确认（含文件写入与命令执行）。仅建议在可信目录使用。',
   'sidebar.skipPermsLabel': '跳过权限确认（--dangerously-skip-permissions）',
@@ -375,8 +375,8 @@ export const zh = {
   'cliOutput.exitHint': '新任务生效，旧任务恢复（resume）后生效',
 
   // ── main 侧（托盘/退出确认）──────────────────────────────
-  'tray.tooltip': 'Claude Workbench（{count} 个任务运行中）',
-  'tray.show': '显示 Claude Workbench',
+  'tray.tooltip': 'SSH Workbench（{count} 个任务运行中）',
+  'tray.show': '显示 SSH Workbench',
   'tray.quit': '退出（结束所有任务）',
   'quit.message': '仍有 {count} 个任务在运行',
   'quit.detail': '退出将结束所有运行中的任务会话。确定要退出吗？',
@@ -385,8 +385,8 @@ export const zh = {
 
   // ── main 侧：webhook 通知文案 ─────────────────────────────
   'notify.awaiting':
-    '【Claude Workbench】任务「{name}」等待你的答复（权限确认/选择），请回电脑处理\n> {when}',
-  'notify.test': '【Claude Workbench】测试推送：通知配置已生效',
+    '【SSH Workbench】任务「{name}」等待你的答复（权限确认/选择），请回电脑处理\n> {when}',
+  'notify.test': '【SSH Workbench】测试推送：通知配置已生效',
   'notify.needUrl': '未配置 webhook URL',
   'notify.httpStatus': 'webhook 响应 HTTP {status}',
   'notify.urlIsAdminPage':
@@ -588,7 +588,7 @@ export const en: Record<MessageKey, string> = {
   'sidebar.empty': 'No projects yet — click “Open folder” to start',
   'sidebar.recent': 'Recent',
   'sidebar.newVersion': 'New version v{version} available',
-  'sidebar.versionTitle': 'Claude Workbench v{version}',
+  'sidebar.versionTitle': 'SSH Workbench v{version}',
   'sidebar.skipPermsTitle':
     'This task starts claude with --dangerously-skip-permissions: all permission prompts are skipped (including file writes and command execution). Use only in trusted folders.',
   'sidebar.skipPermsLabel': 'Skip permission prompts (--dangerously-skip-permissions)',
@@ -919,8 +919,8 @@ export const en: Record<MessageKey, string> = {
   'cliOutput.done': 'Done (exit code {code}) — {hint}',
   'cliOutput.exitHint': 'takes effect for new tasks; existing tasks after resume',
 
-  'tray.tooltip': 'Claude Workbench ({count} task(s) running)',
-  'tray.show': 'Show Claude Workbench',
+  'tray.tooltip': 'SSH Workbench ({count} task(s) running)',
+  'tray.show': 'Show SSH Workbench',
   'tray.quit': 'Quit (ends all tasks)',
   'quit.message': '{count} task(s) still running',
   'quit.detail': 'Quitting will end all running task sessions. Quit anyway?',
@@ -928,8 +928,8 @@ export const en: Record<MessageKey, string> = {
   'quit.cancel': 'Cancel',
 
   'notify.awaiting':
-    '[Claude Workbench] Task "{name}" is waiting for your answer (permission / choice). Please come back to your computer.\n> {when}',
-  'notify.test': '[Claude Workbench] Test push: notification settings are working',
+    '[SSH Workbench] Task "{name}" is waiting for your answer (permission / choice). Please come back to your computer.\n> {when}',
+  'notify.test': '[SSH Workbench] Test push: notification settings are working',
   'notify.needUrl': 'No webhook URL configured',
   'notify.httpStatus': 'webhook responded HTTP {status}',
   'notify.urlIsAdminPage':

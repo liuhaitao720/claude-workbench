@@ -161,14 +161,14 @@ function readManifestDir(dir: string, explicitTgz?: string): LocalServerPackage 
   return { manifest, tgzPath }
 }
 
-/** 本模块所在目录 → 上溯找仓库根（package.json name=claude-workbench） */
+/** 本模块所在目录 → 上溯找仓库根（package.json name=ssh-workbench；S9 更名前为 claude-workbench） */
 function repoRoot(): string {
   let dir = moduleDir()
   for (let i = 0; i < 6; i++) {
     if (existsSync(join(dir, 'package.json'))) {
       try {
         const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { name?: string }
-        if (pkg.name === 'claude-workbench') return dir
+        if (pkg.name === 'ssh-workbench') return dir
       } catch {
         /* continue */
       }

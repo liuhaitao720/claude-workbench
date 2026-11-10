@@ -57,7 +57,7 @@ describe('关于并入设置中心（v1.2.2：侧栏只留 Skills / 设置）', 
     // SVG 真实渲染（常用线型图标：拼图 / 齿轮）
     expect(buttons[0]!.querySelector('svg')).not.toBeNull()
     expect(buttons[1]!.querySelector('svg')).not.toBeNull()
-    expect(screen.queryByRole('button', { name: /关于 Claude Workbench/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /关于 SSH Workbench/ })).toBeNull()
   })
 
   it('折叠态 rail 底部同样没有 ⓘ（只留 🧩 ⚙）', async () => {
@@ -73,7 +73,7 @@ describe('关于并入设置中心（v1.2.2：侧栏只留 Skills / 设置）', 
     await renderApp()
     const s = await openAbout()
     expect(s.getByRole('button', { name: /^关于/ }).getAttribute('aria-current')).toBe('true')
-    expect(s.getByText('Claude Workbench')).toBeDefined()
+    expect(s.getByText('SSH Workbench')).toBeDefined()
     expect(s.getByText(/版本 v1\.5\.0/)).toBeDefined()
     expect(s.getByText('作者 Liu Haitao')).toBeDefined()
     expect(s.getByText('MIT')).toBeDefined() // 许可证链接锚点

@@ -26,6 +26,7 @@ import {
   resolveLocalServerPackage
 } from './server-installer'
 import { attachCloseToTray, setupTray, type TrayHandle } from './tray'
+import { migrateLegacyUserData } from './userdata-migrate'
 
 const execFileAsync = promisify(execFile)
 
@@ -95,6 +96,16 @@ const injectedUserData = process.env['CWB_USER_DATA']
 if (injectedUserData) {
   app.setPath('userData', injectedUserData)
 }
+
+// ── S9 更名 userData 一次性迁移（Claude Workbench → SSH Workbench）─────
+// productName 变更改变 userData 目录名；在单实例锁（会在 userData 落锁文件）
+// 与任何 store/日志读盘之前执行整目录拷贝，幂等且失败不阻断启动（见
+// src/main/userdata-migrate.ts 头注释）。注入态（冒烟/测试）跳过。
+migrateLegacyUserData({
+  newDir: app.getPath('userData'),
+  appDataDir: app.getPath('appData'),
+  injected: Boolean(injectedUserData)
+})
 
 /**
  * v1.4.2 Linux 渲染节流禁用：VM/GNOME Wayland 下 Chromium 帧回调偶发停滞时，

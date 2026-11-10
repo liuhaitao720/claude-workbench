@@ -64,7 +64,7 @@ export function buildNotifyPayload(channel: NotifyConfig['channel'], text: strin
     return { msgtype: 'markdown', markdown: { content: text } }
   }
   if (channel === 'dingtalk') {
-    return { msgtype: 'markdown', markdown: { title: 'Claude Workbench', content: text } }
+    return { msgtype: 'markdown', markdown: { title: 'SSH Workbench', content: text } }
   }
   return { text }
 }

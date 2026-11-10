@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Claude Workbench Linux（Ubuntu）一键构建：依赖检查 → npm ci（node-pty 源码编译）
+# SSH Workbench Linux（Ubuntu）一键构建：依赖检查 → npm ci（node-pty 源码编译）
 # → 构建 → 测试 → electron-builder 产出 AppImage + deb。
 # 用法：在 Ubuntu（或 WSL2 Ubuntu）上的仓库根执行 ./build-linux.sh
 set -euo pipefail
@@ -47,5 +47,5 @@ echo "构建完成："
 ls -la release/*.AppImage release/*.deb 2>/dev/null || true
 echo ""
 echo "冒烟验证（无桌面环境时）：xvfb-run -a ./node_modules/.bin/electron out/main/index.js --smoke"
-echo "安装 deb：sudo apt install ./release/claude-workbench_*.deb"
+echo "安装 deb：sudo apt install ./release/ssh-workbench_*.deb"
 echo "AppImage 直跑：chmod +x release/*.AppImage && ./release/*.AppImage"

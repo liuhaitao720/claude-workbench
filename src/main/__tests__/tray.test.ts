@@ -138,7 +138,7 @@ describe('setupTray（菜单/还原/退出确认/tooltip）', () => {
     expect(tray).toBeDefined()
     expect(tray?.contextMenu).toBeDefined()
     expect(h.menuTemplates.at(-1)?.map((i) => i['label'])).toEqual([
-      '显示 Claude Workbench',
+      '显示 SSH Workbench',
       undefined, // separator 无 label
       '退出（结束所有任务）'
     ])
@@ -155,9 +155,9 @@ describe('setupTray（菜单/还原/退出确认/tooltip）', () => {
     expect(tray?.destroyed).toBe(true)
   })
 
-  it('tooltip 文案：Claude Workbench（N 个任务运行中）', () => {
-    expect(trayTooltip(0)).toBe('Claude Workbench（0 个任务运行中）')
-    expect(trayTooltip(3)).toBe('Claude Workbench（3 个任务运行中）')
+  it('tooltip 文案：SSH Workbench（N 个任务运行中）', () => {
+    expect(trayTooltip(0)).toBe('SSH Workbench（0 个任务运行中）')
+    expect(trayTooltip(3)).toBe('SSH Workbench（3 个任务运行中）')
   })
 
   it('退出：无运行任务 → 直接 app.quit（无确认框）', async () => {
@@ -215,7 +215,7 @@ describe('setupTray（菜单/还原/退出确认/tooltip）', () => {
   it('「显示」菜单项 → 还原窗口', async () => {
     const { win, shown } = fakeWindow()
     await setupTray({ win, runningCount: () => 0 })
-    const click = menuItem('显示 Claude Workbench')['click'] as () => void
+    const click = menuItem('显示 SSH Workbench')['click'] as () => void
     click()
     expect(shown()).toBe(1)
   })
@@ -226,23 +226,23 @@ describe('setupTray（菜单/还原/退出确认/tooltip）', () => {
     const handle = await setupTray({ win, runningCount: () => 3, language: () => 'en' })
     const tray = h.trayInstances.at(-1)
     expect(h.menuTemplates.at(-1)?.map((i) => i['label'])).toEqual([
-      'Show Claude Workbench',
+      'Show SSH Workbench',
       undefined,
       'Quit (ends all tasks)'
     ])
-    expect(tray?.setToolTipCalls.at(-1)).toBe('Claude Workbench (3 task(s) running)')
+    expect(tray?.setToolTipCalls.at(-1)).toBe('SSH Workbench (3 task(s) running)')
 
     handle.setRunningCount(4)
-    expect(tray?.setToolTipCalls.at(-1)).toBe('Claude Workbench (4 task(s) running)')
+    expect(tray?.setToolTipCalls.at(-1)).toBe('SSH Workbench (4 task(s) running)')
 
     // 切回中文 → 菜单与 tooltip 同源重建（tooltip 保留当前计数）
     handle.setLanguage('zh')
     expect(h.menuTemplates.at(-1)?.map((i) => i['label'])).toEqual([
-      '显示 Claude Workbench',
+      '显示 SSH Workbench',
       undefined,
       '退出（结束所有任务）'
     ])
-    expect(tray?.setToolTipCalls.at(-1)).toBe('Claude Workbench（4 个任务运行中）')
+    expect(tray?.setToolTipCalls.at(-1)).toBe('SSH Workbench（4 个任务运行中）')
 
     // 同语言重复设置是 no-op（不重建菜单）
     const menus = h.menuTemplates.length

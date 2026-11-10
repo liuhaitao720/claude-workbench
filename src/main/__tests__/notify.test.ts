@@ -24,7 +24,7 @@ describe('inferChannel / buildNotifyPayload（三通道形状）', () => {
     expect(buildNotifyPayload('wecom', 'hi')).toEqual({ msgtype: 'markdown', markdown: { content: 'hi' } })
     expect(buildNotifyPayload('dingtalk', 'hi')).toEqual({
       msgtype: 'markdown',
-      markdown: { title: 'Claude Workbench', content: 'hi' }
+      markdown: { title: 'SSH Workbench', content: 'hi' }
     })
     expect(buildNotifyPayload('generic', 'hi')).toEqual({ text: 'hi' })
   })
@@ -165,7 +165,7 @@ describe('NotifyService', () => {
     expect(callCount()).toBe(1)
     const body = bodyOf(0)
     expect(body.msgtype).toBe('markdown')
-    expect(String((body.markdown as { title: string }).title)).toBe('Claude Workbench')
+    expect(String((body.markdown as { title: string }).title)).toBe('SSH Workbench')
     expect(String((body.markdown as { content: string }).content)).toContain('测试推送')
 
     fetchImpl.mockRejectedValueOnce(new Error('boom'))

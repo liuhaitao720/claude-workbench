@@ -1,6 +1,6 @@
 # Changelog
 
-Claude Workbench 版本更新说明（新版本在前；应用内「设置 → 应用更新」读取本文件展示）。
+SSH Workbench 版本更新说明（新版本在前；应用内「设置 → 应用更新」读取本文件展示）。v1.5.0 前产品名为 Claude Workbench。
 
 ## 1.5.0
 
@@ -14,6 +14,7 @@ Claude Workbench 版本更新说明（新版本在前；应用内「设置 → �
 - 打包前置新增 `npm run build:server`（cwb-server 交付包，须在 Linux 构建机执行——node-pty ABI 绑定构建机）；使用说明与前置条件见 README「SSH 远程模式」
 - 端到端冒烟新增 `--smoke-remote`（localhost sshd 全链：推送安装→注册导入→真实 claude→hooks awaiting→击键回显延迟基线 P50/P95/P99→断连冻结→重连 re-attach→客户端退出后远端保活→二次启动不归一→显式停止）；localhost 延迟基线 P50≈60ms/P95≈60-65ms（真实 Windows↔VM 链路须 Windows 侧实测）
 - 版本号事实源同步：app-info.ts 与 package.json 统一为 1.5.0
+- 产品更名 Claude Workbench → SSH Workbench（v1.5.0 起；新仓库 ssh-workbench，完整历史迁移）
 
 ## 1.4.2
 

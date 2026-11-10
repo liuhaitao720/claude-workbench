@@ -62,7 +62,7 @@ describe('buildUpdaterCmd（替换脚本安全红线）', () => {
     const cmd = buildUpdaterCmd({
       zipPath: 'C:\\tmp\\z.zip',
       installDir: 'D:\\App Dir\\Claude',
-      exeName: 'Claude Workbench.exe',
+      exeName: 'SSH Workbench.exe',
       extractDir: 'C:\\tmp\\ex',
       logPath: 'C:\\tmp\\log'
     })
@@ -112,7 +112,7 @@ describe('AppUpdater（注入式：假网络/假 spawn/临时目录）', () => {
   const makeDeps = (over: Partial<AppUpdaterDeps> = {}): AppUpdaterDeps => ({
     appVersion: '1.1.0',
     isPackaged: true,
-    execPath: join(dir, 'app', 'Claude Workbench.exe'),
+    execPath: join(dir, 'app', 'SSH Workbench.exe'),
     updateDir: join(dir, 'updates'),
     tempDir: join(dir, 'temp'),
     // spawn 替身须返回带 unref 的句柄（install 里 child.unref()）

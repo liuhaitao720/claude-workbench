@@ -1,7 +1,8 @@
 {
-  "name": "claude-workbench",
+  "name": "ssh-workbench",
   "version": "1.5.0",
-  "description": "Claude Code 多项目多任务终端工作台",
+  "productName": "SSH Workbench",
+  "description": "SSH Workbench——多项目多任务终端工作台（Claude Code 本机与 SSH 远程）",
   "private": true,
   "main": "out/main/index.js",
   "scripts": {
@@ -50,6 +51,6 @@
   },
   "license": "MIT",
   "author": "Liu Haitao <liuhaitao720@users.noreply.github.com>",
-  "homepage": "https://github.com/liuhaitao720/claude-workbench",
-  "desktopName": "claude-workbench"
+  "homepage": "https://github.com/liuhaitao720/ssh-workbench",
+  "desktopName": "ssh-workbench"
 }

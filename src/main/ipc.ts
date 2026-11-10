@@ -423,7 +423,7 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
 
   /**
    * v3.2 hooks settings 目录：固定走 %LOCALAPPDATA%\cwb\cwb-settings——userData 路径
-   * 随 productName "Claude Workbench" 含空格（实测 --settings 值本身的引号由 node-pty
+   * 随 productName "SSH Workbench" 含空格（实测 --settings 值本身的引号由 node-pty
    * argsToCommandLine 按 MSDN 规则处理不断裂；真正断裂点是 claude.cmd 自身路径含空格
    * 的既有暴露，见评审 #9）。LOCALAPPDATA 缺失（非 Windows/CI）回退 userData。
    * CWB_HOOK_SETTINGS_DIR 为测试注入缝（同 main.ts 的 CWB_USER_DATA 先例），

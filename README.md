@@ -1,4 +1,6 @@
-# Claude Workbench
+# SSH Workbench
+
+> v1.5.0 起由 Claude Workbench 更名为 SSH Workbench（新仓库 ssh-workbench，完整历史迁移）。
 
 在桌面上管理多个 claude code 会话的终端工作台：项目/任务树、每任务独立 PTY 终端、
 hooks 任务活动裁决（awaiting/busy/idle）、Skills 与插件管理、多 API provider 与

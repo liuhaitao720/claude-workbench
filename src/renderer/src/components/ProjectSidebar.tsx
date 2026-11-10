@@ -280,7 +280,7 @@ export function ProjectSidebar() {
               ⓘ 已删除（用户指令：只保留 Skills 和设置两个）——关于仍在设置左栏末项。 */}
           <div className="sidebar-header">
             <div className="sidebar-title-row">
-              <h1>Claude Workbench</h1>
+              <h1>SSH Workbench</h1>
               <span className="version-text" title={t('sidebar.versionTitle', { version: APP_VERSION })}>
                 v{APP_VERSION}
                 {/* v1.1.0 有新版本角标（启动静默检查/手动检查落 store） */}

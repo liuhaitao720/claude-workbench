@@ -1,4 +1,4 @@
-# Claude Workbench Linux（Ubuntu）构建与联调指南
+# SSH Workbench Linux（Ubuntu）构建与联调指南
 
 v1.3 起支持 Windows 与 Ubuntu 双平台。本文档覆盖：本机构建、目标机（Ubuntu）安装联调、冒烟验证与常见问题。
 
@@ -35,7 +35,7 @@ npm run build:server
 # 构建机 node 大版本——ABI 策略见 README「SSH 远程模式」O6 说明）。
 ```
 
-产物：`release/claude-workbench-<版本>.AppImage` 与 `release/claude-workbench-<版本>.deb`。
+产物：`release/SSH Workbench-<版本>.AppImage` 与 `release/ssh-workbench_<版本>_amd64.deb`。
 
 **为什么不能在 Windows 上交叉打 Linux 包**：`node_modules/node-pty` 的原生产物随宿主平台（prebuilds 或本机 node-gyp 编译产物），Windows 上打 Linux 包会打进 win32 二进制，Linux 运行时 `require pty.node` 直接失败。Linux 包必须在 Linux 环境（WSL 或目标机）完成 `npm ci` 与打包。
 
@@ -47,12 +47,12 @@ npm run build:server
 
 ```bash
 # deb（推荐，系统包管理器管理升级）
-sudo apt install ./release/claude-workbench_*.deb
-claude-workbench            # 或应用菜单里找 "Claude Workbench"
+sudo apt install ./release/ssh-workbench_*.deb
+# 启动：应用菜单里找 "SSH Workbench"（deb 不装 /usr/bin 命令，desktop 入口 Exec 为 /opt 全路径）
 
 # AppImage（免安装）
 chmod +x release/*.AppImage
-./release/claude-workbench-*.AppImage
+./release/SSH\ Workbench-*.AppImage
 ```
 
 AppImage 需要 FUSE（Ubuntu 24.04 默认有；极简系统装 `libfuse2`）。无 FUSE 环境可用 `--appimage-extract-and-run`。
@@ -117,8 +117,9 @@ Ubuntu 桌面/AppImage 启动的 Electron 继承的是**会话 PATH**——nvm/f
 | 启动黑屏/闪退 | 缺 Electron 运行库：`sudo apt-get install -y libnss3 libgtk-3-0 libgbm1 libasound2`（包名 24.04 起带 t64 后缀，apt 自动解析） |
 | root 下启动报 sandbox 错 | 追加 `--no-sandbox`（个人机器可接受；公共机器建议专用非 root 用户） |
 | 关窗后"消失但还在跑" | GNOME 默认无托盘区（需 AppIndicator 扩展）。关窗=最小化到托盘是默认行为——从任务栏/活动概览可唤回，或在设置中改为直接退出 |
-| hooks settings 目录 | Linux 落 `~/.config/Claude Workbench/cwb/cwb-settings`（Windows 是 `%LOCALAPPDATA%`；无 LOCALAPPDATA 时统一回退 userData） |
-| 应用更新 | Linux 检查更新可用（显示新版本与说明），下载/安装提示手动更新——自动替换链路是 Windows 专属，Linux 从 [GitHub Releases](https://github.com/liuhaitao720/claude-workbench/releases) 手动下载覆盖 |
+| hooks settings 目录 | Linux 落 `~/.config/SSH Workbench/cwb/cwb-settings`（Windows 是 `%LOCALAPPDATA%`；无 LOCALAPPDATA 时统一回退 userData） |
+| v1.5.0 更名迁移 | productName 由 Claude Workbench 改为 SSH Workbench，首次启动自动把旧数据目录（Linux `~/.config/Claude Workbench`、Windows `%APPDATA%\Claude Workbench`）一次性拷贝到新目录并写 `.migrated-from-claude-workbench` 标记；新目录非空则跳过，旧目录保留 |
+| 应用更新 | Linux 检查更新可用（显示新版本与说明），下载/安装提示手动更新——自动替换链路是 Windows 专属，Linux 从 [GitHub Releases](https://github.com/liuhaitao720/ssh-workbench/releases) 手动下载覆盖 |
 | 字体下拉为空/回白名单 | `fc-list` 不可用（极简系统装 `fontconfig`）；默认字体 Linux 为 DejaVu Sans Mono |
 
 ## 七、从 Windows 侧把代码带过去
@@ -126,9 +127,9 @@ Ubuntu 桌面/AppImage 启动的 Electron 继承的是**会话 PATH**——nvm/f
 仓库工作树（含未提交改动）拷入 WSL：
 
 ```powershell
-# WSL 内（把 D 盘工作树复制到 ~/claude-workbench，排除产物与依赖）
-mkdir -p ~/claude-workbench && cd /mnt/d/WorkWithAI/claude\ workbench/repos/claude-workbench \
-  && tar cf - --exclude=node_modules --exclude=release --exclude=out --exclude=.vitest . | (cd ~/claude-workbench && tar xf -)
+# WSL 内（把 D 盘工作树复制到 ~/ssh-workbench，排除产物与依赖）
+mkdir -p ~/ssh-workbench && cd /mnt/d/WorkWithAI/claude\ workbench/repos/ssh-workbench \
+  && tar cf - --exclude=node_modules --exclude=release --exclude=out --exclude=.vitest . | (cd ~/ssh-workbench && tar xf -)
 ```
 
-之后在 WSL 的 `~/claude-workbench` 里跑 `./build-linux.sh`。
+之后在 WSL 的 `~/ssh-workbench` 里跑 `./build-linux.sh`。

@@ -34,7 +34,7 @@ describe('App（布局与侧栏）', () => {
     const header = document.querySelector('.sidebar-header') as HTMLElement
     expect(within(header).getByRole('button', { name: 'Skills' })).toBeDefined()
     expect(within(header).getByRole('button', { name: '设置' })).toBeDefined()
-    expect(within(header).queryByRole('button', { name: /关于 Claude Workbench/ })).toBeNull()
+    expect(within(header).queryByRole('button', { name: /关于 SSH Workbench/ })).toBeNull()
   })
 
   it('mount 时并行加载 projects 与 tasks（均调用一次）', async () => {

@@ -29,10 +29,10 @@ function tr(key: Parameters<typeof translate>[1], params?: Record<string, string
 
 /** 最新版清单：GitHub「latest release」固定下载地址（无 API 限流；由 scripts/release.mjs 发布） */
 export const LATEST_MANIFEST_URL =
-  'https://github.com/liuhaitao720/claude-workbench/releases/latest/download/latest.json'
+  'https://github.com/liuhaitao720/ssh-workbench/releases/latest/download/latest.json'
 /** 更新说明唯一事实源：仓库根 CHANGELOG.md（raw 直读） */
 export const CHANGELOG_URL =
-  'https://raw.githubusercontent.com/liuhaitao720/claude-workbench/main/CHANGELOG.md'
+  'https://raw.githubusercontent.com/liuhaitao720/ssh-workbench/main/CHANGELOG.md'
 
 const HTTP_TIMEOUT_MS = 8_000
 const DOWNLOAD_TIMEOUT_MS = 600_000
@@ -200,7 +200,7 @@ export function buildUpdaterCmd(params: {
  */
 export function buildUpdaterLauncher(): string {
   return [
-    "' Claude Workbench updater launcher (v1.2.1)",
+    "' SSH Workbench updater launcher (v1.2.1)",
     "' Usage: wscript.exe //nologo updater-launch.vbs \"<abs path to updater.cmd>\"",
     "' Window style 0 = hidden; third arg False = do not wait (updater waits for the app to exit)",
     'Dim sh, target',

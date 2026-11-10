@@ -1,6 +1,6 @@
 icon: assets/icon.ico
-appId: com.claudeworkbench.app
-productName: Claude Workbench
+appId: com.sshworkbench.app
+productName: SSH Workbench
 directories:
   output: release
 # node-pty 1.1.0 为 NAPI prebuild（prebuilds/win32-x64），node/electron ABI 通用，
@@ -25,7 +25,7 @@ linux:
   icon: assets/icon-512.png
   category: Development
   maintainer: Liu Haitao <liuhaitao720@users.noreply.github.com>
-  executableName: claude-workbench
+  executableName: ssh-workbench
   syncDesktopName: true
   target:
     - AppImage

@@ -1,5 +1,5 @@
 /**
- * Claude Workbench 跨进程契约（S1.5 主控落骨架）
+ * SSH Workbench 跨进程契约（S1.5 主控落骨架）
  * 唯一事实源：doc/design/spec-v1.md §5（v1.3）。契约变更须走主控编译红流程，子任务不得静默修改。
  */
 

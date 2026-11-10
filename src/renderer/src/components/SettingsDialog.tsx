@@ -1658,7 +1658,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             {activeSection === 'about' && (
               <div className="dialog-section">
                 <p className="section-title">{t('settings.sectionAbout')}</p>
-                <div className="kv about-app-name">Claude Workbench</div>
+                <div className="kv about-app-name">SSH Workbench</div>
                 <div className="kv">
                   {t('about.version', { version: APP_VERSION })}
                   {BUILD_DATE !== '' && t('about.build', { date: BUILD_DATE })}

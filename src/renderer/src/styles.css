@@ -1,4 +1,4 @@
-/* Claude Workbench renderer —— 暗色主题（v0.5.3 令牌化）+ 浅色主题（[data-theme='light']）。
+/* SSH Workbench renderer —— 暗色主题（v0.5.3 令牌化）+ 浅色主题（[data-theme='light']）。
    P0/P1 色全部收敛为 :root 令牌；浅色仅重定义令牌值，规则零重复。
    A2 对比度：原 #7d7f89/#5c5e66 文本统一提亮为 --text-4（暗 #9496a0）。 */
 
