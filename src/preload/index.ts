@@ -37,7 +37,8 @@ const api: CWBApi = {
   platform: process.platform,
   // projects
   listProjects: () => ipcRenderer.invoke(IpcChannels.ProjectsList) as Promise<ProjectRecord[]>,
-  addProject: (dir) => ipcRenderer.invoke(IpcChannels.ProjectsAdd, dir) as Promise<ProjectRecord>,
+  addProject: (dir: string, connectionId?: string) =>
+    (ipcRenderer.invoke(IpcChannels.ProjectsAdd, dir, connectionId) as Promise<ProjectRecord>), // connectionId=S5 实装
   removeProject: (id) => ipcRenderer.invoke(IpcChannels.ProjectsRemove, id) as Promise<void>,
   renameProject: (id, name) =>
     ipcRenderer.invoke(IpcChannels.ProjectsRename, id, name) as Promise<ProjectRecord>,

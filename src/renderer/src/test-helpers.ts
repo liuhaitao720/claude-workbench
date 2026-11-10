@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import type {
+import type { ConnectionTestResult,
   AppSettings,
   AppUpdateProgressEvent,
   CliOutputEvent,
@@ -63,13 +63,7 @@ export function makeConnection(c: Partial<ConnectionRecord> = {}): ConnectionRec
  * S2 testConnection 返回超集（TestConnectionOutcome：kind/hostKeyFingerprint/checks；
  * shared 契约面仍是 {ok,error}，mock 侧先行宽类型——与真实 handler 输出同形）。
  */
-export interface ConnTestResultMock {
-  ok: boolean
-  error?: string
-  kind?: string
-  hostKeyFingerprint?: string
-  checks?: Array<{ id: string; status: 'ok' | 'missing' | 'unknown'; detail?: string }>
-}
+export type ConnTestResultMock = ConnectionTestResult
 
 export function makeTask(t: Partial<TaskRecord> = {}): TaskRecord {
   idCounter += 1

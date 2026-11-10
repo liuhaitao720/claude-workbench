@@ -198,6 +198,24 @@ export interface LocalProxyStatus {
  * 照 providers.json 原子写+容错读先例）/ S6 设置中心编辑与侧栏服务器节点展示】
  * （1.2=A，字段集=确认单 1.2；认证=1.3=B=B 私钥+密码）。
  */
+/** 只读自检单项（S2 产出；S7 接管 server 项） */
+export interface SelfCheckItem {
+  id: 'sshd' | 'claude' | 'node' | 'server'
+  status: 'ok' | 'missing' | 'unknown'
+  /** 版本摘要等非敏感信息 */
+  detail?: string
+}
+
+export interface ConnectionTestResult {
+  ok: boolean
+  error?: string
+  /** 分级错误码：refused/timeout/auth/hostKeyConfirm/hostKeyChanged/selfCheckFailed…（仅 IPC 返回对象时保留） */
+  kind?: string
+  /** TOFU 首连/变更时出现；SHA256:<base64> 原串 */
+  hostKeyFingerprint?: string
+  checks?: SelfCheckItem[]
+}
+
 export interface ConnectionRecord {
   /** uuid（保存时 id 空串=新增，照 ProviderConfig 先例；S2 分配） */
   id: string
@@ -649,8 +667,8 @@ export interface CWBApi {
    * 其远程项目记录的处理由 S2 定）【S2】
    */
   removeConnection(id: string): Promise<void>
-  /** 只读连通性测试（不改变连接状态；失败返回 ok:false + 分级文案 error）【S2】 */
-  testConnection(id: string): Promise<{ ok: boolean; error?: string }>
+  /** 只读连通性测试（不改变连接状态；失败返回 ok:false + 分级文案 error；kind/指纹/自检清单为 S2 实际返回超集，契约 v2.2 升格）【S2】 */
+  testConnection(id: string): Promise<ConnectionTestResult>
   /** 建立连接（懒连接 2.5=a；状态迁移经 onConnectionState 推送）【S2】 */
   connectConnection(id: string): Promise<void>
   /** 断开连接（幂等；5.9=b：断开不杀远端会话，server 保活）【S2】 */
