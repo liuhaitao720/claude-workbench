@@ -1003,8 +1003,7 @@ button {
 
 /* 更新说明（CHANGELOG 展示区：限高滚动防长清单撑爆弹窗） */
 .upd-notes {
-  max-height: 260px;
-  overflow-y: auto;
+  /* v1.4.2 布局修正：去掉内层滚动（与 settings-body 嵌套成双滚动条）——更新说明随内容展开 */
   margin: 8px 0;
   padding: 8px 10px;
   background: var(--bg-input);

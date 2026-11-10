@@ -7,7 +7,7 @@ import { installCwbMock, makeProject } from './test-helpers'
 import { useAppStore } from './store'
 
 /**
- * v1.2.1：关于并入设置中心（用户指令「合并关于和设置这 2 个弹窗」）。
+ * v1.4.2：关于并入设置中心（用户指令「合并关于和设置这 2 个弹窗」）。
  * 独立 AboutDialog 下线——应用身份信息成为设置中心左栏末项「关于」分类。
  * v1.2.2：侧栏 ⓘ 入口删除（用户指令「版本后面只保留 Skills 和设置」）——
  * 「关于」现在唯一入口是设置左栏；「应用更新」也并进同一分类（身份+更新同页）。
@@ -74,7 +74,7 @@ describe('关于并入设置中心（v1.2.2：侧栏只留 Skills / 设置）', 
     const s = await openAbout()
     expect(s.getByRole('button', { name: /^关于/ }).getAttribute('aria-current')).toBe('true')
     expect(s.getByText('Claude Workbench')).toBeDefined()
-    expect(s.getByText(/版本 v1\.2\.1/)).toBeDefined()
+    expect(s.getByText(/版本 v1\.4\.2/)).toBeDefined()
     expect(s.getByText('作者 Liu Haitao')).toBeDefined()
     expect(s.getByText('MIT')).toBeDefined() // 许可证链接锚点
     // v1.2.2：应用更新并进来（左栏不再有单独的「应用更新」导航项）
@@ -85,9 +85,9 @@ describe('关于并入设置中心（v1.2.2：侧栏只留 Skills / 设置）', 
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
   })
 
-  it('侧栏显示 v1.2.1 纯文本版本号（不可点）', async () => {
+  it('侧栏显示 v1.4.2 纯文本版本号（不可点）', async () => {
     await renderApp()
-    expect(document.querySelector('.version-text')?.textContent).toContain('v1.2.1')
+    expect(document.querySelector('.version-text')?.textContent).toContain('v1.4.2')
     expect(screen.queryByRole('button', { name: /^v1\./ })).toBeNull()
   })
 
@@ -99,11 +99,11 @@ describe('关于并入设置中心（v1.2.2：侧栏只留 Skills / 设置）', 
     expect(s.getByRole('button', { name: /^通用/ }).getAttribute('aria-current')).toBe('true')
 
     fireEvent.click(s.getByRole('button', { name: /^关于/ }))
-    expect(s.getByText(/版本 v1\.2\.1/)).toBeDefined()
+    expect(s.getByText(/版本 v1\.4\.2/)).toBeDefined()
     expect(s.getByRole('button', { name: /^关于/ }).getAttribute('aria-current')).toBe('true')
 
     fireEvent.click(s.getByRole('button', { name: /^通用/ }))
-    expect(s.queryByText(/版本 v1\.2\.1/)).toBeNull() // 关于分类内容随切换卸载
+    expect(s.queryByText(/版本 v1\.4\.2/)).toBeNull() // 关于分类内容随切换卸载
     expect(s.getByRole('radiogroup', { name: '界面主题' })).toBeDefined()
   })
 

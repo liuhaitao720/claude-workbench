@@ -359,7 +359,7 @@ describe('快捷键（S6-F：Ctrl+N/F/B，焦点守卫）', () => {
   })
 })
 
-// ── v1.2.1 设置入口：展开态头部图标组（版本号后）+ 折叠 rail ⚙ ─────────────
+// ── v1.4.2 设置入口：展开态头部图标组（版本号后）+ 折叠 rail ⚙ ─────────────
 // v1.2.2：ⓘ 入口删除（用户指令「版本后面只保留 Skills 和设置」）；
 //        图标改内联 SVG（用户指令：常用风格、易识别、比 emoji 大）——按钮无文本，
 //        以 data-icon 锚点断言
@@ -371,7 +371,7 @@ describe('设置入口（v1.2.2：Skills / 设置两个 SVG 图标按钮）', ()
   it('展开态：版本号后依次 skills/settings 两个图标按钮（无关于入口）；点 ⚙ 开设置弹窗', async () => {
     await renderApp([pg], [runner])
     const header = document.querySelector('.sidebar-header') as HTMLElement
-    expect(header.querySelector('.version-text')?.textContent).toContain('v1.2.1')
+    expect(header.querySelector('.version-text')?.textContent).toContain('v1.4.2')
     // 图标组紧跟版本号（DOM 顺序即视觉顺序）；data-icon=svg 图形锚点
     const group = header.querySelector('.sidebar-icon-group') as HTMLElement
     expect(group).not.toBeNull()
