@@ -64,6 +64,17 @@ if (injectedUserData) {
   app.setPath('userData', injectedUserData)
 }
 
+/**
+ * v1.4.2 CWB_OZONE=x11 可选 XWayland 实验：GNOME Wayland 下 Chromium 帧回调在
+ * 突发输入后可能卡死（显示永久慢一拍），X11 路径仅瞬态且自恢复（实测对比）。
+ * 但 VM 环境强制 X11 时窗口无法映射（GPU 禁用也救不回），故不设默认——默认仍
+ * Wayland 原生；设 CWB_OZONE=x11 时附加 X11 平台并禁用硬件加速。
+ */
+if (process.platform === 'linux' && process.env['CWB_OZONE'] === 'x11') {
+  app.commandLine.appendSwitch('ozone-platform', 'x11')
+  app.disableHardwareAcceleration()
+}
+
 // ── 单实例锁（v1.0.7；锁键=userData，故在 userData 注入之后） ──────────
 
 /** 主窗口引用（second-instance 唤起用；whenReady/activate 两处创建均回填） */
