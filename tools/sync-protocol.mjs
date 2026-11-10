@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 /**
- * 协议同步脚本（SSH 远程模式 S1 批0 骨架；S3 归属后续增强）。
+ * 协议同步脚本（SSH 远程模式 S1 骨架；S3 增强：孤儿文件清理）。
  *
  * 职责：把 src/shared/remote-protocol.ts 连同其相对 import 的传递依赖逐字节拷入
  * server/src/shared/，并对闭包内全部文件做内容一致性校验（sha256 比对）——
- * 源与目标任一不一致（含目标缺失/被手改）即非零退出。
+ * 源与目标任一不一致（含目标缺失/被手改）即非零退出；同时清理目标侧孤儿文件
+ * （源侧已删的依赖残留在 server/src/shared/ 的副本），两侧目录内容集完全对齐。
  *
  * 用法：
- *   node tools/sync-protocol.mjs           # 同步写入 + 校验（幂等：已一致则零写入）
- *   node tools/sync-protocol.mjs --check   # 只校验不写入（CI/验收用；不一致非零退出）
+ *   node tools/sync-protocol.mjs           # 同步写入 + 孤儿清理 + 校验（幂等）
+ *   node tools/sync-protocol.mjs --check   # 只校验不写入（CI/验收用；不一致或存在孤儿非零退出）
  *
  * 边界：只处理 src/shared/ 内的相对依赖（./x、../x）；第三方依赖不属于同步范围。
- * 目标目录中的陈旧孤儿文件（源侧已删的依赖）不在校验闭包内——由人工/S3 清理。
  */
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -116,8 +116,60 @@ for (const name of closure) {
   report.push(`  + ${name} (${srcHash.slice(0, 12)}) 已同步`)
 }
 
+// ── 孤儿清理：目标侧存在而源闭包没有的文件=源侧已删依赖的残留 ──────────────
+const orphans = listDestFiles().filter((f) => !closure.includes(f))
+for (const name of orphans) {
+  if (checkOnly) {
+    fail(`--check 发现孤儿文件：server/src/shared/${name}（源侧已删——运行同步模式清理）`)
+  }
+  rmSync(join(destDir, name))
+  changed += 1
+  report.push(`  - ${name} 孤儿清理（源侧已删）`)
+}
+if (!checkOnly && orphans.length > 0) pruneEmptyDirs(destDir)
+
 console.log(`[sync-protocol] 闭包 ${closure.length} 文件：${closure.join(', ')}`)
 console.log(report.join('\n'))
 console.log(
-  `[sync-protocol] OK（${checkOnly ? '仅校验' : '同步写入'}；${changed} 个文件更新，全部 sha256 一致）`
+  `[sync-protocol] OK（${checkOnly ? '仅校验' : '同步写入+孤儿清理'}；${changed} 个文件变更，全部 sha256 一致，无孤儿）`
 )
+
+/** 递归列出 destDir 下全部文件（相对路径统一 / 分隔，与 closure 同口径） */
+function listDestFiles() {
+  const out = []
+  const walk = (rel) => {
+    let entries
+    try {
+      entries = readdirSync(join(destDir, rel), { withFileTypes: true })
+    } catch {
+      return // 目录不存在=无孤儿
+    }
+    for (const e of entries) {
+      const child = rel === '' ? e.name : `${rel}/${e.name}`
+      if (e.isDirectory()) walk(child)
+      else if (e.isFile()) out.push(child)
+    }
+  }
+  walk('')
+  return out
+}
+
+/** 自底向上剪空目录（孤儿删除后遗留；destDir 本身保留） */
+function pruneEmptyDirs(base) {
+  let entries
+  try {
+    entries = readdirSync(base, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue
+    pruneEmptyDirs(join(base, e.name))
+  }
+  try {
+    // rmSync 对目录需 recursive（此处已验证为空目录，安全）
+    if (readdirSync(base).length === 0 && base !== destDir) rmSync(base, { recursive: true })
+  } catch {
+    // 非空/并发变更——保留
+  }
+}

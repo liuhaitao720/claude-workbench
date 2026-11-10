@@ -1,9 +1,20 @@
 {
   "name": "claude-workbench-server",
   "version": "0.1.0",
-  "description": "cwb-server —— VM 侧任务 PTY 宿主与协议服务端（SSH 远程模式；S1 批0 骨架，S3 实现功能）",
+  "description": "cwb-server —— VM 侧任务 PTY 宿主与协议服务端（SSH 远程模式 S3 实现：WS 帧协议/PTY 注册表+保活/re-attach 重绘/远程代理）",
   "private": true,
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.12"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true
   }
 }

@@ -1,42 +1,57 @@
 /**
- * cwb-server 入口骨架（SSH 远程模式 S1 批0）：协议 handler 注册表 + 全 NotImplemented。
+ * cwb-server 入口（S3）：argv 解析 → CwbServer 起监听 → 信号驱动优雅停机。
  *
- * S3 落位内容：WS 传输层（监听 127.0.0.1:17717）、帧 JSON 编解码、按帧类型分发到
- * handlers、PTY 注册表与保活（5.9=b）、re-attach（resize toggle + 尾部回放退化）、
- * 代理核心移植（6.4=c）。本骨架只锁「键=ClientFrame['type'] 全集」的注册表形状，
- * 完整性由编译期 Record 键校验锁定（缺一个帧类型=编译红）。
+ * 监听 127.0.0.1:17717（与客户端约定固定口）；--port 可覆写（测试用动态口：
+ * --port 0 = OS 分配）。stdout 只打一行机器可读启动行（S7 安装器/测试消费）：
+ *   {"event":"listening","port":<实际端口>,"host":"127.0.0.1","version":"..."}
+ * 其余日志走 stderr（元数据级，8.1=A）。
  *
- * 注意：src/shared/ 目录由 tools/sync-protocol.mjs 从客户端 src/shared/ 同步生成
- * （remote-protocol.ts 及其传递依赖，逐字节一致）——勿手改，改了会被一致性校验
- * 非零退出拦下。
+ * 帧协议实现见 cwb-server.ts；PTY 注册表见 pty-registry.ts；帧编解码见
+ * frames.ts；远程代理见 proxy-core.ts；契约=src/shared/remote-protocol.ts
+ * （server/src/shared/ 同步副本，tools/sync-protocol.mjs 校验一致）。
  */
-import type { ClientFrame, ServerFrame } from './shared/remote-protocol'
+import { CwbServer, DEFAULT_PORT, VERSION } from './cwb-server'
 
-/** 帧分发 handler：frame=解码后的请求帧；send=该连接的回帧出口（含 result 回执） */
-export type FrameHandler = (
-  frame: ClientFrame,
-  send: (frame: ServerFrame) => void
-) => void | Promise<void>
-
-/** S1 桩：全部帧类型统一占位——S3 逐帧实现后替换本注册表对应项 */
-function notImplemented(frame: ClientFrame): never {
-  throw new Error(`NotImplemented: ${frame.type}（S3 实现）`)
+function parsePort(argv: string[]): number | undefined {
+  for (let i = 2; i < argv.length; i++) {
+    const a = argv[i]!
+    if (a === '--port' && argv[i + 1] !== undefined) {
+      const n = Number(argv[i + 1])
+      if (Number.isInteger(n) && n >= 0 && n <= 65_535) return n
+      process.stderr.write(`[cwb-server:error] invalid --port ${argv[i + 1]}\n`)
+      process.exit(2)
+    }
+    if (a.startsWith('--port=')) {
+      const raw = a.slice('--port='.length)
+      const n = Number(raw)
+      if (Number.isInteger(n) && n >= 0 && n <= 65_535) return n
+      process.stderr.write(`[cwb-server:error] invalid --port ${raw}\n`)
+      process.exit(2)
+    }
+  }
+  return undefined
 }
 
-/** 协议 handler 注册表——键恰为 ClientFrame['type'] 全集（编译期完整性锁定） */
-export const handlers: Record<ClientFrame['type'], FrameHandler> = {
-  'task.spawn': notImplemented,
-  'task.write': notImplemented,
-  'task.resize': notImplemented,
-  'task.kill': notImplemented,
-  'task.attach': notImplemented,
-  'task.detach': notImplemented,
-  'task.list': notImplemented,
-  'server.ping': notImplemented,
-  'server.version': notImplemented,
-  'proxy.status': notImplemented,
-  'proxy.start': notImplemented,
-  'proxy.stop': notImplemented,
-  'proxy.config.get': notImplemented,
-  'proxy.config.set': notImplemented
+async function main(): Promise<void> {
+  const port = parsePort(process.argv) ?? DEFAULT_PORT
+  const server = new CwbServer({ port })
+  const bound = await server.start()
+  process.stdout.write(
+    `${JSON.stringify({ event: 'listening', port: bound.port, host: bound.host, version: VERSION })}\n`
+  )
+
+  let stopping = false
+  const stop = (signal: string): void => {
+    if (stopping) return
+    stopping = true
+    // 5.9=b：停机=detach 全部+PTY 不杀+proxy 停止监听（见 CwbServer.shutdown）
+    void server.shutdown(`signal ${signal}`).finally(() => process.exit(0))
+  }
+  process.on('SIGTERM', () => stop('SIGTERM'))
+  process.on('SIGINT', () => stop('SIGINT'))
 }
+
+main().catch((err: unknown) => {
+  process.stderr.write(`[cwb-server:error] fatal: ${err instanceof Error ? err.message : String(err)}\n`)
+  process.exit(1)
+})
