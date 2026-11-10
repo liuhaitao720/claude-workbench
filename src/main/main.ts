@@ -10,6 +10,7 @@ import { mainLanguage } from './language'
 import { resolveClaudeCommand } from './pty-manager'
 import { versionProbeCommand } from './platform'
 import { initSingleInstance } from './single-instance'
+import { StubConnectionManager } from './ssh/connection-manager'
 import { attachCloseToTray, setupTray, type TrayHandle } from './tray'
 
 const execFileAsync = promisify(execFile)
@@ -535,11 +536,17 @@ app.whenReady().then(async () => {
   currentCtx = registerIpcHandlers(
     isSmokeRun
       ? createAppContext({
+          // SSH 远程连接（S1 批0 组合根注入桩；S2 以真实 ssh2 ConnectionManager 替换）
+          connection: new StubConnectionManager(),
           onPtyData: sink.onPtyData,
           onTaskUpdate: refreshTrayCount,
           onSettingsChange: syncTrayLanguage
         })
-      : createAppContext({ onTaskUpdate: refreshTrayCount, onSettingsChange: syncTrayLanguage })
+      : createAppContext({
+          connection: new StubConnectionManager(),
+          onTaskUpdate: refreshTrayCount,
+          onSettingsChange: syncTrayLanguage
+        })
   )
   const win = createWindow()
   mainWindow = win // v1.0.7 second-instance 唤起锚点

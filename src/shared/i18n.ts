@@ -451,7 +451,38 @@ export const zh = {
 
   // ── main 侧：claude CLI 版本/更新说明错误 ───────────────────
   'cliVer.errRegistryNoVersion': 'registry 响应无 version',
-  'cliVer.errBothFailed': '{primary}；atom 兜底 {fallback}'
+  'cliVer.errBothFailed': '{primary}；atom 兜底 {fallback}',
+
+  // ── SSH 远程连接（S1 批0 键骨架：键名此处锁定，S2/S6 只填值——勿改键名/增删键须走契约红）──
+  // 「S2 填值区」：连接失败分级文案（2.3=A）+ 只读自检缺失项（2.1/2.2）
+  'conn.err.refused': '〔S2 填值〕连接被拒绝：sshd 未启动或未安装',
+  'conn.err.timeout': '〔S2 填值〕连接超时：VM 未启动/挂起或网络不通',
+  'conn.err.auth': '〔S2 填值〕认证失败：密钥/密码问题',
+  'conn.err.hostKeyChanged': '〔S2 填值〕主机指纹变更，连接已阻断（疑似中间人或重装系统）',
+  'conn.check.sshd': '〔S2 填值〕sshd 可达',
+  'conn.check.claude': '〔S2 填值〕claude CLI 已安装',
+  'conn.check.node': '〔S2 填值〕node 可用',
+  'conn.check.server': '〔S2 填值〕cwb-server 组件/版本',
+  // 「S6 填值区」：侧栏服务器节点/连接对话框/断连冻结层（3.5/3.9/5.3/5.5）
+  'conn.state.connected': '〔S6 填值〕已连接',
+  'conn.state.connecting': '〔S6 填值〕连接中…',
+  'conn.state.reconnecting': '〔S6 填值〕重连中（第 {attempt} 次）',
+  'conn.state.offline': '〔S6 填值〕未连接',
+  'conn.frozen': '〔S6 填值〕连接已断开：输入已冻结，重连后自动恢复',
+  'conn.retryNow': '〔S6 填值〕立即重试',
+  'conn.menu.connect': '〔S6 填值〕连接',
+  'conn.menu.disconnect': '〔S6 填值〕断开',
+  'conn.menu.edit': '〔S6 填值〕编辑连接…',
+  'conn.menu.newProject': '〔S6 填值〕新建远程项目…',
+  'conn.menu.removeConfirm': '〔S6 填值〕仅删除客户端记录与连接档案，不删除 VM 内任何文件',
+  'conn.dialog.title': '〔S6 填值〕远程连接',
+  'conn.dialog.host': '〔S6 填值〕主机',
+  'conn.dialog.port': '〔S6 填值〕端口',
+  'conn.dialog.user': '〔S6 填值〕用户名',
+  'conn.dialog.authMethod': '〔S6 填值〕认证方式',
+  'conn.dialog.keyPath': '〔S6 填值〕私钥路径',
+  'conn.dialog.password': '〔S6 填值〕密码',
+  'conn.dialog.test': '〔S6 填值〕测试连接'
 } as const
 
 export type MessageKey = keyof typeof zh
@@ -888,7 +919,38 @@ export const en: Record<MessageKey, string> = {
   'provider.errSlots': 'Malformed slot models (object with string values)',
 
   'cliVer.errRegistryNoVersion': 'Registry response has no version',
-  'cliVer.errBothFailed': '{primary}; atom fallback {fallback}'
+  'cliVer.errBothFailed': '{primary}; atom fallback {fallback}',
+
+  // ── SSH remote connection (S1 batch-0 key skeleton; S2/S6 fill values only)──
+  // “S2 fill zone”: connection failure tiers (2.3) + read-only self-check items (2.1/2.2)
+  'conn.err.refused': '[S2 fill] Connection refused: sshd not running or not installed',
+  'conn.err.timeout': '[S2 fill] Connection timed out: VM not started/suspended or unreachable',
+  'conn.err.auth': '[S2 fill] Authentication failed: key/password issue',
+  'conn.err.hostKeyChanged': '[S2 fill] Host key changed, connection blocked (possible MITM or reinstall)',
+  'conn.check.sshd': '[S2 fill] sshd reachable',
+  'conn.check.claude': '[S2 fill] claude CLI installed',
+  'conn.check.node': '[S2 fill] node available',
+  'conn.check.server': '[S2 fill] cwb-server component/version',
+  // “S6 fill zone”: sidebar server node / connection dialog / frozen layer (3.5/3.9/5.3/5.5)
+  'conn.state.connected': '[S6 fill] Connected',
+  'conn.state.connecting': '[S6 fill] Connecting…',
+  'conn.state.reconnecting': '[S6 fill] Reconnecting (attempt {attempt})',
+  'conn.state.offline': '[S6 fill] Offline',
+  'conn.frozen': '[S6 fill] Connection lost: input frozen, resumes after reconnect',
+  'conn.retryNow': '[S6 fill] Retry now',
+  'conn.menu.connect': '[S6 fill] Connect',
+  'conn.menu.disconnect': '[S6 fill] Disconnect',
+  'conn.menu.edit': '[S6 fill] Edit connection…',
+  'conn.menu.newProject': '[S6 fill] New remote project…',
+  'conn.menu.removeConfirm': '[S6 fill] Removes the client-side record and profile only; no files inside the VM are deleted',
+  'conn.dialog.title': '[S6 fill] Remote connection',
+  'conn.dialog.host': '[S6 fill] Host',
+  'conn.dialog.port': '[S6 fill] Port',
+  'conn.dialog.user': '[S6 fill] Username',
+  'conn.dialog.authMethod': '[S6 fill] Authentication',
+  'conn.dialog.keyPath': '[S6 fill] Private key path',
+  'conn.dialog.password': '[S6 fill] Password',
+  'conn.dialog.test': '[S6 fill] Test connection'
 }
 
 const DICTS: Record<Language, Record<MessageKey, string>> = { zh, en }

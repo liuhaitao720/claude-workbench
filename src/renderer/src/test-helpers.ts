@@ -3,12 +3,16 @@ import type {
   AppSettings,
   AppUpdateProgressEvent,
   CliOutputEvent,
+  ConnectionRecord,
+  ConnectionStateChangedEvent,
   CreateTaskOptions,
   CWBApi,
   NotifyConfig,
   ProjectRecord,
   ProviderConfig,
   PtyDataEvent,
+  RemoteProxyConfig,
+  RemoteServerLogEvent,
   SkillInfo,
   SkillMarketEntry,
   SkillMarketplaceInfo,
@@ -226,6 +230,25 @@ export function installCwbMock(
     setSkillPluginEnabled: vi.fn(async (_pluginId: string, _enabled: boolean) => ({
       ok: true,
       commandId: 'skill-plugin-toggle-test'
+    })),
+    // SSH 远程连接（S1 批0 契约的 mock 桩：默认不模拟任何成功路径——远程用例待 S6 起
+    // 按需覆写/扩捕获数组；照 importSkillFolder「NotImplemented（测试中覆写）」先例）
+    listConnections: vi.fn(async () => [] as ConnectionRecord[]),
+    saveConnection: vi.fn(async (connection: ConnectionRecord) => connection),
+    removeConnection: vi.fn(async (_id: string) => {}),
+    testConnection: vi.fn(async () => ({ ok: false, error: 'NotImplemented（测试中覆写）' })),
+    connectConnection: vi.fn(async (_id: string) => {}),
+    disconnectConnection: vi.fn(async (_id: string) => {}),
+    browseRemoteDir: vi.fn(async () => ({ ok: false, error: 'NotImplemented（测试中覆写）' })),
+    installRemoteServer: vi.fn(async () => ({ ok: false, error: 'NotImplemented（测试中覆写）' })),
+    onConnectionState: vi.fn((_cb: (e: ConnectionStateChangedEvent) => void) => () => {}),
+    onRemoteServerLog: vi.fn((_cb: (e: RemoteServerLogEvent) => void) => () => {}),
+    getRemoteProxyStatus: vi.fn(async () => ({
+      running: false,
+      stats: { total: 0, active: 0, direct: 0, viaProxy: 0 }
+    })),
+    setRemoteProxyConfig: vi.fn(async (_id: string, patch: Partial<RemoteProxyConfig>) => ({
+      ...patch
     })),
     reportSmoke: vi.fn()
   }

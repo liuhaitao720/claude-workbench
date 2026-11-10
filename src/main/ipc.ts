@@ -1,15 +1,17 @@
 import { app, BrowserWindow, dialog, ipcMain, net, session, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { IpcChannels } from '../shared/ipc-channels'
+import { EVENT_CHANNELS, IpcChannels } from '../shared/ipc-channels'
 import { translate } from '../shared/i18n'
 import type {
   AppSettings,
   CliOutputEvent,
+  ConnectionStateChangedEvent,
   CreateTaskOptions,
   ProjectRecord,
   ProviderConfig,
   PtyDataEvent,
+  RemoteServerLogEvent,
   RemoveTaskOptions,
   SkillInfo,
   TaskRecord
@@ -34,12 +36,48 @@ import { PluginSkills, isValidPluginId } from './plugin-skills'
 import { SkillMarket, validateInstallTarget } from './skill-market'
 import { startTaskActivityServer, type TaskActivityHandle } from './task-activity'
 import { TaskStore } from './task-store'
+import { StubConnectionManager, type ConnectionManager } from './ssh/connection-manager'
 
 /** main→renderer 推送：广播到全部窗口 */
 function broadcast(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel, payload)
   }
+}
+
+/**
+ * SSH 远程模式事件外发（S1 挂钩，A2 权属）：
+ * - ConnectionStateChanged 由 S2 唯一产生（ConnectionManager.onStateChange →
+ *   broadcastConnectionState → EVENT 广播；S6 侧栏消费）；
+ * - RemoteServerLog 由 S4 桥接 server.log 帧产生（S2 连接层日志同路）。
+ * EVENT_CHANNELS 常量驱动成员校验：通道必须登记在 EVENT 契约全集内
+ * （防手滑外发到 HANDLE/SEND 通道）。
+ */
+const BROADCAST_EVENT_CHANNELS: ReadonlySet<string> = new Set(EVENT_CHANNELS)
+
+function broadcastEvent(channel: string, payload: unknown): void {
+  if (!BROADCAST_EVENT_CHANNELS.has(channel)) {
+    throw new Error(`broadcastEvent: ${channel} 不在 EVENT_CHANNELS 契约全集内`)
+  }
+  broadcast(channel, payload)
+}
+
+/** 连接状态变迁 → cwb:event:connection-state-changed【S2 唯一产生 / S6 消费】 */
+export function broadcastConnectionState(e: ConnectionStateChangedEvent): void {
+  broadcastEvent(IpcChannels.ConnectionStateChanged, e)
+}
+
+/** 远程 server 日志 → cwb:event:remote-server-log【S4 桥接（S2 连接层同路）/ S6 消费】 */
+export function broadcastRemoteServerLog(e: RemoteServerLogEvent): void {
+  broadcastEvent(IpcChannels.RemoteServerLog, e)
+}
+
+/**
+ * S1 接线桩：SSH 远程模式新 HANDLE 通道统一占位——invoke 即抛 NotImplemented
+ * （实现子任务落位后由真实 handler 替换，见 registerIpcHandlers 各注册处注释）。
+ */
+function notImplementedStub(channel: string, owner: string): never {
+  throw new Error(`NotImplemented: ${channel}（${owner} 实现前不可用）`)
 }
 
 /**
@@ -216,6 +254,12 @@ export interface AppContext {
   readonly localProxy: LocalProxyHandle
   /** v1.4 provider 解析（任务 providerId > 默认 > 不注入）→ ANTHROPIC_* env；测试直接调用 */
   resolveProviderEnv: (providerId: string | undefined, model: string | undefined) => Record<string, string> | undefined
+  /**
+   * SSH 远程连接管理器（S1 批0 接线桩注入 StubConnectionManager 占位；
+   * S2 以真实 ssh2 实现替换——A0=S1 桩+S2 实）。连接档案 CRUD/懒连接/断开/
+   * exec/sftp/forwardOut/forwardIn 经它承载。
+   */
+  readonly connection: ConnectionManager
 }
 
 export interface AppContextOptions {
@@ -225,6 +269,12 @@ export interface AppContextOptions {
   onTaskUpdate?: (record: TaskRecord) => void
   /** v1.2.0 应用设置变更旁路（托盘菜单/退出确认文案随语言切换刷新） */
   onSettingsChange?: (settings: AppSettings) => void
+  /**
+   * SSH 远程连接管理器注入缝（S1 批0）：组合根（main.ts）传入；缺省=
+   * StubConnectionManager 桩（全方法抛「S2 未实现」——registerIpcHandlers
+   * 无参路径/测试可用，接线完整性先行）。
+   */
+  connection?: ConnectionManager
 }
 
 /** 创建 app 上下文（含启动归一化 running→stopped）；registerIpcHandlers 默认调它 */
@@ -374,6 +424,10 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       broadcast(IpcChannels.CliOutput, { commandId, type: 'exit', exitCode }),
     language: mainLanguage
   })
+
+  // SSH 远程连接（S1 批0）：桩占位——S2 以真实 ssh2 ConnectionManager 替换（注入缝见
+  // AppContextOptions.connection；状态/日志事件届时经 broadcastConnectionState 等挂钩外送）
+  const connection = options.connection ?? new StubConnectionManager()
 
   // v1.2.0 skill 市场：只读本机 marketplace 目录（搜索/过滤）；安装与刷新复用 CLI 受控执行面
   const skillMarket = new SkillMarket(skillMarketHome ? { home: skillMarketHome } : {})
@@ -698,7 +752,8 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     importTasksFromSessions,
     appSettings,
     fontScanner,
-    appUpdate
+    appUpdate,
+    connection
   }
 }
 
@@ -886,6 +941,44 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   ipcMain.handle(IpcChannels.ProxyStatus, () => ctx.localProxy.status())
   ipcMain.handle(IpcChannels.ProxyStart, () => ctx.localProxy.start())
   ipcMain.handle(IpcChannels.ProxyStop, () => ctx.localProxy.stop())
+  // ── SSH 远程模式（S1 批0 接线桩：全部 NotImplemented，实现子任务见注释）────
+  // S2：连接档案 CRUD + 只读测试 + 懒连接/断开（connections-store/safeStorage/TOFU/分级文案）
+  ipcMain.handle(IpcChannels.ConnectionsList, () =>
+    notImplementedStub(IpcChannels.ConnectionsList, 'S2')
+  )
+  ipcMain.handle(IpcChannels.ConnectionsSave, (_e, _raw: unknown) =>
+    notImplementedStub(IpcChannels.ConnectionsSave, 'S2')
+  )
+  ipcMain.handle(IpcChannels.ConnectionsDelete, (_e, _id: unknown) =>
+    notImplementedStub(IpcChannels.ConnectionsDelete, 'S2')
+  )
+  ipcMain.handle(IpcChannels.ConnectionsTest, (_e, _id: unknown) =>
+    notImplementedStub(IpcChannels.ConnectionsTest, 'S2')
+  )
+  ipcMain.handle(IpcChannels.ConnectionsConnect, (_e, _id: unknown) =>
+    notImplementedStub(IpcChannels.ConnectionsConnect, 'S2')
+  )
+  ipcMain.handle(IpcChannels.ConnectionsDisconnect, (_e, _id: unknown) =>
+    notImplementedStub(IpcChannels.ConnectionsDisconnect, 'S2')
+  )
+  // S2：SFTP 目录浏览（3.1=C 注册对话框；payload {connectionId, path?}）
+  ipcMain.handle(IpcChannels.SftpBrowse, (_e, _connectionId: unknown, _path?: unknown) =>
+    notImplementedStub(IpcChannels.SftpBrowse, 'S2')
+  )
+  // S7：首连推送/升级 cwb-server（6.7=A；确认弹窗 UI=S6，本通道为 main 侧 promise 接口）
+  ipcMain.handle(IpcChannels.ServerInstall, (_e, _connectionId: unknown) =>
+    notImplementedStub(IpcChannels.ServerInstall, 'S7')
+  )
+  // S4：远程代理三通道（6.4=c；经 server 协议 proxy.* 帧转发，remote-proxy-glue 归 S4）
+  ipcMain.handle(IpcChannels.RemoteProxyStatus, (_e, _connectionId: unknown) =>
+    notImplementedStub(IpcChannels.RemoteProxyStatus, 'S4')
+  )
+  ipcMain.handle(IpcChannels.RemoteProxyConfigGet, (_e, _connectionId: unknown) =>
+    notImplementedStub(IpcChannels.RemoteProxyConfigGet, 'S4')
+  )
+  ipcMain.handle(IpcChannels.RemoteProxyConfigSet, (_e, _connectionId: unknown, _patch: unknown) =>
+    notImplementedStub(IpcChannels.RemoteProxyConfigSet, 'S4')
+  )
   // on（renderer send，无返回值）
   ipcMain.on(IpcChannels.PtyWrite, (_e, taskId: string, data: string) => {
     // v0.4.2 输入回显抑制：记录用户键入时刻（键入后 2s 内的 PTY 字节=TUI 重绘，不点亮 busy）

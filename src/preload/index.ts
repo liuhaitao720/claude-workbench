@@ -4,12 +4,18 @@ import type {
   AppSettings,
   AppUpdateInfo,
   AppUpdateProgressEvent,
+  ConnectionRecord,
+  ConnectionStateChangedEvent,
   CWBApi,
   CliOutputEvent,
   LocalProxyStatus,
   NotifyConfig,
   ProviderConfig,
   ProviderRegistryState,
+  RemoteProxyConfig,
+  RemoteProxyStatus,
+  RemoteServerLogEvent,
+  SftpBrowseResult,
   SkillInfo,
   SkillMarketEntry,
   SkillMarketplaceInfo,
@@ -78,9 +84,9 @@ const api: CWBApi = {
   importSkillFolder: (fromDir, target) =>
     ipcRenderer.invoke(IpcChannels.SkillsImport, fromDir, target) as Promise<SkillInfo>,
   removeSkill: (skill) => ipcRenderer.invoke(IpcChannels.SkillsRemove, skill) as Promise<void>,
-  // cli 执行（v0.5③）
-  runCliCommand: (command) =>
-    ipcRenderer.invoke(IpcChannels.CliRun, command) as Promise<{ commandId: string }>,
+  // cli 执行（v0.5③；M10 增可选 connectionId——缺省本机执行，既有调用零改动）
+  runCliCommand: (command, connectionId) =>
+    ipcRenderer.invoke(IpcChannels.CliRun, command, connectionId) as Promise<{ commandId: string }>,
   onCliOutput: (cb) => {
     const listener = (_e: unknown, ev: CliOutputEvent): void => cb(ev)
     ipcRenderer.on(IpcChannels.CliOutput, listener as never)
@@ -180,6 +186,44 @@ const api: CWBApi = {
     ipcRenderer.invoke(IpcChannels.ProxyStatus) as Promise<LocalProxyStatus>,
   startProxy: () => ipcRenderer.invoke(IpcChannels.ProxyStart) as Promise<LocalProxyStatus>,
   stopProxy: () => ipcRenderer.invoke(IpcChannels.ProxyStop) as Promise<LocalProxyStatus>,
+  // SSH 远程连接（S1 契约桥接；handler 归属见 ipc-channels.ts 注释——S2/S4/S7）
+  listConnections: () =>
+    ipcRenderer.invoke(IpcChannels.ConnectionsList) as Promise<ConnectionRecord[]>,
+  saveConnection: (connection) =>
+    ipcRenderer.invoke(IpcChannels.ConnectionsSave, connection) as Promise<ConnectionRecord>,
+  removeConnection: (id) =>
+    ipcRenderer.invoke(IpcChannels.ConnectionsDelete, id) as Promise<void>,
+  testConnection: (id) =>
+    ipcRenderer.invoke(IpcChannels.ConnectionsTest, id) as Promise<{ ok: boolean; error?: string }>,
+  connectConnection: (id) =>
+    ipcRenderer.invoke(IpcChannels.ConnectionsConnect, id) as Promise<void>,
+  disconnectConnection: (id) =>
+    ipcRenderer.invoke(IpcChannels.ConnectionsDisconnect, id) as Promise<void>,
+  browseRemoteDir: (connectionId, path) =>
+    ipcRenderer.invoke(IpcChannels.SftpBrowse, connectionId, path) as Promise<SftpBrowseResult>,
+  installRemoteServer: (connectionId) =>
+    ipcRenderer.invoke(IpcChannels.ServerInstall, connectionId) as Promise<{
+      ok: boolean
+      error?: string
+    }>,
+  onConnectionState: (cb) => {
+    const listener = (_e: unknown, ev: ConnectionStateChangedEvent): void => cb(ev)
+    ipcRenderer.on(IpcChannels.ConnectionStateChanged, listener as never)
+    return () => ipcRenderer.removeListener(IpcChannels.ConnectionStateChanged, listener as never)
+  },
+  onRemoteServerLog: (cb) => {
+    const listener = (_e: unknown, ev: RemoteServerLogEvent): void => cb(ev)
+    ipcRenderer.on(IpcChannels.RemoteServerLog, listener as never)
+    return () => ipcRenderer.removeListener(IpcChannels.RemoteServerLog, listener as never)
+  },
+  getRemoteProxyStatus: (connectionId) =>
+    ipcRenderer.invoke(IpcChannels.RemoteProxyStatus, connectionId) as Promise<RemoteProxyStatus>,
+  setRemoteProxyConfig: (connectionId, patch) =>
+    ipcRenderer.invoke(
+      IpcChannels.RemoteProxyConfigSet,
+      connectionId,
+      patch
+    ) as Promise<RemoteProxyConfig>,
   reportSmoke: (payload) => {
     void ipcRenderer.send(IpcChannels.SmokeReport, payload)
   }

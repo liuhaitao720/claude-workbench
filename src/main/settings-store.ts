@@ -9,7 +9,17 @@ export interface AppSettingsChange {
  * v0.9 应用设置存储（NotifyService 先例：userData/settings.json 原子写+容错 load）。
  * closeToTray 默认 true（v0.5⑥ 行为不变）；launchAtLogin 默认 false。
  * v1.2.0 增加 language（仅 main 侧托盘/退出确认取文案用，界面的权威在 renderer）。
+ * SSH 远程模式（S1 批0）新增侧栏持久化键：sidebarWidth/sidebarCollapsedPersist/
+ * serverNodesCollapsed——main 侧仅容错存取不解释（消费在 S6 renderer），缺省不落键
+ * =既有行为不变（照 proxyAutoStart 条件展开先例）。
  */
+
+/** serverNodesCollapsed 形状校验：Record<string, boolean>（连接档案 id → 折叠态） */
+function isServerNodesCollapsed(v: unknown): v is Record<string, boolean> {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false
+  return Object.values(v).every((x) => typeof x === 'boolean')
+}
+
 export class AppSettingsStore {
   private cache: AppSettings | null = null
 
@@ -37,7 +47,17 @@ export class AppSettingsStore {
           // v1.2.1 缺省开启（用户要求升级无需手动点按钮；想要手动的人可在设置里关）
           autoUpdate: typeof rec['autoUpdate'] === 'boolean' ? rec['autoUpdate'] : true,
           // v1.4 本地代理随应用启动（缺省不开）
-          ...(typeof rec['proxyAutoStart'] === 'boolean' ? { proxyAutoStart: rec['proxyAutoStart'] } : {})
+          ...(typeof rec['proxyAutoStart'] === 'boolean' ? { proxyAutoStart: rec['proxyAutoStart'] } : {}),
+          // SSH 远程模式侧栏持久化键（S1 批0；S6 消费——缺省不落键=现行为）
+          ...(typeof rec['sidebarWidth'] === 'number' && Number.isFinite(rec['sidebarWidth'])
+            ? { sidebarWidth: rec['sidebarWidth'] }
+            : {}),
+          ...(typeof rec['sidebarCollapsedPersist'] === 'boolean'
+            ? { sidebarCollapsedPersist: rec['sidebarCollapsedPersist'] }
+            : {}),
+          ...(isServerNodesCollapsed(rec['serverNodesCollapsed'])
+            ? { serverNodesCollapsed: { ...rec['serverNodesCollapsed'] } }
+            : {})
         }
       }
     } catch {

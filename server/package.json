@@ -1,0 +1,9 @@
+{
+  "name": "claude-workbench-server",
+  "version": "0.1.0",
+  "description": "cwb-server —— VM 侧任务 PTY 宿主与协议服务端（SSH 远程模式；S1 批0 骨架，S3 实现功能）",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

@@ -1,5 +1,6 @@
 import { spawn as ptySpawn, type IPty } from 'node-pty'
 import type { PtyDataEvent } from '../shared/types'
+import type { PtyBackend } from './pty-backend'
 import {
   IS_WIN,
   invalidatePlatformDiscovery,
@@ -148,8 +149,15 @@ export interface PtyManagerCallbacks {
   onExit: (taskId: string) => void
 }
 
-/** 按 taskId 管理的 claude PTY 集合；输出/退出经构造注入回调外送（不直接依赖 store，便于测试） */
-export class PtyManager {
+/**
+ * 按 taskId 管理的 claude PTY 集合；输出/退出经构造注入回调外送（不直接依赖 store，便于测试）。
+ *
+ * SSH 远程模式（S1 批0）：本类即 PTY 后端契约的 Local 实现——`implements PtyBackend`
+ * （src/main/pty-backend.ts）在编译期锁定公共面与契约逐一对齐；远程实现=S4 的
+ * RemotePtyManager（killAllTrees=detach-only，见契约 Javadoc）。除 implements 声明外
+ * 零改动——本地行为不变。
+ */
+export class PtyManager implements PtyBackend {
   private readonly ptys = new Map<string, IPty>()
 
   /**

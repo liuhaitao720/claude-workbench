@@ -9,10 +9,16 @@ export interface ProjectRecord {
   id: string
   /** 显示名——renameProject 仅改此字段，绝不改动磁盘目录名 */
   name: string
-  /** 项目磁盘目录绝对路径（注册后不可变） */
+  /** 项目磁盘目录绝对路径（注册后不可变）；远程项目=VM 内 Linux 绝对路径字符串 */
   dir: string
   /** 注册时检测的 git 状态 */
   isGit: boolean
+  /**
+   * SSH 远程归属（7.1=A，S1 批0）：绑定的连接档案 id（ConnectionRecord.id）；
+   * undefined=本地项目（存量记录零迁移，9.1=A）。远程路由（S4）按此分流
+   * AppContext.pty 到本地/远程 backend。
+   */
+  connectionId?: string
   /** ISO 8601 */
   createdAt: string
 }
@@ -185,6 +191,113 @@ export interface LocalProxyStatus {
   stats: LocalProxyStats
 }
 
+// ── SSH 远程模式契约（S1 批0 骨架；实现/消费子任务号见各 JSDoc）──────────
+
+/**
+ * SSH 连接档案【S2 connections-store 持久化（userData/connections.json，
+ * 照 providers.json 原子写+容错读先例）/ S6 设置中心编辑与侧栏服务器节点展示】
+ * （1.2=A，字段集=确认单 1.2；认证=1.3=B=B 私钥+密码）。
+ */
+export interface ConnectionRecord {
+  /** uuid（保存时 id 空串=新增，照 ProviderConfig 先例；S2 分配） */
+  id: string
+  /** 显示名（列表/侧栏服务器节点用） */
+  name: string
+  /** SSH 主机（VM 地址） */
+  host: string
+  /** SSH 端口（通常 22；S2 校验合法端口） */
+  port: number
+  /** 登录用户名 */
+  user: string
+  /** 认证方式（1.3=B：私钥+密码两种） */
+  authMethod: 'key' | 'password'
+  /** 私钥文件本机路径（authMethod='key' 时；S2 校验存在性） */
+  keyPath?: string
+  /**
+   * base64(safeStorage 密文)——authMethod='password' 时的 SSH 密码
+   * （1.4=A：Electron safeStorage 加密存 userData，凭据不落明文不入仓库）。
+   * 仅 S2 connections-store 读写；renderer 经 saveConnection 传入后不回读展示。
+   */
+  passwordEncrypted?: string
+  /**
+   * TOFU 首连确认后锁定的 host key 指纹（1.5=A）；后续指纹变更阻断+告警（S2）。
+   */
+  lastHostKeyFingerprint?: string
+  /** ISO 8601 */
+  createdAt: string
+}
+
+/**
+ * 连接认证材料（S1 定形状 / S2 connect 时由 ConnectionRecord 解出使用；不落盘）。
+ * passwordEncrypted 同 ConnectionRecord 字段语义（safeStorage 密文 base64）。
+ */
+export type ConnectionAuth =
+  | { method: 'key'; keyPath: string }
+  | { method: 'password'; passwordEncrypted: string }
+
+/**
+ * 连接运行时状态（5.4=A：独立运行时维度，不写 tasks.json——断连是瞬态可自愈，
+ * 不污染持久状态机）【S2 唯一产生 / S4 路由与 S6 状态着色消费】。
+ */
+export type ConnectionRuntimeState = 'connected' | 'connecting' | 'reconnecting' | 'offline'
+
+/**
+ * 连接状态变迁事件载荷【S2 唯一产生（经 S1 ipc.ts broadcastConnectionState 挂钩
+ * → cwb:event:connection-state-changed）/ S6 侧栏服务器节点与断连冻结层消费】（A2 权属）。
+ */
+export interface ConnectionStateChangedEvent {
+  connectionId: string
+  state: ConnectionRuntimeState
+  /** 自动重连尝试序号（state='reconnecting' 时存在；5.7=A 指数退避 1s→2s→5s→10s 封顶） */
+  attempt?: number
+}
+
+/**
+ * 远程 server 日志事件载荷【S3 产生（server.log 帧，脱敏元数据）/ S4 桥接为
+ * cwb:event:remote-server-log / S6 安装升级弹窗消费】。8.1=A：仅元数据——
+ * 终端内容（代码/可能的密钥）不落盘不进日志。
+ */
+export interface RemoteServerLogEvent {
+  connectionId: string
+  level: 'info' | 'warn' | 'error'
+  message: string
+}
+
+/**
+ * SFTP 目录浏览结果【S2 实现（ConnectionManager.sftp.list）/ S6 远程项目注册
+ * 对话框的目录浏览器消费（3.1=C 手输+SFTP 浏览器）】。
+ */
+export interface SftpBrowseResult {
+  ok: boolean
+  /** 浏览成功的远端当前绝对路径（缺省请求=远端 home） */
+  path?: string
+  /** 目录条目（排序由 S2 定；不含 . / ..） */
+  entries?: Array<{ name: string; isDir: boolean }>
+  /** ok=false 时的分级错误文案（2.3=A，i18n conn.err.*） */
+  error?: string
+}
+
+/**
+ * 远程代理配置（6.4=c：代理由远程 server 内置，配置存 VM 侧，客户端经 SSH/
+ * server 协议读写）【S4 定字段终态并实现协议转发 / S6 设置页「远程代理」消费】。
+ */
+export interface RemoteProxyConfig {
+  /** 外部代理 URL（空/缺省=直连；路由语义沿用 v1.4 local-proxy） */
+  proxyUrl?: string
+}
+
+/** 远程代理状态（6.4=c；统计口径同 LocalProxyStats）【S4 经协议 proxy.status 透出】 */
+export interface RemoteProxyStatus {
+  running: boolean
+  /** VM 侧监听端口（running 时存在） */
+  port?: number
+  /** ISO 启动时刻 */
+  startedAt?: string
+  stats: LocalProxyStats
+  /** 当前生效配置（proxy.config.get 读取） */
+  config?: RemoteProxyConfig
+}
+
 /** 应用自更新进度事件【v1.1.0：下载/校验/就绪/安装中/出错】 */
 export type AppUpdateProgressEvent =
   | { phase: 'downloading'; percent: number }
@@ -220,6 +333,16 @@ export interface AppSettings {
   /** v1.4 本地代理随应用启动（缺省 false；运行期间任务 HTTP_PROXY 统一指向
    * 本地代理，停止则回退直接注入 provider 代理配置） */
   proxyAutoStart?: boolean
+  /**
+   * SSH 远程模式侧栏持久化键（S1 批0 锁键，3.7/3.8/3.10；S6 消费——renderer
+   * 写入经 setAppSettings，main 侧仅存取不解释）。缺省不落键=现行为。
+   */
+  /** 侧栏宽度像素（3.7=A 可拖拽调宽 240–480，跨会话记住） */
+  sidebarWidth?: number
+  /** 整栏折叠态持久化（3.10=A：推翻 A17「折叠态刷新重置」） */
+  sidebarCollapsedPersist?: boolean
+  /** 服务器节点折叠态（3.8=A：连接档案 id → 折叠/展开） */
+  serverNodesCollapsed?: Record<string, boolean>
 }
 
 /** 任务活动状态事件（v3.2：'busy'=执行中黄转圈 | 'awaiting'=待答复红 | 'idle'=就绪绿） */
@@ -380,8 +503,12 @@ export interface CWBApi {
   removeSkill(skill: SkillInfo): Promise<void>
 
   // ── cli 执行（3，v0.5③）────────────────────
-  /** 校验并启动 claude CLI 命令（独立隐藏 PTY；白名单 {plugin,update,upgrade,mcp}）→ commandId */
-  runCliCommand(command: string): Promise<{ commandId: string }>
+  /**
+   * 校验并启动 claude CLI 命令（独立隐藏 PTY；白名单 {plugin,update,upgrade,mcp}）→ commandId。
+   * M10（SSH 远程，S1 加法签名）：可选 connectionId——指定时命令经 SSH 在该连接的
+   * VM 内执行（S5 路由实现）；缺省=本机执行（既有调用零改动零行为变化）。
+   */
+  runCliCommand(command: string, connectionId?: string): Promise<{ commandId: string }>
   /** CLI 输出订阅（disposer 模式同 onPtyData） */
   onCliOutput(cb: (e: CliOutputEvent) => void): Unsubscribe
   /** 终止 CLI 命令（弹窗关闭防孤儿） */
@@ -508,6 +635,47 @@ export interface CWBApi {
   startProxy(): Promise<LocalProxyStatus>
   /** 停止（幂等；活跃连接自然排空） */
   stopProxy(): Promise<LocalProxyStatus>
+
+  // ── SSH 远程连接（12+1 改，S1 批0 契约；handler 归属见 ipc-channels 注释）──
+  /** 全部连接档案（设置中心「远程连接」与侧栏服务器节点的数据源）【S2】 */
+  listConnections(): Promise<ConnectionRecord[]>
+  /**
+   * 新增/编辑连接档案（id 空串=新增，main 侧校验+分配 uuid；密码字段经
+   * safeStorage 加密落盘，回读不返回明文）【S2】
+   */
+  saveConnection(connection: ConnectionRecord): Promise<ConnectionRecord>
+  /**
+   * 删除连接档案（3.9=A 级联语义：仅删客户端记录与档案，不删 VM 内任何文件；
+   * 其远程项目记录的处理由 S2 定）【S2】
+   */
+  removeConnection(id: string): Promise<void>
+  /** 只读连通性测试（不改变连接状态；失败返回 ok:false + 分级文案 error）【S2】 */
+  testConnection(id: string): Promise<{ ok: boolean; error?: string }>
+  /** 建立连接（懒连接 2.5=a；状态迁移经 onConnectionState 推送）【S2】 */
+  connectConnection(id: string): Promise<void>
+  /** 断开连接（幂等；5.9=b：断开不杀远端会话，server 保活）【S2】 */
+  disconnectConnection(id: string): Promise<void>
+  /** SFTP 目录浏览（path 缺省=远端 home；远程项目注册对话框路径选择用，3.1=C）【S2】 */
+  browseRemoteDir(connectionId: string, path?: string): Promise<SftpBrowseResult>
+  /**
+   * 首连推送/升级 cwb-server（6.7=A；进度经 onRemoteServerLog 展示，安装确认
+   * 弹窗 UI 归 S6，本方法为 main 侧 promise 接口）【S7】
+   */
+  installRemoteServer(connectionId: string): Promise<{ ok: boolean; error?: string }>
+  /** 连接状态订阅（disposer 模式同 onPtyData；唯一产生者=S2，A2 权属） */
+  onConnectionState(cb: (e: ConnectionStateChangedEvent) => void): Unsubscribe
+  /** 远程 server 日志订阅（disposer 模式；server.log 帧脱敏元数据桥接，8.1=A） */
+  onRemoteServerLog(cb: (e: RemoteServerLogEvent) => void): Unsubscribe
+  /** VM 侧代理状态（6.4=c；经 server 协议 proxy.status 透出）【S4】 */
+  getRemoteProxyStatus(connectionId: string): Promise<RemoteProxyStatus>
+  /**
+   * VM 侧代理配置写入并返回保存后全量（A5 回环验收：set→get 一致；
+   * 设置页「远程代理」用）【S4】
+   */
+  setRemoteProxyConfig(
+    connectionId: string,
+    patch: Partial<RemoteProxyConfig>
+  ): Promise<RemoteProxyConfig>
 
   // ── smoke（1，测试专用）──────────────────────
   /** S4 冒烟回执：renderer 收到 PTY 数据后回报 main */

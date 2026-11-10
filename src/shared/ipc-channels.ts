@@ -64,7 +64,19 @@ const HANDLE = {
   // v1.4 本地代理（纯隧道）：状态/启动/停止
   ProxyStatus: 'cwb:proxy:status',
   ProxyStart: 'cwb:proxy:start',
-  ProxyStop: 'cwb:proxy:stop'
+  ProxyStop: 'cwb:proxy:stop',
+  // SSH 远程模式（S1 批0 落通道契约；S1 先注册 NotImplemented 桩，实现归属如下注释）
+  ConnectionsList: 'cwb:connections:list', // S2：连接档案读（connections-store）
+  ConnectionsSave: 'cwb:connections:save', // S2：新增/编辑（safeStorage 加密落盘）
+  ConnectionsDelete: 'cwb:connections:delete', // S2：删除档案（不删 VM 内文件）
+  ConnectionsTest: 'cwb:connections:test', // S2：只读连通性测试（分级错误文案）
+  ConnectionsConnect: 'cwb:connections:connect', // S2：懒连接（2.5）
+  ConnectionsDisconnect: 'cwb:connections:disconnect', // S2：断开（5.9=b 不杀远端会话）
+  SftpBrowse: 'cwb:sftp:browse', // S2：SFTP 目录浏览（3.1=C 注册对话框）
+  ServerInstall: 'cwb:server:install', // S7：首连推送/升级 cwb-server（6.7）
+  RemoteProxyStatus: 'cwb:remote-proxy:status', // S4：VM 侧代理状态（6.4=c 协议转发）
+  RemoteProxyConfigGet: 'cwb:remote-proxy:config-get', // S4：VM 侧代理配置读
+  RemoteProxyConfigSet: 'cwb:remote-proxy:config-set' // S4：VM 侧代理配置写（A5 回环）
 } as const
 
 const SEND = {
@@ -81,7 +93,11 @@ const EVENT = {
   TaskActivity: 'cwb:event:task-activity',
   CliOutput: 'cwb:event:cli-output',
   /** v1.1.0 应用自更新进度（downloading/verifying/ready/installing/error） */
-  AppUpdateProgress: 'cwb:event:app-update-progress'
+  AppUpdateProgress: 'cwb:event:app-update-progress',
+  /** SSH 远程连接状态变迁（S1 落通道：S2 唯一产生，经 ipc.ts broadcastConnectionState；S6 侧栏消费） */
+  ConnectionStateChanged: 'cwb:event:connection-state-changed',
+  /** 远程 server 日志（S1 落通道：S3 server.log 帧→S4 桥接 broadcastRemoteServerLog；脱敏元数据，8.1=A） */
+  RemoteServerLog: 'cwb:event:remote-server-log'
 } as const
 
 export const IpcChannels = { ...HANDLE, ...SEND, ...EVENT } as const
