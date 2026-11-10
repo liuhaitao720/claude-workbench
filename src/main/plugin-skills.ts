@@ -3,6 +3,14 @@ import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import type { SkillInfo } from '../shared/types'
 import { describeSkillDir, isSkillDir, scanSkillDirs } from './skill-files'
+import {
+  activationOf,
+  MAX_DESCRIPTION_LENGTH,
+  parseSkillActivation,
+  parseSkillFrontmatter
+} from './skill-files'
+import { posixQuote, remoteHomeOf } from './cli-runner'
+import type { ConnectionManager } from './ssh/connection-manager'
 
 /**
  * 插件 skill 读取（v1.2.1）。
@@ -102,6 +110,105 @@ export class PluginSkills {
     }))
   }
 
+  // ── S5 远端读侧（6.1=a）：registry/settings/manifest 经 RemoteClaudeHomeReader ──
+
+  /** 远端已安装插件 id 全集（启用/停用白名单来源——远程上下文经 SSH 校验） */
+  async installedIdsRemote(reader: RemoteClaudeHomeReader): Promise<string[]> {
+    const registry = parseJsonOrNull<{ plugins?: unknown }>(
+      await reader.readTextFile(`${reader.home}/.claude/plugins/installed_plugins.json`)
+    )
+    const plugins = registry?.plugins
+    if (typeof plugins !== 'object' || plugins === null) return []
+    return Object.keys(plugins as Record<string, unknown>).filter(isValidPluginId)
+  }
+
+  /** 远端全部插件 skill（与本机 list() 同语义：多 scope 去重、停用标注、manifest 声明路径越界丢弃） */
+  async listRemote(reader: RemoteClaudeHomeReader): Promise<SkillInfo[]> {
+    const registry = parseJsonOrNull<{ plugins?: unknown }>(
+      await reader.readTextFile(`${reader.home}/.claude/plugins/installed_plugins.json`)
+    )
+    const plugins = registry?.plugins
+    if (typeof plugins !== 'object' || plugins === null) return []
+    const enabled = await this.enabledPluginsRemote(reader)
+    const seen = new Set<string>()
+    const out: SkillInfo[] = []
+    for (const [pluginId, raw] of Object.entries(plugins as Record<string, unknown>)) {
+      if (!isValidPluginId(pluginId)) continue
+      for (const entry of entriesOf(raw)) {
+        if (typeof entry.installPath !== 'string' || entry.installPath === '') continue
+        for (const skill of await this.discoverRemote(reader, entry.installPath, pluginId, enabled.has(pluginId))) {
+          const key = skill.dir.toLowerCase()
+          if (seen.has(key)) continue
+          seen.add(key)
+          out.push(skill)
+        }
+      }
+    }
+    return out
+  }
+
+  /** 远端插件检出目录下的技能（标准 skills/* + manifest 声明路径——目录存在性/越界校验同本机） */
+  private async discoverRemote(
+    reader: RemoteClaudeHomeReader,
+    installPath: string,
+    pluginId: string,
+    pluginEnabled: boolean
+  ): Promise<SkillInfo[]> {
+    const dirs = new Set<string>()
+    const skillsRoot = `${installPath}/skills`
+    if (await reader.exists(skillsRoot)) {
+      for (const name of await reader.listDirs(skillsRoot)) dirs.add(`${skillsRoot}/${name}`)
+    }
+    for (const declared of await this.declaredSkillPathsRemote(reader, installPath)) {
+      if (await reader.exists(`${declared}/SKILL.md`)) dirs.add(declared)
+      else for (const name of await reader.listDirs(declared)) dirs.add(`${declared}/${name}`)
+    }
+    const out: SkillInfo[] = []
+    for (const dir of dirs) {
+      const text = await reader.readTextFile(`${dir}/SKILL.md`)
+      if (text === null) continue // 无 SKILL.md 的目录不是 skill（同 scanSkillDirs+isSkillDir）
+      out.push({ ...describeSkillFromText(dir, 'plugin', text), pluginId, pluginEnabled })
+    }
+    return out
+  }
+
+  /** 远端 plugin.json 的 skills 声明（越界声明丢弃——manifest 属外部不可信输入，同本机） */
+  private async declaredSkillPathsRemote(
+    reader: RemoteClaudeHomeReader,
+    installPath: string
+  ): Promise<string[]> {
+    const manifest = parseJsonOrNull<{ skills?: unknown }>(
+      await reader.readTextFile(`${installPath}/.claude-plugin/plugin.json`)
+    )
+    const raw = manifest?.skills
+    const list = typeof raw === 'string' ? [raw] : Array.isArray(raw) ? raw : []
+    const root = posixResolve(installPath)
+    const out: string[] = []
+    for (const item of list) {
+      if (typeof item !== 'string' || item.trim() === '') continue
+      // 与本机 node:path.resolve 同语义：绝对声明路径替换 root（→ 越界被下方校验拒绝）
+      const abs = item.startsWith('/') ? posixResolve(item) : posixResolve(`${root}/${item}`)
+      if (abs !== root && abs.startsWith(`${root}/`) && (await reader.exists(abs))) {
+        out.push(abs)
+      }
+    }
+    return out
+  }
+
+  /** 远端 settings.json 的 enabledPlugins */
+  private async enabledPluginsRemote(reader: RemoteClaudeHomeReader): Promise<Set<string>> {
+    const settings = parseJsonOrNull<{ enabledPlugins?: unknown }>(
+      await reader.readTextFile(`${reader.home}/.claude/settings.json`)
+    )
+    const map = settings?.enabledPlugins
+    const out = new Set<string>()
+    if (typeof map !== 'object' || map === null) return out
+    for (const [id, value] of Object.entries(map as Record<string, unknown>)) {
+      if (value === true && isValidPluginId(id)) out.add(id)
+    }
+    return out
+  }
+
   /**
    * plugin.json 的 skills 声明 → 绝对路径（保持在 installPath 之内才采纳）。
    * manifest 来自第三方仓库，属外部不可信输入；`../../` 之类的越界声明直接丢弃。
@@ -143,4 +250,112 @@ export class PluginSkills {
       return null
     }
   }
+}
+
+/** 远端读侧 JSON 解析（readJson 的文本入参版——文本为 null/损坏 → null） */
+function parseJsonOrNull<T>(text: string | null): T | null {
+  if (text === null) return null
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    return null
+  }
+}
+
+/** POSIX 路径归一（'.'/'..' 折叠，不加盘符——远端声明路径越界校验用；Windows 客户端上 node:path.resolve 会按 win32 语义失真） */
+function posixResolve(p: string): string {
+  const abs = p.startsWith('/')
+  const out: string[] = []
+  for (const part of p.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      out.pop()
+      continue
+    }
+    out.push(part)
+  }
+  return `${abs ? '' : '/'}${out.join('/')}`
+}
+// ── S5 远端 ~/.claude 读侧（6.1=a：skills/插件清单/市场共用的最小只读面）──────
+
+/**
+ * 远端 ~/.claude 只读数据源（S5 6.1=a）。定义为 exec/find/cat 命令面（全部
+ * /usr/bin 标准件——无 nvm PATH 依赖，不包 bash -ic）；skills-store/skill-market
+ * 经此读取 VM 侧目录，本机模式不经此（行为不变）。
+ * 放在 plugin-skills（skills 两模块的下层，无反向依赖）——避免 skills-store ↔
+ * plugin-skills 值级循环。
+ */
+export interface RemoteClaudeHomeReader {
+  /** 远端 $HOME（~/.claude 前缀由此拼出） */
+  readonly home: string
+  /** 列 dir 的一层子目录名（目录/symlink 目录；不存在/失败 → 空） */
+  listDirs(dir: string): Promise<string[]>
+  /** 路径存在性（文件或目录） */
+  exists(path: string): Promise<boolean>
+  /** 读文本文件（失败/不存在 → null） */
+  readTextFile(path: string): Promise<string | null>
+}
+
+/** 打开远端读侧：解析 $HOME 后返回带 home 的 reader（每次调用现开——无失效缓存问题） */
+export async function openRemoteClaudeHome(
+  connection: ConnectionManager,
+  connectionId: string
+): Promise<RemoteClaudeHomeReader> {
+  const home = await remoteHomeOf(connection, connectionId)
+  const exec = (command: string): Promise<{ code: number; stdout: string; stderr: string }> =>
+    connection.exec(connectionId, command)
+  return {
+    home,
+    async listDirs(dir) {
+      // \( -type d -o -type l \)：目录与 symlink 目录（与 scanSkillDirs 的受理面一致）
+      const r = await exec(
+        `find ${posixQuote(dir)} -mindepth 1 -maxdepth 1 \\( -type d -o -type l \\) -printf '%f\\n'`
+      )
+      if (r.code !== 0) return []
+      return r.stdout
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l !== '')
+    },
+    async exists(path) {
+      try {
+        return (await exec(`test -e ${posixQuote(path)}`)).code === 0
+      } catch {
+        return false
+      }
+    },
+    async readTextFile(path) {
+      const r = await exec(`cat ${posixQuote(path)}`)
+      return r.code === 0 ? r.stdout : null
+    }
+  }
+}
+
+/**
+ * SKILL.md 原文 → SkillInfo（远端描述；与 skill-files.describeSkillDir 同语义——
+ * frontmatter/激活方式/截断全一致，仅数据源从本机 fs 换为已取回的文本）。
+ */
+export function describeSkillFromText(
+  dir: string,
+  source: SkillInfo['source'],
+  text: string,
+  projectId?: string
+): SkillInfo {
+  const frontmatter = parseSkillFrontmatter(text)
+  return {
+    name: frontmatter['name']?.trim() || posixBasename(dir),
+    description: (frontmatter['description'] ?? '').slice(0, MAX_DESCRIPTION_LENGTH),
+    ...(frontmatter['version'] ? { version: frontmatter['version'] } : {}),
+    ...(frontmatter['author'] ? { author: frontmatter['author'] } : {}),
+    source,
+    ...(source === 'project' && projectId !== undefined ? { projectId } : {}),
+    activation: activationOf(parseSkillActivation(text)),
+    dir
+  }
+}
+
+/** POSIX basename（远端路径恒 / 分隔——Windows 客户端上 node:path.win32.basename 会失真） */
+function posixBasename(p: string): string {
+  const parts = p.split('/')
+  return parts[parts.length - 1] !== '' ? parts[parts.length - 1]! : parts[parts.length - 2] ?? p
 }

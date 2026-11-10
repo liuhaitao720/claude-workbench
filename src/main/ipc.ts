@@ -20,7 +20,13 @@ import type {
 } from '../shared/types'
 import { checkClaudeUpdate, fetchClaudeChangelog, getClaudeVersionInfo, installClaudeCli } from './claude-version'
 import { AppUpdater } from './app-updater'
-import { CliRunner } from './cli-runner'
+import {
+  CliRunner,
+  checkClaudeUpdateRemote,
+  installClaudeCliRemote,
+  posixQuote,
+  remoteClaudeVersion
+} from './cli-runner'
 import { isGitRepo, worktreeAdd, worktreeRemove } from './isolation'
 import { countLiveRunningTasks } from './running-count'
 import { AppSettingsStore } from './settings-store'
@@ -34,9 +40,13 @@ import { mainLanguage, setMainLanguage } from './language'
 import { PtyManager, buildNewSessionArgs, buildResumeArgs } from './pty-manager'
 import type { PtyBackend } from './pty-backend'
 import { RemotePtyHub } from './remote-pty'
-import { importTasksFromSessionsImpl } from './session-import'
+import {
+  createRemoteSessionReader,
+  importTasksFromSessionsImpl,
+  type ListSessionsOptions
+} from './session-import'
 import { SkillsStore } from './skills-store'
-import { PluginSkills, isValidPluginId } from './plugin-skills'
+import { PluginSkills, isValidPluginId, openRemoteClaudeHome } from './plugin-skills'
 import { SkillMarket, validateInstallTarget } from './skill-market'
 import { startTaskActivityServer, type TaskActivityHandle } from './task-activity'
 import { TaskStore } from './task-store'
@@ -229,7 +239,12 @@ export interface AppContext {
   readonly notify: NotifyService
   /** smoke:report 回执累积（S4：renderer→main 冒烟回执；编排侧轮询消费） */
   readonly smokeReports: string[]
-  addProject(dir: string): Promise<ProjectRecord>
+  /**
+   * 注册项目（S5 远程化 3.1=C/7.1）：connectionId 缺省=本机路径（行为逐字节不变）；
+   * 非空=远程注册——已连接则远端存在性/git 检测（test -d）+ 立即会话导入，
+   * 未连接则登记挂起（连接成功事件补跑，3.12=a）。
+   */
+  addProject(dir: string, connectionId?: string): Promise<ProjectRecord>
   removeProject(id: string): Promise<void>
   renameProject(id: string, name: string): Promise<ProjectRecord>
   createTask(projectId: string, name: string, opts: CreateTaskOptions): Promise<TaskRecord>
@@ -574,7 +589,13 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
 
   // v0.5③ skill 管理（只读扫描用户级+项目级；v1.2.1 增加插件级；移除走回收站+realpath 归属校验）
   const pluginSkills = new PluginSkills(skillMarketHome ? { home: () => skillMarketHome } : {})
-  const skills = new SkillsStore({ projects: () => projects.list(), pluginSkills })
+  // S5：远程项目目录在 VM——本机 fs 扫描其 .claude/skills 无意义（开发机同路径会读到
+  // 错误一侧），本机扫描只含本地项目；远程上下文的 skills 展示走 SkillsStore.listRemote
+  const skills = new SkillsStore({
+    projects: () =>
+      projects.list().filter((p) => p.connectionId === undefined || p.connectionId === ''),
+    pluginSkills
+  })
 
   // v0.5③ CLI 命令执行器：独立隐藏 PTY，输出仅走 cwb:event:cli-output（不进 PtyData/noteBytes）
   const cli = new CliRunner({
@@ -590,22 +611,128 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   /**
    * v0.9 S13 会话导入：持久化经 importTasksFromSessionsImpl，广播在此（renameTask 先例）。
    * renderer 任务列表经 onTaskUpdate 推送自动出现导入任务。
+   * S5 6.2=a：远程项目（project.connectionId 非空）自动换远端数据源
+   * （createRemoteSessionReader：SFTP 语义经 exec find/head 实现，HOME 根解析）——
+   * 解析/落库/广播链路同本机。
    */
   async function importTasksFromSessions(projectId: string): Promise<TaskRecord[]> {
-    const added = await importTasksFromSessionsImpl(projectId, projects, tasks)
+    const project = projects.get(projectId)
+    const remoteCid =
+      project?.connectionId !== undefined && project.connectionId !== ''
+        ? project.connectionId
+        : undefined
+    let opts: ListSessionsOptions = {}
+    if (remoteCid !== undefined) {
+      opts = {
+        reader: createRemoteSessionReader(connection, remoteCid),
+        resolveProjectsRoot: async () => {
+          const r = await connection.exec(remoteCid, `printf %s "$HOME"`)
+          const home = r.stdout
+            .trim()
+            .split('\n')
+            .map((l) => l.trim())
+            .filter((l) => l !== '')
+            .pop() ?? ''
+          if (home === '') throw new Error('remote HOME unavailable')
+          return `${home}/.claude/projects`
+        }
+      }
+    }
+    const added = await importTasksFromSessionsImpl(projectId, projects, tasks, opts)
     for (const record of added) broadcastTaskUpdate(record)
     return added
   }
 
-  async function addProject(dir: string): Promise<ProjectRecord> {
-    const record = projects.add(dir, isGitRepo(dir))
-    // v0.9 S13：打开目录（注册项目）即自动导入该目录的 claude 历史会话（幂等——重复
-    // addProject 同 dir 返回既有记录，再导入亦零新增）。导入是尽力而为，失败不阻断注册
-    // （可经 cwb:tasks:import-from-sessions 手动重试）。
+  /**
+   * S5 3.12=a 远程会话导入的挂起/补跑：项目记录即挂起登记（带 connectionId 的项目
+   * 天然构成 deferredImports——重启不丢），连接成功事件统一触发幂等增量补跑
+   * （每次连接成功可再增量刷新；importTasksFromSessionsImpl 按 sessionId 全局查重）。
+   * in-flight 去重防同连接并发补跑。
+   */
+  const importingConnections = new Set<string>()
+  const runDeferredImports = async (connectionId: string): Promise<void> => {
+    if (importingConnections.has(connectionId)) return
+    importingConnections.add(connectionId)
     try {
-      await importTasksFromSessions(record.id)
-    } catch {
-      // 扫描/读盘失败静默：项目注册是主路径，会话导入为增值功能
+      for (const project of projects.list()) {
+        if (project.connectionId !== connectionId) continue
+        try {
+          await importTasksFromSessions(project.id)
+        } catch {
+          // 单项目扫描失败不阻断其余（连接恢复后下次连接成功可再补）
+        }
+      }
+    } finally {
+      importingConnections.delete(connectionId)
+    }
+  }
+  // 仅在注入真实/mock 连接时订阅（缺省 StubConnectionManager 桩不支持订阅——S1 语义）
+  if (options.connection !== undefined) {
+    connection.onStateChange((e) => {
+      if (e.state === 'connected') void runDeferredImports(e.connectionId)
+    })
+  }
+
+  /**
+   * S5 3.1=C 远端目录检测命令：一次往返取存在性（printf x）与 git（printf g）双标记。
+   * bash -ic 包装（任务书口径；test 为 shell 内建本无 PATH 依赖——包装保持与
+   * S2/S4 探测面一致，stderr 交互噪音由标记解析免疫）。
+   */
+  const remoteDirProbeCommand = (dir: string): string => {
+    const script = `d=${posixQuote(dir)}; test -d "$d" && printf x; test -d "$d/.git" && printf g`
+    return `bash -ic ${posixQuote(script)}`
+  }
+
+  async function addProject(dir: string, connectionId?: string): Promise<ProjectRecord> {
+    // 本机路径（无参/空参）——行为逐字节不变
+    if (connectionId === undefined || connectionId === '') {
+      const record = projects.add(dir, isGitRepo(dir))
+      // v0.9 S13：打开目录（注册项目）即自动导入该目录的 claude 历史会话（幂等——重复
+      // addProject 同 dir 返回既有记录，再导入亦零新增）。导入是尽力而为，失败不阻断注册
+      // （可经 cwb:tasks:import-from-sessions 手动重试）。
+      try {
+        await importTasksFromSessions(record.id)
+      } catch {
+        // 扫描/读盘失败静默：项目注册是主路径，会话导入为增值功能
+      }
+      return record
+    }
+    // S5 远程注册（3.1=C + 7.1 + 3.12=a）：未连接先尽力懒连接（失败不阻断注册——
+    // 检测与导入推迟到连接成功事件补跑）
+    const lang = mainLanguage()
+    let online = connection.getState(connectionId) === 'connected'
+    if (!online) {
+      try {
+        await connection.connect(connectionId)
+        online = connection.getState(connectionId) === 'connected'
+      } catch {
+        online = false // VM 未启/认证错/TOFU 未确认——注册照常，检测/导入挂起
+      }
+    }
+    let isGit = false
+    if (online) {
+      let probe
+      try {
+        probe = await connection.exec(connectionId, remoteDirProbeCommand(dir))
+      } catch (err) {
+        throw new Error(
+          translate(lang, 'conn.proj.probeFailed', {
+            detail: err instanceof Error ? err.message : String(err)
+          })
+        )
+      }
+      if (!probe.stdout.includes('x')) {
+        throw new Error(translate(lang, 'conn.proj.dirMissing', { dir }))
+      }
+      isGit = probe.stdout.includes('g')
+    }
+    const record = projects.add(dir, isGit, connectionId)
+    if (online) {
+      try {
+        await importTasksFromSessions(record.id) // 注册即导入（已连接分支）
+      } catch {
+        // 同本机语义：尽力而为
+      }
     }
     return record
   }
@@ -653,13 +780,14 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
         : undefined
     let cwd = project.dir
     let worktreePath: string | undefined
-    if (remoteCid === undefined && opts.isolation === 'worktree') {
+    if (opts.isolation === 'worktree') {
+      // S5：远程显式拒绝（校验前移——先于任何 worktree 磁盘操作抛出；正式文案 i18n）
+      if (remoteCid !== undefined) {
+        throw new Error(translate(mainLanguage(), 'task.errWorktreeRemote'))
+      }
       if (!project.isGit) throw new Error(`worktree isolation requires a git project: ${project.dir}`)
       worktreePath = await worktreeAdd(project.dir, taskId)
       cwd = worktreePath
-    }
-    if (remoteCid !== undefined && opts.isolation === 'worktree') {
-      throw new Error('remote project does not support worktree isolation (planned with S5)')
     }
     // v3.2：epoch+1（作废旧 PTY 迟到 hook）+ 本地合成 idle（绿）——本地/远程同序：
     // 先 noteSpawn 拿新 epoch 再构造 settings（URL 捕获该 epoch）
@@ -977,9 +1105,27 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
 export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppContext {
   const { projects, tasks, pty, activity, smokeReports } = ctx
 
+  // S2 连接档案存储（S5 起为远程上下文裁定/远端 sudo 密码解析的前置依赖——创建前移）
+  const connectionsStore = new ConnectionsStore(app.getPath('userData'), electronSafeStorage())
+  /**
+   * S5 远程上下文（6.1/6.3/6.5）：「当前默认/最后使用连接」的 main 侧裁定——
+   * v1 单服务器无歧义；多档案取第一个已连接者（多于一个时 UI 显式选择归后续迭代，
+   * 任务书授权 main 侧取第一个已连接）。返回的 SkillInfo/市场条目携带 VM 绝对
+   * 路径——来源由路径形态标注（契约 SkillInfo 无连接字段，禁碰）。
+   */
+  const activeConnectionId = (): string | undefined => {
+    for (const rec of connectionsStore.list()) {
+      if (ctx.connection.getState(rec.id) === 'connected') return rec.id
+    }
+    return undefined
+  }
+
   // handle（renderer invoke，带返回值）
   ipcMain.handle(IpcChannels.ProjectsList, () => projects.list())
-  ipcMain.handle(IpcChannels.ProjectsAdd, (_e, dir: string) => ctx.addProject(dir))
+  ipcMain.handle(IpcChannels.ProjectsAdd, (_e, dir: string, connectionId?: string) =>
+    // S5：第二参 connectionId（契约 v2.2/preload 已透传）非空=远程注册（3.1=C/7.1）
+    ctx.addProject(dir, typeof connectionId === 'string' && connectionId !== '' ? connectionId : undefined)
+  )
   ipcMain.handle(IpcChannels.ProjectsRemove, (_e, id: string) => ctx.removeProject(id))
   ipcMain.handle(IpcChannels.ProjectsRename, (_e, id: string, name: string) => ctx.renameProject(id, name))
   ipcMain.handle(IpcChannels.TasksList, (_e, projectId?: string) => tasks.list(projectId))
@@ -1000,25 +1146,68 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   ipcMain.handle(IpcChannels.TasksImportFromSessions, (_e, projectId: string) =>
     ctx.importTasksFromSessions(projectId)
   )
-  // v0.5③ skills（SkillInfo 归 renderer 弹窗消费；removeSkill 的归属校验在 main）
-  ipcMain.handle(IpcChannels.SkillsList, () => ctx.skills.list())
+  // v0.5③ skills（SkillInfo 归 renderer 弹窗消费；removeSkill 的归属校验在 main）。
+  // S5 6.1=a：远程上下文（活跃连接）展示 VM 侧 ~/.claude/skills+插件清单
+  // （listRemote；读失败返回空——不回落本机数据防跨机混淆）。
+  ipcMain.handle(IpcChannels.SkillsList, async () => {
+    const cid = activeConnectionId()
+    if (cid !== undefined) {
+      try {
+        return await ctx.skills.listRemote(ctx.connection, cid)
+      } catch {
+        return [] // 连接中途掉线等——空清单（连接态另由侧栏呈现）
+      }
+    }
+    return ctx.skills.list()
+  })
   ipcMain.handle(
     IpcChannels.SkillsImport,
-    (_e, fromDir: string, target: { scope: 'user' | 'project'; projectId?: string }) =>
-      ctx.skills.importSkillFolder(fromDir, target)
+    async (_e, fromDir: string, target: { scope: 'user' | 'project'; projectId?: string }) => {
+      // S5：远程上下文拒绝本地导入（复制目标在本机 ~/.claude——错侧落盘）；VM 侧操作后续迭代
+      if (activeConnectionId() !== undefined) {
+        throw new Error(translate(mainLanguage(), 'skills.errRemoteWrite'))
+      }
+      return ctx.skills.importSkillFolder(fromDir, target)
+    }
   )
-  ipcMain.handle(IpcChannels.SkillsRemove, (_e, skill: SkillInfo) => ctx.skills.removeSkill(skill))
-  // v1.2.0 skill 市场：搜索只读本机目录；安装/刷新走 CLI 受控执行面（输出经 CliOutput 广播）
+  ipcMain.handle(IpcChannels.SkillsRemove, async (_e, skill: SkillInfo) => {
+    if (activeConnectionId() !== undefined) {
+      throw new Error(translate(mainLanguage(), 'skills.errRemoteWrite'))
+    }
+    return ctx.skills.removeSkill(skill)
+  })
+  // v1.2.0 skill 市场：搜索只读本机目录；安装/刷新走 CLI 受控执行面（输出经 CliOutput 广播）。
+  // S5 6.1/6.5：远程上下文读 VM 侧 marketplace 目录；安装/刷新经 SSH 远端执行。
   ipcMain.handle(
     IpcChannels.SkillSearch,
-    (_e, query: unknown, marketplace: unknown, limit: unknown) =>
-      ctx.skillMarket.search(
-        typeof query === 'string' ? query : '',
-        typeof marketplace === 'string' && marketplace !== '' ? marketplace : undefined,
-        typeof limit === 'number' && Number.isFinite(limit) ? limit : 50
-      )
+    async (_e, query: unknown, marketplace: unknown, limit: unknown) => {
+      const q = typeof query === 'string' ? query : ''
+      const m = typeof marketplace === 'string' && marketplace !== '' ? marketplace : undefined
+      const l = typeof limit === 'number' && Number.isFinite(limit) ? limit : 50
+      const cid = activeConnectionId()
+      if (cid !== undefined) {
+        try {
+          const reader = await openRemoteClaudeHome(ctx.connection, cid)
+          return await ctx.skillMarket.searchRemote(reader, q, m, l)
+        } catch {
+          return []
+        }
+      }
+      return ctx.skillMarket.search(q, m, l)
+    }
   )
-  ipcMain.handle(IpcChannels.SkillMarketplaces, () => ctx.skillMarket.listMarketplaces())
+  ipcMain.handle(IpcChannels.SkillMarketplaces, async () => {
+    const cid = activeConnectionId()
+    if (cid !== undefined) {
+      try {
+        const reader = await openRemoteClaudeHome(ctx.connection, cid)
+        return await ctx.skillMarket.listMarketplacesRemote(reader)
+      } catch {
+        return []
+      }
+    }
+    return ctx.skillMarket.listMarketplaces()
+  })
   ipcMain.handle(IpcChannels.SkillMarketInstall, async (_e, installId: unknown) => {
     const lang = mainLanguage()
     if (typeof installId !== 'string') {
@@ -1027,7 +1216,12 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     const invalid = validateInstallTarget(installId, lang)
     if (invalid !== null) return { ok: false, error: invalid }
     try {
-      const { commandId } = await ctx.cli.runPlugin(['plugin', 'install', installId, '-y'])
+      // S5：远程上下文经 SSH 在 VM 内执行（6.5=B 全部远端化）
+      const cid = activeConnectionId()
+      const { commandId } =
+        cid !== undefined
+          ? await ctx.cli.runPluginRemote(ctx.connection, cid, ['plugin', 'install', installId, '-y'])
+          : await ctx.cli.runPlugin(['plugin', 'install', installId, '-y'])
       return { ok: true, commandId }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -1035,7 +1229,11 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   })
   ipcMain.handle(IpcChannels.SkillMarketRefresh, async () => {
     try {
-      const { commandId } = await ctx.cli.runPlugin(['plugin', 'marketplace', 'update'])
+      const cid = activeConnectionId()
+      const { commandId } =
+        cid !== undefined
+          ? await ctx.cli.runPluginRemote(ctx.connection, cid, ['plugin', 'marketplace', 'update'])
+          : await ctx.cli.runPlugin(['plugin', 'marketplace', 'update'])
       return { ok: true, commandId }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -1053,31 +1251,82 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       if (typeof enabled !== 'boolean') {
         return { ok: false, error: translate(lang, 'skill.errParam') }
       }
-      if (!ctx.pluginSkills.installedIds().includes(pluginId)) {
+      // S5：远程上下文白名单取 VM 侧安装记录（installedIdsRemote）
+      const cid = activeConnectionId()
+      const installed =
+        cid !== undefined
+          ? await ctx.pluginSkills
+              .installedIdsRemote(await openRemoteClaudeHome(ctx.connection, cid))
+              .catch(() => [] as string[])
+          : ctx.pluginSkills.installedIds()
+      if (!installed.includes(pluginId)) {
         return { ok: false, error: translate(lang, 'skill.errNotInstalled', { id: pluginId }) }
       }
       try {
-        const { commandId } = await ctx.cli.runPlugin([
-          'plugin',
-          enabled ? 'enable' : 'disable',
-          pluginId,
-          '-s',
-          'user'
-        ])
+        const { commandId } =
+          cid !== undefined
+            ? await ctx.cli.runPluginRemote(ctx.connection, cid, [
+                'plugin',
+                enabled ? 'enable' : 'disable',
+                pluginId,
+                '-s',
+                'user'
+              ])
+            : await ctx.cli.runPlugin([
+                'plugin',
+                enabled ? 'enable' : 'disable',
+                pluginId,
+                '-s',
+                'user'
+              ])
         return { ok: true, commandId }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
     }
   )
-  // v0.5③ CLI 执行（校验+spawn 即返 commandId；拒绝抛带原因 Error）
-  ipcMain.handle(IpcChannels.CliRun, (_e, command: string) => ctx.cli.run(command))
-  // v0.5⑤ 版本/更新/安装（安装为固定模板，完成钩子失效 claudePathCache）
-  ipcMain.handle(IpcChannels.VersionGet, () => getClaudeVersionInfo())
-  ipcMain.handle(IpcChannels.UpdateCheck, () => checkClaudeUpdate())
-  ipcMain.handle(IpcChannels.InstallCli, (_e, method: 'native' | 'npm') =>
-    installClaudeCli(ctx.cli, method)
-  )
+  // v0.5③ CLI 执行（校验+spawn 即返 commandId；拒绝抛带原因 Error）。
+  // S5 M10 路由：第二参 connectionId 非空 → SSH 远端执行（bash -ic+输出回投+exit 事件）；
+  // 空 → 本机现行为不变。
+  ipcMain.handle(IpcChannels.CliRun, (_e, command: string, connectionId?: string) => {
+    if (typeof connectionId === 'string' && connectionId !== '') {
+      return ctx.cli.runRemote(ctx.connection, connectionId, command)
+    }
+    return ctx.cli.run(command)
+  })
+  // v0.5⑤ 版本/更新/安装（安装为固定模板，完成钩子失效 claudePathCache）。
+  // S5 6.3/6.6：远程上下文（活跃连接）→ VM 内探测/更新/安装；本机模式不变。
+  ipcMain.handle(IpcChannels.VersionGet, async () => {
+    const cid = activeConnectionId()
+    if (cid !== undefined) {
+      const version = await remoteClaudeVersion(ctx.connection, cid).catch(() => '')
+      return { version, path: `ssh:${cid}` } // 远端无本机路径概念——path 标注来源连接
+    }
+    return getClaudeVersionInfo()
+  })
+  ipcMain.handle(IpcChannels.UpdateCheck, async () => {
+    const cid = activeConnectionId()
+    if (cid !== undefined) return checkClaudeUpdateRemote(ctx.connection, cid)
+    return checkClaudeUpdate()
+  })
+  ipcMain.handle(IpcChannels.InstallCli, (_e, method: 'native' | 'npm') => {
+    const cid = activeConnectionId()
+    if (cid !== undefined) {
+      // 6.6=B：npm 全局形态 sudo -S 复用连接密码（密码经 revealSecret 解出、只走
+      // SFTP 临时文件+stdin 重定向，不进命令串/argv/日志——见 cli-runner 实现注）
+      const record = connectionsStore.get(cid)
+      let password: string | undefined
+      if (record !== undefined && record.authMethod !== 'key') {
+        const secret = connectionsStore.revealSecret(record)
+        password = secret.password
+      }
+      return installClaudeCliRemote(ctx.cli, ctx.connection, cid, method, {
+        password,
+        language: mainLanguage
+      })
+    }
+    return installClaudeCli(ctx.cli, method)
+  })
   // v0.5④N webhook 通知
   // v0.9 应用设置
   ipcMain.handle(IpcChannels.FontsInstalled, () => ctx.fontScanner.getInstalledMonoFonts())
@@ -1158,7 +1407,6 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   // safeStorage 密文，明文 password 仅在 main 侧出现一次即加密丢弃）。
   // CRUD/Test 不经 ctx.connection（桩注入下也可用）；Connect/Disconnect/SftpBrowse
   // 委托 ctx.connection（RealConnectionManager——懒连接/TOFU/自检/重连状态机）。
-  const connectionsStore = new ConnectionsStore(app.getPath('userData'), electronSafeStorage())
   ipcMain.handle(IpcChannels.ConnectionsList, () => connectionsStore.list())
   ipcMain.handle(IpcChannels.ConnectionsSave, (_e, raw: unknown) => {
     const parsed = parseConnectionInput(mainLanguage(), raw)

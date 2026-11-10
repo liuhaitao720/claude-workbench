@@ -484,7 +484,20 @@ export const zh = {
   'conn.dialog.authMethod': '认证方式',
   'conn.dialog.keyPath': '私钥路径',
   'conn.dialog.password': '密码',
-  'conn.dialog.test': '测试连接'
+  'conn.dialog.test': '测试连接',
+
+  // ── 「S5 填值区」（S5 外围功能远端化：3.1/3.12/6.1/6.2/6.3/6.5/6.6）────────
+  // 远程项目注册/导入、skills 与市场远端读、claude 更新远端执行、worktree 显式拒绝。
+  // 远程会话导入失败不阻断注册主路径（3.12=a「不打断注册主路径」——静默，无用户可见文案）。
+  'conn.proj.dirMissing': '远程目录不存在: {dir}',
+  'conn.proj.probeFailed': '远程目录检测失败: {detail}',
+  'task.errWorktreeRemote':
+    '远程项目暂不支持 worktree 隔离（本机 git worktree 操作不适用于 VM 路径），请选择「无隔离」',
+  'cli.errRemoteExec': '远程命令执行失败: {detail}',
+  'cli.errNoRemoteNpm': 'VM 内未解析到 npm（请先安装 node/npm，或改用官方安装器方式）',
+  'cli.errNoSudoPassword':
+    'npm 全局安装需要 sudo，但当前连接档案为私钥认证（无可复用密码）——请改用官方安装器方式，或在 VM 内配置 NOPASSWD',
+  'skills.errRemoteWrite': '远程上下文暂不支持导入/移除 skill（请直接操作 VM 内 ~/.claude/skills）'
 } as const
 
 export type MessageKey = keyof typeof zh
@@ -955,7 +968,21 @@ export const en: Record<MessageKey, string> = {
   'conn.dialog.authMethod': 'Authentication',
   'conn.dialog.keyPath': 'Private key path',
   'conn.dialog.password': 'Password',
-  'conn.dialog.test': 'Test connection'
+  'conn.dialog.test': 'Test connection',
+
+  // “S5 fill zone”: remote registration/import, skills & market remote reads,
+  // remote claude update/install, explicit worktree rejection (3.1/3.12/6.1/6.2/6.3/6.5/6.6).
+  'conn.proj.dirMissing': 'Remote directory does not exist: {dir}',
+  'conn.proj.probeFailed': 'Failed to probe remote directory: {detail}',
+  'task.errWorktreeRemote':
+    'Worktree isolation is not supported for remote projects yet (local git worktree operations do not apply to VM paths); choose “No isolation”',
+  'cli.errRemoteExec': 'Remote command failed: {detail}',
+  'cli.errNoRemoteNpm':
+    'npm not found on the VM (install node/npm first, or use the native installer instead)',
+  'cli.errNoSudoPassword':
+    'Global npm install needs sudo, but this connection profile uses key auth (no reusable password) — use the native installer, or configure NOPASSWD inside the VM',
+  'skills.errRemoteWrite':
+    'Import/remove is not available in remote context yet (operate ~/.claude/skills inside the VM directly)'
 }
 
 const DICTS: Record<Language, Record<MessageKey, string>> = { zh, en }

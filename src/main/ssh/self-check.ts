@@ -1,9 +1,11 @@
 import type { SshExecResult } from './connection-manager'
+import { probeServerVersion, type ServerInstallTransport } from '../server-installer'
 
 /**
  * S2 只读自检（2.1=A）：连接成功后 exec 探测 sshd/claude/node/cwb-server 四项。
  * 2.2=A 阻断口径：BLOCKING_CHECK_IDS 内的项 missing → connect 阻断（状态回 offline
- * + 失败清单）；server 项为 unknown 占位不阻断。
+ * + 失败清单）；server 项 missing 不阻断（cwb-server 缺失由 S4 连接流程健康检查
+ * needInstall 语义接管——弹安装确认而非拒绝连接）。
  */
 
 export type SelfCheckItemId = 'sshd' | 'claude' | 'node' | 'server'
@@ -43,9 +45,22 @@ export async function runSelfCheck(
   for (const id of ['claude', 'node'] as const) {
     items.push(await checkCommand(id, exec))
   }
-  // server 项：S7 接管（server-installer 的版本函数批0 未建——此处固定 unknown
-  // 占位，不参与 2.2 阻断；S7 落地后改为真实 cwb-server 组件/版本探测）
-  items.push({ id: 'server', status: 'unknown' })
+  // server 项（S7 probeServerVersion 就绪——S5 接线）：真实协议探活
+  // （bash /dev/tcp 回环 GET /，O6 健康=加载 node-pty 的 server 应答 {ok,version}）。
+  // ok:true → ok+版本；探活不通 → missing（不阻断——安装确认弹窗语义归 S4/S7）。
+  // transport 适配：probeServerVersion 仅消费 exec；sftp 为接口必填项，此路径不可达。
+  const transport: ServerInstallTransport = {
+    exec: async (_connectionId, command) => exec(command),
+    sftp: async () => {
+      throw new Error('self-check server probe does not use sftp')
+    }
+  }
+  const probe = await probeServerVersion(transport, '')
+  items.push(
+    probe.ok
+      ? { id: 'server', status: 'ok', detail: probe.version }
+      : { id: 'server', status: 'missing', detail: probe.detail }
+  )
   return items
 }
 

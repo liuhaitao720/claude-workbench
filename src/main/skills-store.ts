@@ -6,7 +6,8 @@ import type { SkillInfo } from '../shared/types'
 import { translate } from '../shared/i18n'
 import { mainLanguage } from './language'
 import { describeSkillDir, parseSkillFrontmatter, scanSkillDirs } from './skill-files'
-import { PluginSkills } from './plugin-skills'
+import { PluginSkills, openRemoteClaudeHome, describeSkillFromText } from './plugin-skills'
+import type { ConnectionManager } from './ssh/connection-manager'
 
 /** v1.2.0 错误文案按当前界面语言取（main 进程级语言，renderer 启动/切换时同步） */
 function tr(key: Parameters<typeof translate>[1], params: Record<string, string>): string {
@@ -75,6 +76,26 @@ export class SkillsStore {
       }
     }
     out.push(...this.pluginSkills.list())
+    return out
+  }
+
+  /**
+   * 远端全部 skill（S5 6.1=a）：远程上下文（活跃连接）经 SSH 读 VM 侧
+   * ~/.claude/skills（用户级）+ ~/.claude/plugins（插件级）。项目级远程目录不在
+   * 本机 fs——不扫（远程项目级 skills 归后续迭代）。调用方（ipc）负责连接上下文
+   * 判定与失败兜底；返回条目 dir=VM 绝对路径（来源即由路径形态标注）。
+   */
+  async listRemote(connection: ConnectionManager, connectionId: string): Promise<SkillInfo[]> {
+    const reader = await openRemoteClaudeHome(connection, connectionId)
+    const out: SkillInfo[] = []
+    const userRoot = `${reader.home}/.claude/skills`
+    for (const name of await reader.listDirs(userRoot)) {
+      const dir = `${userRoot}/${name}`
+      const text = await reader.readTextFile(`${dir}/SKILL.md`)
+      if (text === null) continue // 无 SKILL.md 的目录不是 skill（同本机扫描语义）
+      out.push(describeSkillFromText(dir, 'user', text))
+    }
+    out.push(...(await this.pluginSkills.listRemote(reader)))
     return out
   }
 

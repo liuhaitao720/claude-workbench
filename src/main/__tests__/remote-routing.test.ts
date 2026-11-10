@@ -243,7 +243,7 @@ describe('S2/S4 self-check 命令形态升级（bash -ic 破 nvm PATH 墙）', (
       ['sshd', 'ok'],
       ['claude', 'ok'],
       ['node', 'ok'],
-      ['server', 'unknown']
+      ['server', 'missing'] // S5 起 probeServerVersion 真实探活——mock 未应答 /dev/tcp 探测 → missing（不阻断）
     ])
     expect(items[1]?.detail).toBe('2.1.321 (Claude Code)') // 取 stdout 末行（command -v 路径行不混入）
     expect(items[2]?.detail).toBe('v22.14.0')

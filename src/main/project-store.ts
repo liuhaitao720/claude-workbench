@@ -23,16 +23,25 @@ export class ProjectStore {
     return this.load().find((p) => p.id === id)
   }
 
-  /** 按 dir 查重（Windows 大小写不敏感）返回既有记录；否则新建（uuid、name=目录 basename、isGit=注册时检测） */
-  add(dir: string, isGit: boolean): ProjectRecord {
+  /**
+   * 按 dir 查重（Windows 大小写不敏感）返回既有记录；否则新建（uuid、name=目录
+   * basename、isGit=注册时检测）。connectionId（S5，7.1=A）非空=远程项目归属，
+   * 同 dir 不同 connectionId 视为不同记录（本机/远程路径字符串可能同名——开发机
+   * 本机与 VM 同路径时不得互相吞并）；缺省调用行为与既有单参形态逐字节一致。
+   */
+  add(dir: string, isGit: boolean, connectionId?: string): ProjectRecord {
     const all = this.load()
-    const existing = all.find((p) => p.dir.toLowerCase() === dir.toLowerCase())
+    const wanted = connectionId ?? ''
+    const existing = all.find(
+      (p) => p.dir.toLowerCase() === dir.toLowerCase() && (p.connectionId ?? '') === wanted
+    )
     if (existing) return existing
     const record: ProjectRecord = {
       id: randomUUID(),
       name: basename(dir),
       dir,
       isGit,
+      ...(connectionId !== undefined && connectionId !== '' ? { connectionId } : {}),
       createdAt: new Date().toISOString()
     }
     this.save([...all, record])

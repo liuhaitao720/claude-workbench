@@ -1,19 +1,22 @@
 import { createReadStream, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { createInterface } from 'node:readline'
+import { posix as posixPath } from 'node:path'
 import type { TaskRecord } from '../shared/types'
 import { translate } from '../shared/i18n'
 import { mainLanguage } from './language'
+import { posixQuote } from './cli-runner'
 import type { ProjectStore } from './project-store'
 import type { TaskStore } from './task-store'
+import type { ConnectionManager } from './ssh/connection-manager'
 
 /**
  * v0.9 S13：从 claude CLI 历史会话生成可恢复任务。
  *
  * 会话存储（实测 v2.1.301，~/.claude/projects/<munged-dir>/<sessionId>.jsonl）：
  * - munged-dir = 绝对路径中所有非字母数字字符替换为 `-`（`D:\SourceCode\agent` →
- *   `D--SourceCode-agent`；盘符冒号、反斜杠、点、下划线等一律 `-`）
+ *   `D--SourceCode-agent`；盘符冒号、反斜杠、点、下划线等一律 `-`）。munge 为纯
+ *   正则、无平台分支——远端恒 Linux（/home/u/p → -home-u-p）同一函数适用（S5 确认）
  * - jsonl 每行一个 JSON 对象，type 取值 user/assistant/ai-title/summary/queue-operation/
  *   attachment/...，部分行无 type 字段；大文件（12MB+）只需头部即可命名——流式读前
  *   HEAD_LINES 行（且 HEAD_BYTES 封顶），避免全文载入
@@ -23,6 +26,10 @@ import type { TaskStore } from './task-store'
  *   首条真实用户消息过滤：isSidechain（子代理链）、isMeta、`<local-command-caveat>`/
  *   `<command-`/`<system-reminder>` 前缀（实测 command 行不带 isMeta，前缀过滤必须独立
  *   于 isMeta）；message.content 为数组时仅取 text 项（tool_result 是机器内容非用户输入）
+ *
+ * S5 6.2=a 数据源读取缝（SessionStoreReader）：解析逻辑唯一，目录枚举/头部读取注入
+ * ——localSessionStoreReader（本机 fs，行为与 v0.9 直读一致）+ createRemoteSessionReader
+ * （SSH exec：find -printf 枚举 + head -c 头部，仅传头部字节——远端 12MB 文件不全量拉取）。
  *
  * 测试注入缝：CWB_CLAUDE_PROJECTS_ROOT（同 CWB_SKILLS_USER_ROOT 先例，防扫描真实
  * ~/.claude/projects）+ opts.projectsRoot 函数注入。
@@ -65,9 +72,33 @@ export interface SessionMeta {
 export interface ListSessionsOptions {
   /** claude 会话存储根（缺省 CWB_CLAUDE_PROJECTS_ROOT 缝 → ~/.claude/projects） */
   projectsRoot?: () => string
+  /**
+   * S5 6.2=a 数据源注入：远端扫描传 createRemoteSessionReader 产物；缺省=本机 fs。
+   * reader.join 决定路径拼接语义（本机=path.join 平台形态 / 远端=posix——Windows
+   * 客户端拼 VM 路径不得引入反斜杠）。
+   */
+  reader?: SessionStoreReader
+  /** 异步根解析（远端=exec printf $HOME 后拼 .claude/projects；优先于 projectsRoot） */
+  resolveProjectsRoot?: () => Promise<string>
 }
 
-/** 绝对路径 → claude 会话存储目录名（所有非字母数字字符替换为 `-`，大小写保留） */
+/**
+ * 会话存储读取缝（S5 6.2=a）：listSessions 的目录枚举与 jsonl 头部读取抽象。
+ * 实现：localSessionStoreReader（本机 fs）/ createRemoteSessionReader（SSH exec）。
+ */
+export interface SessionStoreReader {
+  /** 按数据源语义拼接路径（本机=平台 join；远端=posix join） */
+  join(...parts: string[]): string
+  /**
+   * 列出 dir 下全部 *.jsonl 会话文件（name 含 .jsonl 后缀，附 mtimeMs）。
+   * 返回 null=目录不存在/不可读（=该目录从未跑过 claude 的语义，非错误）。
+   */
+  listSessionFiles(dir: string): Promise<Array<{ name: string; mtimeMs: number }> | null>
+  /** 读文件头部文本（至多 maxBytes 字节；不存在/读失败 → ''——按已读内容收场） */
+  readFileHead(file: string, maxBytes: number): Promise<string>
+}
+
+/** 绝对路径 → claude 会话存储目录名（所有非字母数字字符替换为 `-`，大小写保留；纯正则无平台分支） */
 export function mungePath(dir: string): string {
   return dir.replace(/[^a-zA-Z0-9]/g, '-')
 }
@@ -126,38 +157,117 @@ function consumeLine(rawLine: string, info: SessionHeadInfo): void {
 }
 
 /**
- * 流式读取 jsonl 头部（readline over createReadStream；达到行数/字节上限即销毁流，
- * 12MB 级文件只读头部若干 chunk）。流错误按已读内容收场（容错）。
+ * 头部文本 → 命名素材（前 maxLines 行逐行消费；解析失败/形态不符静默跳过）。
+ * S5 从流式 readSessionHead 抽出为纯函数：本机与远端 reader 只负责取文本，
+ * 行窗口/解析语义唯一（双源同解析的回归锚点——见 s5-remote.test.ts）。
  */
-async function readSessionHead(
-  file: string,
-  maxLines: number,
-  maxBytes: number
-): Promise<SessionHeadInfo> {
+export function parseSessionHeadText(text: string, maxLines: number): SessionHeadInfo {
   const info: SessionHeadInfo = {}
-  const stream = createReadStream(file, { encoding: 'utf8' })
-  const rl = createInterface({ input: stream, crlfDelay: Infinity })
   let lines = 0
-  let bytes = 0
-  let capped = false
-  rl.on('line', (line: string) => {
-    // 达到上限后同批 chunk 内拆出的剩余行不再消费（destroy/stop 对已入队行不追溯，需守卫）
-    if (capped) return
+  for (const line of text.split('\n')) {
+    if (lines >= maxLines) break
     consumeLine(line, info)
     lines++
-    bytes += line.length + 1
-    if (lines >= maxLines || bytes >= maxBytes) {
-      capped = true
-      stream.destroy()
-      rl.close()
-    }
-  })
-  // rl 'close' 覆盖正常读完/上限触发/流关闭；stream 'error' 兜底读失败（resolve 幂等，二者先到先收）
-  await new Promise<void>((resolve) => {
-    rl.on('close', () => resolve())
-    stream.on('error', () => resolve())
-  })
+  }
   return info
+}
+
+/**
+ * 本机 fs 数据源（缺省）：行为与 v0.9 直读一致——readdir/statSync 取 mtime，
+ * 头部流式读至 maxBytes 即销毁流（12MB 级文件只传头部若干 chunk）。
+ */
+export const localSessionStoreReader: SessionStoreReader = {
+  join: (...parts: string[]) => join(...parts),
+  async listSessionFiles(dir) {
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return null // 无会话目录（从未在该目录跑过 claude）
+    }
+    const out: Array<{ name: string; mtimeMs: number }> = []
+    for (const entry of entries) {
+      // 仅 *.jsonl 文件——同会话名的子目录与 memory/ 等目录不是会话
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
+      if (entry.name.slice(0, -'.jsonl'.length) === '') continue
+      let mtimeMs: number
+      try {
+        mtimeMs = statSync(join(dir, entry.name)).mtimeMs
+      } catch {
+        continue // 列目录与 stat 之间文件消失（竞态）——跳过
+      }
+      out.push({ name: entry.name, mtimeMs })
+    }
+    return out
+  },
+  async readFileHead(file, maxBytes) {
+    // 流式累积至 maxBytes 即 destroy（错误按已读内容收场——同 v0.9 容错语义）
+    return new Promise<string>((resolve) => {
+      let stream: ReturnType<typeof createReadStream>
+      try {
+        stream = createReadStream(file, { encoding: 'utf8' })
+      } catch {
+        resolve('')
+        return
+      }
+      const chunks: string[] = []
+      let total = 0
+      let settled = false
+      const finish = (): void => {
+        if (settled) return
+        settled = true
+        resolve(chunks.join('').slice(0, maxBytes))
+      }
+      stream.on('data', (chunk: string | Buffer) => {
+        chunks.push(chunk.toString('utf8'))
+        total += chunk.length
+        if (total >= maxBytes) {
+          stream.destroy()
+          finish()
+        }
+      })
+      stream.on('error', () => finish())
+      stream.on('close', () => finish())
+    })
+  }
+}
+
+/**
+ * SSH 远端数据源（S5 6.2=a）：经 ConnectionManager.exec 读 VM 侧
+ * ~/.claude/projects/<munged>/*.jsonl。
+ * - 枚举：`find <dir> -maxdepth 1 -name '*.jsonl' -printf '%f %T@\n'` 一次往返
+ *   （%T@=浮点 mtime；GNU find——VM=Ubuntu 前提 O1）；退出非 0=目录缺失 → null
+ * - 头部：`head -c N -- <file>` 远端只传头部字节（12MB 级会话文件不全量拉取）；
+ *   head/find 均为 /usr/bin 标准件，无 nvm PATH 依赖（S2 nvm 墙不适用，勿 bash -ic）
+ * - 路径拼接=posix（Windows 客户端拼 VM 路径不得引入反斜杠）
+ */
+export function createRemoteSessionReader(
+  connection: ConnectionManager,
+  connectionId: string
+): SessionStoreReader {
+  return {
+    join: (...parts: string[]) => posixPath.join(...parts),
+    async listSessionFiles(dir) {
+      const command = `find ${posixQuote(dir)} -maxdepth 1 -name '*.jsonl' -printf '%f %T@\\n'`
+      const r = await connection.exec(connectionId, command)
+      if (r.code !== 0) return null // 目录不存在/不可读（find 报错退出非 0）
+      const out: Array<{ name: string; mtimeMs: number }> = []
+      for (const line of r.stdout.split('\n')) {
+        const m = /^(\S+\.jsonl)\s+(\d+(?:\.\d+)?)$/.exec(line.trim())
+        if (m === null) continue
+        // %T@ 浮点秒 → ms 整数（与 statSync.mtimeMs 对齐——双源同解析的 toISOString 一致）
+        out.push({ name: m[1]!, mtimeMs: Math.round(Number.parseFloat(m[2]!) * 1000) })
+      }
+      return out
+    },
+    async readFileHead(file, maxBytes) {
+      const r = await connection.exec(
+        connectionId,
+        `head -c ${maxBytes} -- ${posixQuote(file)}`
+      )
+      return r.code === 0 ? r.stdout : ''
+    }
+  }
 }
 
 /** 命名素材 → 任务名：优先级链 + 空白归一 + 控制字符剔除 + 40 字（码点）截断 */
@@ -176,33 +286,27 @@ function buildSessionName(info: SessionHeadInfo, sessionId: string): string {
 
 /**
  * 扫描某目录的全部 claude 历史会话（存储根缺省 ~/.claude/projects，经 CWB_CLAUDE_PROJECTS_ROOT
- * 或 opts.projectsRoot 注入）。目录缺失/不可读 → 空列表；按 createdAt 升序（稳定输出）。
+ * 或 opts.projectsRoot 注入；远端传 opts.reader + opts.resolveProjectsRoot——S5 6.2=a）。
+ * 目录缺失/不可读 → 空列表；按 createdAt 升序（稳定输出）。
  */
 export async function listSessions(
   dir: string,
   opts: ListSessionsOptions = {}
 ): Promise<SessionMeta[]> {
-  const root = join(opts.projectsRoot?.() ?? defaultProjectsRoot(), mungePath(dir))
-  let entries
-  try {
-    entries = readdirSync(root, { withFileTypes: true })
-  } catch {
-    return [] // 无会话目录（从未在该目录跑过 claude）
-  }
+  const reader = opts.reader ?? localSessionStoreReader
+  const rootBase = opts.resolveProjectsRoot !== undefined
+    ? await opts.resolveProjectsRoot()
+    : (opts.projectsRoot?.() ?? defaultProjectsRoot())
+  const root = reader.join(rootBase, mungePath(dir))
+  const files = await reader.listSessionFiles(root)
+  if (files === null) return [] // 无会话目录（从未在该目录跑过 claude）
   const out: SessionMeta[] = []
-  for (const entry of entries) {
-    // 仅 *.jsonl 文件——同会话名的子目录与 memory/ 等目录不是会话
-    if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
-    const sessionId = entry.name.slice(0, -'.jsonl'.length)
+  for (const file of files) {
+    const sessionId = file.name.slice(0, -'.jsonl'.length)
     if (sessionId === '') continue
-    let mtimeMs: number
-    try {
-      mtimeMs = statSync(join(root, entry.name)).mtimeMs
-    } catch {
-      continue // 列目录与 stat 之间文件消失（竞态）——跳过
-    }
-    const info = await readSessionHead(join(root, entry.name), HEAD_LINES, HEAD_BYTES)
-    const mtimeIso = new Date(mtimeMs).toISOString()
+    const text = await reader.readFileHead(reader.join(root, file.name), HEAD_BYTES)
+    const info = parseSessionHeadText(text, HEAD_LINES)
+    const mtimeIso = new Date(file.mtimeMs).toISOString()
     const createdAt = info.firstTimestamp ?? mtimeIso
     out.push({
       sessionId,

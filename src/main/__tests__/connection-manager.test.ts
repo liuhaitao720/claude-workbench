@@ -95,6 +95,10 @@ const HOST_KEY_B = genPrivateKeyPem()
 /** 自检通过形态的 exec 脚本（claude/node 探测命令 → 成功输出；S4 起命令包 bash -ic） */
 const CHECK_CLAUDE = `bash -ic 'command -v claude && claude --version'`
 const CHECK_NODE = `bash -ic 'command -v node && node --version'`
+/** S5 起自检 server 项真实探活（probeServerVersion 的 /dev/tcp 回环 GET）——mock 应答健康体 */
+const SERVER_PROBE_OK: ExecScript = {
+  out: 'HTTP/1.0 200 OK\r\n\r\n{"ok":true,"server":"cwb-server","version":"0.1.0"}'
+}
 const SELF_CHECK_EXEC_OK: Record<string, { out?: string; err?: string; code?: number }> = {
   [CHECK_CLAUDE]: { out: '/home/vm/.nvm/versions/node/v22.14.0/bin/claude\n1.0.72 (Claude Code)\n' },
   [CHECK_NODE]: { out: 'v22.14.0\n' }
@@ -163,7 +167,10 @@ async function startMockSshd(opts: {
         const session = acceptSession()
         session.on('exec', (acceptExec, _reject, info) => {
           const stream = acceptExec()
-          const script = opts.exec?.[info.command]
+          // S5：server 探活命令（bash -c 'exec 3<>/dev/tcp/...'）按子串命中健康应答
+          const script =
+            opts.exec?.[info.command] ??
+            (info.command.includes('/dev/tcp/') ? SERVER_PROBE_OK : undefined)
           if (script?.err !== undefined) stream.stderr.write(script.err)
           if (script?.out !== undefined) stream.write(script.out)
           stream.exit(script === undefined ? 127 : (script.code ?? 0)) // 未知命令=127（自检 missing 路径）
@@ -730,7 +737,7 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
       ['sshd', 'ok'],
       ['claude', 'missing'],
       ['node', 'ok'],
-      ['server', 'unknown'] // S7 接管前的占位（不阻断）
+      ['server', 'ok'] // S5 起真实探活（mock 健康应答）；missing 不阻断——阻断项仅 claude/node
     ])
     expect(mgr.getState(id)).toBe('offline')
   }, 15_000)
@@ -914,7 +921,8 @@ describe('L2.5 S2 装配（createAppContext 注入 Real 栈 / broadcast 到 EVEN
     expect(test1.kind).toBe('hostKeyConfirm')
     expect(test1.hostKeyFingerprint).toMatch(/^SHA256:/)
 
-    // UI 确认=指纹落档案 → Test 全绿（自检清单：sshd/claude ok、server unknown 占位）
+    // UI 确认=指纹落档案 → Test 全绿（自检清单：sshd/claude/node/server 全 ok——S5 起
+    // server 项为 probeServerVersion 真实探活，mock sshd 以 /dev/tcp 子串应答健康体）
     await invoke(IpcChannels.ConnectionsSave, {
       ...saved,
       lastHostKeyFingerprint: test1.hostKeyFingerprint
@@ -923,15 +931,16 @@ describe('L2.5 S2 装配（createAppContext 注入 Real 栈 / broadcast 到 EVEN
       ok: boolean
       error?: string
       kind?: string
-      checks?: Array<{ id: string; status: string }>
+      checks?: Array<{ id: string; status: string; detail?: string }>
     }
     expect(test2.ok).toBe(true)
     expect(test2.checks?.map((c) => `${c.id}:${c.status}`)).toEqual([
       'sshd:ok',
       'claude:ok',
       'node:ok',
-      'server:unknown'
+      'server:ok'
     ])
+    expect(test2.checks?.find((c) => c.id === 'server')?.detail).toBe('0.1.0')
 
     // Connect：真实状态机 → connecting/connected 经 EVENT 面到达（A2 全链）。
     // S4：SSH 连通后连接流程做 cwb-server 健康检查（WS+ping）——mock sshd 无

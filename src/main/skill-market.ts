@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { SkillMarketEntry, SkillMarketplaceInfo } from '../shared/types'
 import { translate, type Language } from '../shared/i18n'
+import type { RemoteClaudeHomeReader } from './plugin-skills'
 
 /**
  * Skill 市场（v1.2.0）：搜索本机已配置 marketplace 目录。
@@ -122,6 +123,45 @@ export class SkillMarket {
       .slice(0, Math.max(1, Math.min(limit, 200)))
   }
 
+  // ── S5 远端读侧（6.1=a）：known_marketplaces/catalog/install-counts 经 SSH 读 VM ──
+  // 管道与 listMarketplaces/listAll 同构（纯函数 toMarketEntry/sortEntries 复用），
+  // 数据源换 RemoteClaudeHomeReader（本机路径零改动——同步方法与既有测试契约不动）。
+
+  /** 远端已配置 marketplace 概要 */
+  async listMarketplacesRemote(reader: RemoteClaudeHomeReader): Promise<SkillMarketplaceInfo[]> {
+    const out: SkillMarketplaceInfo[] = []
+    for (const [name, dir] of await marketplaceDirsRemote(reader)) {
+      const count = (await readCatalogRemote(reader, dir)).filter(
+        (raw) => toMarketEntry(raw, name, 0) !== null
+      ).length
+      out.push({ name, count })
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  /** 远端搜索（关键词 + marketplace 过滤 + 上限；与 search 同语义） */
+  async searchRemote(
+    reader: RemoteClaudeHomeReader,
+    query: string,
+    marketplace?: string,
+    limit = 50
+  ): Promise<SkillMarketEntry[]> {
+    const counts = await readInstallCountsRemote(reader)
+    const all: SkillMarketEntry[] = []
+    for (const [market, dir] of await marketplaceDirsRemote(reader)) {
+      for (const raw of await readCatalogRemote(reader, dir)) {
+        const installs =
+          counts.get(`${String((raw as Record<string, unknown>)['name'])}@${market}`) ?? 0
+        const entry = toMarketEntry(raw, market, installs)
+        if (entry !== null) all.push(entry)
+      }
+    }
+    return sortEntries(all)
+      .filter((e) => (marketplace === undefined ? true : e.marketplace === marketplace))
+      .filter((e) => matchesQuery(e, query))
+      .slice(0, Math.max(1, Math.min(limit, 200)))
+  }
+
   /** 已配置且本地目录存在的 marketplace（名 → 目录）；`.staging` 是 CLI 的临时检出，不展示 */
   private marketplaceDirs(): Array<[string, string]> {
     const known = this.readJson<Record<string, KnownMarketplace>>(
@@ -162,4 +202,61 @@ export class SkillMarket {
       return null
     }
   }
+}
+
+// ── S5 远端读侧的自由函数（SkillMarket 实例方法之外——reader 一次性传入）────────
+
+/** 远端已配置且 VM 内目录存在的 marketplace（名 → 目录；.staging 不展示——同本机） */
+async function marketplaceDirsRemote(
+  reader: RemoteClaudeHomeReader
+): Promise<Array<[string, string]>> {
+  const raw = await reader.readTextFile(`${reader.home}/.claude/plugins/known_marketplaces.json`)
+  let known: Record<string, KnownMarketplace> | null = null
+  try {
+    known = JSON.parse(raw ?? '') as Record<string, KnownMarketplace>
+  } catch {
+    known = null
+  }
+  if (known === null) return []
+  const out: Array<[string, string]> = []
+  for (const [name, info] of Object.entries(known)) {
+    if (name.endsWith('.staging')) continue
+    const dir = info.installLocation
+    if (typeof dir === 'string' && (await reader.exists(dir))) out.push([name, dir])
+  }
+  return out.sort(([a], [b]) => a.localeCompare(b))
+}
+
+/** 远端 marketplace 目录条目（.claude-plugin/marketplace.json 的 plugins 数组） */
+async function readCatalogRemote(reader: RemoteClaudeHomeReader, dir: string): Promise<unknown[]> {
+  const text = await reader.readTextFile(`${dir}/.claude-plugin/marketplace.json`)
+  if (text === null) return []
+  try {
+    const json = JSON.parse(text) as { plugins?: unknown }
+    return Array.isArray(json.plugins) ? (json.plugins as unknown[]) : []
+  } catch {
+    return []
+  }
+}
+
+/** 远端安装量缓存（install-counts-cache.json → Map） */
+async function readInstallCountsRemote(
+  reader: RemoteClaudeHomeReader
+): Promise<Map<string, number>> {
+  const text = await reader.readTextFile(`${reader.home}/.claude/plugins/install-counts-cache.json`)
+  const map = new Map<string, number>()
+  if (text === null) return map
+  try {
+    const json = JSON.parse(text) as {
+      counts?: Array<{ plugin?: unknown; unique_installs?: unknown }>
+    }
+    for (const c of json.counts ?? []) {
+      if (typeof c.plugin === 'string' && typeof c.unique_installs === 'number') {
+        map.set(c.plugin, c.unique_installs)
+      }
+    }
+  } catch {
+    /* 损坏 → 空缓存（同本机 readJson 容错） */
+  }
+  return map
 }
