@@ -128,8 +128,27 @@ button {
   min-width: 280px;
   display: flex;
   flex-direction: column;
+  position: relative; /* S6 3.7：宽度拖拽手柄的定位基准 */
   background: var(--bg-panel);
   border-right: 1px solid var(--border-1);
+}
+
+/* S6 3.7=A 宽度拖拽手柄：右缘 5px 热区（宽度/最大最小由内联 style 注入，见
+   ProjectSidebar——240–480 clamp 在 store.clampSidebarWidth） */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  z-index: 30;
+  cursor: col-resize;
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer:active {
+  background: var(--accent);
+  opacity: 0.35;
 }
 
 /* 头部（S6-A/D + v0.5.2 合并：标题与版本号同行） */
@@ -320,6 +339,79 @@ button {
   border-left: 1px solid var(--border-soft);
 }
 
+/* ── S6 服务器节点（3.11=a 轻分组头：小字号浅色行=名称+四态胶囊+⋯） ────────── */
+
+.server-node {
+  margin-top: 6px;
+}
+
+.server-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 1px 2px;
+}
+
+.server-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-4);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  cursor: default;
+}
+
+/* 3.5：断连时服务器节点置灰（data-conn=offline 由 store 驱动；子项目不受影响仍可管理） */
+.server-node[data-conn='offline'] .server-name {
+  color: var(--text-4);
+  opacity: 0.6;
+}
+.server-node[data-conn='connected'] .server-name {
+  color: var(--text-3);
+}
+
+/* 四态状态胶囊（3.11 状态色规范：绿=正常/黄=进行中/灰=断连非错误；红=需处理留待
+   S2 结构化错误信号接入后启用） */
+.conn-pill {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 15px;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+}
+
+.conn-pill[data-state='connected'] {
+  color: var(--ok);
+  background: var(--ok-bg);
+  border-color: var(--ok-border);
+}
+
+.conn-pill[data-state='connecting'],
+.conn-pill[data-state='reconnecting'] {
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+}
+
+.conn-pill[data-state='offline'] {
+  color: var(--text-4);
+  background: var(--bg-sel);
+  border-color: var(--border-3);
+}
+
+.server-children {
+  margin: 2px 0 4px 14px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-soft);
+}
+
 .project-main {
   flex: 1;
   min-width: 0;
@@ -496,6 +588,17 @@ button {
 /* v0.4.5：终端 tab 未打开/已从标题栏关闭 → 灰（无视图不展示活动色） */
 .status-dot[data-visual='closed'] {
   background: var(--dot-gray);
+}
+
+/* S6 5.5 连接态着色叠加（远程任务状态点）：非 connected 时叠加外环色——
+   黄环=连接中/重连中，灰环=断连；任务自身视觉态（busy/idle 等）保持可见 */
+.status-dot[data-conn='connecting'],
+.status-dot[data-conn='reconnecting'] {
+  box-shadow: 0 0 0 2px rgba(210, 153, 34, 0.4);
+}
+
+.status-dot[data-conn='offline'] {
+  box-shadow: 0 0 0 2px rgba(107, 109, 118, 0.4);
 }
 
 /* v0.3.2 运行时长（running 任务行）：等宽数字防跳动 */
@@ -682,7 +785,10 @@ button {
 .project-node-main:hover .row-more,
 .project-node-main:focus-within .row-more,
 .task-row:hover .row-more,
-.task-row:focus-within .row-more {
+.task-row:focus-within .row-more,
+/* S6 服务器行（3.9=a ⋯ 入口与项目/任务行同交互） */
+.server-row:hover .row-more,
+.server-row:focus-within .row-more {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -828,6 +934,18 @@ button {
   border: 1px solid var(--bg-panel);
 }
 
+/* S6 远程项目服务器归属角标（3.10：rail 上远程项目=首字母圆标+归属角标；蓝=远端） */
+.rail-server-dot {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 1px solid var(--bg-panel);
+}
+
 .rail-expand {
   margin-top: auto;
 }
@@ -900,6 +1018,34 @@ button {
   width: 100%;
   height: 100%;
   overflow: hidden;
+  position: relative;
+}
+
+/* ── S6 5.3 断连冻结层：覆盖终端，键入无效（onData 拦截兜底），重连自动解冻 ── */
+.term-frozen {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--overlay);
+  color: var(--text-1);
+}
+
+.term-frozen-msg {
+  font-size: 13px;
+}
+
+.term-frozen-sub {
+  font-size: 12px;
+  color: var(--warn-text);
+}
+
+.term-frozen[data-conn='reconnecting'] .term-frozen-msg {
+  color: var(--warn-text);
 }
 
 .terminal-empty {
@@ -2178,4 +2324,248 @@ button {
   .settings-nav-item {
     flex: 0 0 auto;
   }
+}
+
+/* ── S6 SSH 远程模式：设置「远程连接」/ SFTP 浏览器 / server 安装弹窗 ────────── */
+
+/* 连接档案列表行（复用 provider-list 行栅格；胶囊置首） */
+.conn-row .conn-pill {
+  min-width: 52px;
+  text-align: center;
+}
+
+/* 测试自检四类排障提示（9.2=A） */
+.conn-hints {
+  margin: 6px 0 0;
+  line-height: 1.7;
+  color: var(--text-4);
+}
+
+/* SFTP 目录浏览器弹层（RemoteProjectDialog 内嵌二级弹层） */
+.sftp-overlay {
+  z-index: 320; /* 压过一级 dialog-overlay(300)：目录选择是注册流程的最后一步 */
+}
+
+.sftp-dialog {
+  min-width: 380px;
+  max-width: 480px;
+}
+
+.sftp-path-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.sftp-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.sftp-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.sftp-entry {
+  display: block;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-2);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sftp-entry:hover {
+  background: var(--bg-sel);
+  color: var(--text-max);
+}
+
+.sftp-entry.file {
+  color: var(--text-4);
+  cursor: default;
+}
+
+.sftp-entry.file:hover {
+  background: none;
+  color: var(--text-4);
+}
+
+.sftp-empty,
+.sftp-error {
+  padding: 6px 8px;
+  color: var(--text-4);
+  font-size: 12px;
+}
+
+.sftp-error {
+  color: var(--danger-text);
+}
+
+/* server 安装/升级确认弹窗：进度日志滚动区（onRemoteServerLog → serverLogs） */
+.install-log {
+  margin: 8px 0;
+  padding: 6px 8px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  background: var(--bg-input);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.install-log-line.warn {
+  color: var(--warn-text);
+}
+
+.install-log-line.error {
+  color: var(--danger-text);
+}
+
+/* 远程代理面板区块（ConnectionsSettings 底部） */
+.remote-proxy-block {
+  margin-top: 18px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-2);
+}
+
+/* 排障提示逐行（span 包裹便于逐行文案定位与断行） */
+.conn-hint-line {
+  display: block;
+}
+
+/* 3.11 悬停预览（peek）：折叠 rail 远程项目头像 → 右侧浮层（服务器归属+任务状态） */
+.rail-peek {
+  position: fixed;
+  z-index: 150; /* 低于 ctx-menu(200)/dialog(300)：peek 是被动提示不抢交互 */
+  min-width: 180px;
+  max-width: 260px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-dialog);
+  border: 1px solid var(--border-3);
+  box-shadow: var(--shadow-md);
+}
+
+.rail-peek-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-peek-server {
+  margin: 2px 0 6px;
+  font-size: 10px;
+  color: var(--accent);
+}
+
+.rail-peek-task {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.rail-peek-task-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-peek-empty {
+  font-size: 11px;
+  color: var(--text-4);
+}
+
+/* 自检清单（S2 testConnection.checks 超集渲染）：✓/✗/？ 逐项 + 版本 detail */
+.conn-checks {
+  list-style: none;
+  margin: 6px 0;
+  padding: 2px 6px;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.conn-check-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.conn-check-mark {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.conn-check-item[data-status='ok'] .conn-check-mark {
+  color: var(--ok);
+}
+
+.conn-check-item[data-status='missing'] {
+  color: var(--danger-text);
+}
+
+.conn-check-item[data-status='missing'] .conn-check-mark {
+  color: var(--danger-text);
+  font-weight: 700;
+}
+
+.conn-check-item[data-status='unknown'] .conn-check-mark,
+.conn-check-item[data-status='unknown'] {
+  color: var(--text-4);
+}
+
+.conn-check-detail {
+  color: var(--text-4);
+  font-size: 11px;
+  margin-left: auto;
+}
+
+/* 主机指纹行（TOFU：原串回显；确认按钮内联） */
+.conn-fingerprint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.conn-fingerprint code {
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--bg-input);
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  padding: 1px 5px;
 }

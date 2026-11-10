@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
-import type { ProjectRecord, TaskRecord } from '../../../shared/types'
+import type { ConnectionRecord, ConnectionRuntimeState, ProjectRecord, TaskRecord } from '../../../shared/types'
 import type { MessageKey } from '../../../shared/i18n'
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
@@ -8,6 +8,8 @@ import { useEscapeClose } from '../hooks/useEscapeClose'
 import { TaskStatusDot } from './TaskStatusDot'
 import { SidebarMenu } from './SidebarMenu'
 import type { MenuItemDef } from './SidebarMenu'
+import { connStateText } from './statusVisual'
+import { RemoteProjectDialog } from './RemoteProjectDialog'
 
 /** 时间分组阈值（S6-C）：项目内任务数 > 该值才启用分组，≤3 平铺（可调常量） */
 const TASK_GROUP_THRESHOLD = 3
@@ -17,14 +19,21 @@ const MenuOpenCtx = createContext<{ openKey: string | null; setOpenKey: (k: stri
   { openKey: null, setOpenKey: () => {} }
 )
 
+/** 树条目：项目 + 过滤后任务（本地根级与服务器子级共用形状） */
+interface TreeEntry {
+  project: ProjectRecord
+  tasks: TaskRecord[]
+}
+
 /**
- * 项目树（S6 v0.3 ChatGPT 式改版）：
- * - 行单行化（B）：项目=caret+名称+git 徽标（dir→tooltip）；任务=状态点+名称（cwd→tooltip）
- * - hover 单「⋯」溢出菜单（B）；双击行名=重命名，单击任务行=开 tab
- * - 时间分组（C）：任务数 > TASK_GROUP_THRESHOLD 时按 今天/昨天/近 7 天/更早 分组
- * - 搜索过滤（A）：命中项目名/dir/cwd 子串（不区分大小写）；命中任务自动展开父项目；
- *   搜索态分组禁用（命中平铺），强制展开只覆盖 display 不动 collapsed 集——清空恢复原状
- * - 折叠仍用 CSS 隐藏保挂载（v0.1.2 评审 F5）：重命名草稿/删除勾选不因折叠丢失
+ * 项目树（S6 v0.3 ChatGPT 式改版 + SSH 远程分组树 3.5/3.6/3.11=a）：
+ * - 本机项目根级平铺（3.6=a：无远程配置时与现状完全一致）；服务器=轻分组头
+ *   （小字号浅色行：名称+四态状态胶囊+⋯ 菜单），其远程项目沿用项目>任务树
+ * - 断连（offline）时服务器节点置灰但子项目可管理（3.5：树从持久化元数据渲染）
+ * - 服务器节点折叠态持久化到 serverNodesCollapsed（3.8=A，经 setAppSettings）；
+ *   项目级折叠仍为会话内 state（原行为不变）
+ * - 服务器双入口菜单（3.9=a：右键 + 悬浮 ⋯，复用 SidebarMenu 体系）
+ * - 搜索过滤（A）：项目名/dir、任务名/cwd、服务器名/host 命中；命中服务器=整组保留
  */
 export function ProjectTree({
   query,
@@ -37,6 +46,10 @@ export function ProjectTree({
   const t = useI18n()
   const projects = useAppStore((s) => s.projects)
   const tasks = useAppStore((s) => s.tasks)
+  const connections = useAppStore((s) => s.connections)
+  // 注意不能写 `s.uiSettings.serverNodesCollapsed ?? {}`——选择器须返回稳定引用
+  //（undefined 时每次新建 {} 会触发 zustand 无限重渲），缺省在用点处理
+  const serverNodesCollapsed = useAppStore((s) => s.uiSettings.serverNodesCollapsed)
   /** 折叠集（默认空集=全部展开；新增项目天然展开） */
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [openKey, setOpenKey] = useState<string | null>(null)
@@ -52,28 +65,50 @@ export function ProjectTree({
 
   // 搜索过滤：项目名/dir 命中→整树保留；仅任务命中→父项目保留+只显示命中任务
   const q = query.trim().toLowerCase()
-  const visible = projects
-    .map((p): { project: ProjectRecord; tasks: TaskRecord[] } | null => {
-      const all = tasks.filter((t) => t.projectId === p.id)
-      if (!q) return { project: p, tasks: all }
-      const projectHit =
-        p.name.toLowerCase().includes(q) || p.dir.toLowerCase().includes(q)
-      if (projectHit) return { project: p, tasks: all }
-      const taskHit = all.filter(
-        (t) => t.name.toLowerCase().includes(q) || t.cwd.toLowerCase().includes(q)
-      )
-      if (taskHit.length > 0) return { project: p, tasks: taskHit }
-      return null
+  const buildEntry = (p: ProjectRecord): TreeEntry | null => {
+    const all = tasks.filter((task) => task.projectId === p.id)
+    if (!q) return { project: p, tasks: all }
+    const projectHit =
+      p.name.toLowerCase().includes(q) || p.dir.toLowerCase().includes(q)
+    if (projectHit) return { project: p, tasks: all }
+    const taskHit = all.filter(
+      (task) => task.name.toLowerCase().includes(q) || task.cwd.toLowerCase().includes(q)
+    )
+    if (taskHit.length > 0) return { project: p, tasks: taskHit }
+    return null
+  }
+  const keepNonNull = (x: TreeEntry | null): x is TreeEntry => x !== null
+
+  // 根级=本机项目 + 孤儿远程项目（connectionId 指向已删档案——3.9 删除不级联时回根级兜底）
+  const connIds = new Set(connections.map((c) => c.id))
+  const localEntries = projects
+    .filter((p) => p.connectionId === undefined || !connIds.has(p.connectionId))
+    .map(buildEntry)
+    .filter(keepNonNull)
+
+  // 服务器分组：命中服务器名/host → 整组保留（子项目不再逐个过滤）
+  const serverGroups = connections
+    .map((conn) => {
+      const serverHit = q !== '' && (conn.name.toLowerCase().includes(q) || conn.host.toLowerCase().includes(q))
+      const entries = projects
+        .filter((p) => p.connectionId === conn.id)
+        .map((p) => (serverHit ? { project: p, tasks: tasks.filter((task) => task.projectId === p.id) } : buildEntry(p)))
+        .filter(keepNonNull)
+      if (q !== '' && !serverHit && entries.length === 0) return null
+      return { conn, entries }
     })
-    .filter((x): x is { project: ProjectRecord; tasks: TaskRecord[] } => x !== null)
+    .filter((g): g is { conn: ConnectionRecord; entries: TreeEntry[] } => g !== null)
+
+  const noMatch =
+    q !== '' && localEntries.length === 0 && serverGroups.length === 0
 
   return (
     <MenuOpenCtx.Provider value={{ openKey, setOpenKey }}>
-      {q !== '' && visible.length === 0 ? (
+      {noMatch ? (
         <div className="search-empty">{t('tree.noMatch')}</div>
       ) : (
         <ul className="project-list">
-          {visible.map(({ project, tasks: pTasks }) => (
+          {localEntries.map(({ project, tasks: pTasks }) => (
             <ProjectNode
               key={project.id}
               project={project}
@@ -85,9 +120,219 @@ export function ProjectTree({
               onNewTask={onNewTask}
             />
           ))}
+          {serverGroups.map(({ conn, entries }) => (
+            <ServerNode
+              key={conn.id}
+              connection={conn}
+              entries={entries}
+              expanded={q !== '' ? true : serverNodesCollapsed?.[conn.id] !== true}
+              searching={q !== ''}
+              onNewTask={onNewTask}
+            />
+          ))}
         </ul>
       )}
     </MenuOpenCtx.Provider>
+  )
+}
+
+/**
+ * 服务器节点（3.11=a 轻分组头）：小字号浅色行=折叠 caret+名称+四态状态胶囊+⋯；
+ * 断连（offline）置灰（data-conn 驱动 CSS）但子项目可管理（3.5）。
+ * 折叠态持久化经 store.toggleServerNodeCollapsed（3.8）。
+ */
+function ServerNode({
+  connection,
+  entries,
+  expanded,
+  searching,
+  onNewTask
+}: {
+  connection: ConnectionRecord
+  entries: TreeEntry[]
+  expanded: boolean
+  searching: boolean
+  onNewTask: (projectId: string) => void
+}) {
+  const t = useI18n()
+  const entry = useAppStore((s) => s.connectionStates[connection.id])
+  const state: ConnectionRuntimeState = entry?.state ?? 'offline'
+  const connectFlow = useAppStore((s) => s.connectFlow)
+  const disconnectFlow = useAppStore((s) => s.disconnectFlow)
+  const toggleServerNodeCollapsed = useAppStore((s) => s.toggleServerNodeCollapsed)
+  const openSettings = useAppStore((s) => s.openSettings)
+  const { openKey, setOpenKey } = useContext(MenuOpenCtx)
+  const [deleting, setDeleting] = useState(false)
+  const [registering, setRegistering] = useState(false)
+  /** 组内项目折叠集（会话内 state，对齐根级项目折叠原行为） */
+  const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(new Set())
+  /** 右键菜单光标锚点（null=由 ⋯ 按钮定位）——3.9=a 双入口 */
+  const [ctxAnchor, setCtxAnchor] = useState<{ x: number; y: number } | null>(null)
+  const menuBtnRef = useRef<HTMLButtonElement>(null)
+  /** 占位 ref：右键锚点模式下满足 SidebarMenu 的 triggerRef 契约（终端右键菜单先例） */
+  const nullBtnRef = useRef<HTMLButtonElement>(null)
+  const menuKey = `conn:${connection.id}`
+  const menuOpen = openKey === menuKey
+
+  const closeMenu = () => {
+    setOpenKey(null)
+    setCtxAnchor(null)
+  }
+
+  const menuItems: MenuItemDef[] = [
+    state === 'connected'
+      ? { label: t('conn.menu.disconnect'), onClick: () => void disconnectFlow(connection.id) }
+      : { label: t('conn.menu.connect'), onClick: () => void connectFlow(connection.id) },
+    {
+      label: t('conn.menu.edit'),
+      onClick: () => openSettings('connections', connection.id)
+    },
+    { label: t('conn.menu.newProject'), onClick: () => setRegistering(true) },
+    {
+      label: t('tree.delete'),
+      danger: true,
+      onClick: () => setDeleting(true)
+    }
+  ]
+
+  return (
+    <li
+      className="server-node"
+      data-connection-id={connection.id}
+      data-conn={state}
+    >
+      <div
+        className="server-row"
+        onContextMenu={(e) => {
+          e.preventDefault()
+          setCtxAnchor({ x: e.clientX, y: e.clientY })
+          setOpenKey(menuKey)
+        }}
+      >
+        <button
+          type="button"
+          className="tree-caret"
+          onClick={() => toggleServerNodeCollapsed(connection.id)}
+          aria-expanded={expanded}
+          aria-label={t(expanded ? 's6.collapseServer' : 's6.expandServer', { name: connection.name })}
+          title={t(expanded ? 's6.collapseServer' : 's6.expandServer', { name: connection.name })}
+        >
+          {expanded ? '▾' : '▸'}
+        </button>
+        <span className="server-name" title={`${connection.user}@${connection.host}:${connection.port}`}>
+          {connection.name}
+        </span>
+        <span className="conn-pill" data-state={state} title={connStateText(t, state, entry?.attempt)}>
+          {connStateText(t, state, entry?.attempt)}
+        </span>
+        <RowMenuButton
+          ref={menuBtnRef}
+          ariaLabel={t('s6.serverActions')}
+          open={menuOpen}
+          onToggle={() => {
+            if (menuOpen) closeMenu()
+            else {
+              setCtxAnchor(null)
+              setOpenKey(menuKey)
+            }
+          }}
+        />
+      </div>
+      {menuOpen && (
+        <SidebarMenu
+          triggerRef={ctxAnchor !== null ? nullBtnRef : menuBtnRef}
+          anchor={ctxAnchor ?? undefined}
+          items={menuItems}
+          onClose={closeMenu}
+        />
+      )}
+      {registering && (
+        <RemoteProjectDialog
+          presetConnectionId={connection.id}
+          onClose={() => setRegistering(false)}
+        />
+      )}
+      {deleting && (
+        <DeleteServerDialog connection={connection} onClose={() => setDeleting(false)} />
+      )}
+      {/* 折叠用 CSS 隐藏而非条件卸载（对齐项目级折叠 F5 原则：子树本地状态不因折叠丢失） */}
+      <div className="server-children" style={expanded ? undefined : { display: 'none' }}>
+        {entries.map(({ project, tasks: pTasks }) => (
+          <ProjectNode
+            key={project.id}
+            project={project}
+            tasks={pTasks}
+            expanded={!collapsedProjects.has(project.id)}
+            searching={searching}
+            onToggle={() =>
+              setCollapsedProjects((prev) => {
+                const next = new Set(prev)
+                if (next.has(project.id)) next.delete(project.id)
+                else next.add(project.id)
+                return next
+              })
+            }
+            onNewTask={onNewTask}
+          />
+        ))}
+        {entries.length === 0 && <div className="task-empty">{t('tree.noTasks')}</div>}
+      </div>
+    </li>
+  )
+}
+
+/**
+ * 删除服务器级联确认（3.9=A）：文案显式承诺「仅删客户端记录与连接档案，不删
+ * VM 内任何文件」，并列出将一并移除的客户端侧记录数（实际级联去留以 S2/S5 为准）。
+ */
+function DeleteServerDialog({
+  connection,
+  onClose
+}: {
+  connection: ConnectionRecord
+  onClose: () => void
+}) {
+  const t = useI18n()
+  const removeConnectionFlow = useAppStore((s) => s.removeConnectionFlow)
+  const projects = useAppStore((s) => s.projects)
+  const tasks = useAppStore((s) => s.tasks)
+  useEscapeClose(onClose)
+
+  const remoteProjects = projects.filter((p) => p.connectionId === connection.id)
+  const remoteTaskCount = tasks.filter((task) =>
+    remoteProjects.some((p) => p.id === task.projectId)
+  ).length
+
+  return (
+    <div
+      className="dialog-overlay"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="dialog" role="dialog" aria-label={t('s6.removeServerTitle', { name: connection.name })}>
+        <p className="dialog-title">{t('s6.removeServerTitle', { name: connection.name })}</p>
+        <p className="dialog-hint">{t('conn.menu.removeConfirm')}</p>
+        <p className="dialog-hint">
+          {t('s6.removeServerAffects', { projects: remoteProjects.length, tasks: remoteTaskCount })}
+        </p>
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="btn danger"
+            onClick={() => {
+              onClose()
+              void removeConnectionFlow(connection.id)
+            }}
+          >
+            {t('tree.confirmDelete')}
+          </button>
+          <button type="button" className="btn" onClick={onClose}>
+            {t('common.cancel')}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

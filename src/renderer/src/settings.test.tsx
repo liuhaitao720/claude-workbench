@@ -748,7 +748,9 @@ describe('启动与窗口', () => {
     const api = await renderApp()
     const s = await openSettings()
     gotoSection(s, '通用')
-    await waitFor(() => expect(api.getAppSettings).toHaveBeenCalledTimes(1))
+    // S6 起 getAppSettings 有两个消费方（设置弹窗 + loadSidebarPrefs 侧栏持久化键），
+    // 精确 1 次不再成立——断言「已被调用」+ 值初始化语义不变
+    await waitFor(() => expect(api.getAppSettings).toHaveBeenCalled())
     expect(
       (s.getByRole('radio', { name: '最小化到托盘（常驻）' }) as HTMLInputElement).checked
     ).toBe(true) // mock 默认 closeToTray=true

@@ -31,8 +31,44 @@ export function makeProject(p: Partial<ProjectRecord> = {}): ProjectRecord {
     name: p.name ?? `项目${idCounter}`,
     dir: p.dir ?? `D:\\proj-${idCounter}`,
     isGit: p.isGit ?? true,
+    // S6（7.1）：远程项目归属连接档案 id——显式传入才落键（本地项目保持无键）
+    ...(p.connectionId ? { connectionId: p.connectionId } : {}),
     createdAt: p.createdAt ?? now
   }
+}
+
+/** S6：SSH 连接档案测试工厂（字段缺省值=典型 VMware NAT 场景） */
+export function makeConnection(c: Partial<ConnectionRecord> = {}): ConnectionRecord {
+  idCounter += 1
+  const now = new Date().toISOString()
+  return {
+    id: c.id ?? `c-${idCounter}`,
+    name: c.name ?? `服务器${idCounter}`,
+    host: c.host ?? '192.168.80.128',
+    port: c.port ?? 22,
+    user: c.user ?? 'dev',
+    authMethod: c.authMethod ?? 'key',
+    ...(c.keyPath !== undefined ? { keyPath: c.keyPath } : {}),
+    ...(c.passwordEncrypted !== undefined
+      ? { passwordEncrypted: c.passwordEncrypted }
+      : {}),
+    ...(c.lastHostKeyFingerprint !== undefined
+      ? { lastHostKeyFingerprint: c.lastHostKeyFingerprint }
+      : {}),
+    createdAt: c.createdAt ?? now
+  }
+}
+
+/**
+ * S2 testConnection 返回超集（TestConnectionOutcome：kind/hostKeyFingerprint/checks；
+ * shared 契约面仍是 {ok,error}，mock 侧先行宽类型——与真实 handler 输出同形）。
+ */
+export interface ConnTestResultMock {
+  ok: boolean
+  error?: string
+  kind?: string
+  hostKeyFingerprint?: string
+  checks?: Array<{ id: string; status: 'ok' | 'missing' | 'unknown'; detail?: string }>
 }
 
 export function makeTask(t: Partial<TaskRecord> = {}): TaskRecord {
@@ -57,7 +93,16 @@ export function makeTask(t: Partial<TaskRecord> = {}): TaskRecord {
   }
 }
 
-export type CwbApiMock = CWBApi & {
+/**
+ * CwbApiMock：CWBApi 全量 mock + 回调捕获数组。addProject 在 S6 起接受可选
+ * connectionId（远程项目注册流；真实契约扩展归 S5——见 store.ts 的接线桩注释），
+ * 故以 Omit 重组类型放宽该签名。
+ */
+export type CwbApiMock = Omit<CWBApi, 'addProject' | 'testConnection'> & {
+  /** 远程项目注册（第二参=连接档案 id；S6 mock 侧支持，真实 main 侧由 S5 接线） */
+  addProject: (dir: string, connectionId?: string) => Promise<ProjectRecord>
+  /** 只读连通测试（S2 超集：kind/fingerprint/checks 结构化自检清单） */
+  testConnection: (id: string) => Promise<ConnTestResultMock>
   /** 捕获的 onPtyData 回调（App mount 后由 initListeners 注册） */
   ptyCallbacks: Array<(e: PtyDataEvent) => void>
   /** 捕获的 onTaskUpdate 回调 */
@@ -68,6 +113,10 @@ export type CwbApiMock = CWBApi & {
   cliOutputCallbacks: Array<(e: CliOutputEvent) => void>
   /** 捕获的 onAppUpdateProgress 回调（v1.1.0：设置中心订阅；注入下载进度用） */
   appUpdateProgressCallbacks: Array<(e: AppUpdateProgressEvent) => void>
+  /** 捕获的 onConnectionState 回调（S6：initListeners 注册；注入连接状态迁移用） */
+  connectionStateCallbacks: Array<(e: ConnectionStateChangedEvent) => void>
+  /** 捕获的 onRemoteServerLog 回调（S6：安装弹窗进度/环形日志用） */
+  remoteServerLogCallbacks: Array<(e: RemoteServerLogEvent) => void>
   /** onPtyData 返回的退订函数（unmount 时应被调用） */
   ptyDisposer: ReturnType<typeof vi.fn>
   /** onTaskUpdate 返回的退订函数 */
@@ -76,30 +125,45 @@ export type CwbApiMock = CWBApi & {
   activityDisposer: ReturnType<typeof vi.fn>
   /** onCliOutput 返回的退订函数（v0.5③） */
   cliOutputDisposer: ReturnType<typeof vi.fn>
+  /** onConnectionState 返回的退订函数（S6） */
+  connectionStateDisposer: ReturnType<typeof vi.fn>
+  /** onRemoteServerLog 返回的退订函数（S6） */
+  remoteServerLogDisposer: ReturnType<typeof vi.fn>
 }
 
-/** 安装 window.cwb 全量 mock（18 法），返回带回调捕获与退订句柄的 mock。
+/** 安装 window.cwb 全量 mock，返回带回调捕获与退订句柄的 mock。
  *  v1.4：providers/defaultProviderId 预置模型服务档案（loadAll mount 即拉取——
- *  事后覆写 mock 来不及，必须经 opts 在 render 前注入）。 */
+ *  事后覆写 mock 来不及，必须经 opts 在 render 前注入）。
+ *  S6：connections/appSettings 同理预置（侧栏分组树与持久化键消费）。 */
 export function installCwbMock(
   opts: {
     projects?: ProjectRecord[]
     tasks?: TaskRecord[]
     providers?: ProviderConfig[]
     defaultProviderId?: string
+    /** S6：连接档案（侧栏服务器节点/注册对话框数据源） */
+    connections?: ConnectionRecord[]
+    /** S6：getAppSettings 返回的持久化键（sidebarWidth 等；与默认值浅合并） */
+    appSettings?: Partial<AppSettings>
   } = {}
 ): CwbApiMock {
   const projects = opts.projects ?? []
   const tasks = opts.tasks ?? []
+  const connections = opts.connections ?? []
+  const presetSettings = opts.appSettings ?? {}
   const ptyCallbacks: Array<(e: PtyDataEvent) => void> = []
   const taskUpdateCallbacks: Array<(t: TaskUpdateEvent) => void> = []
   const activityCallbacks: Array<(e: TaskActivityEvent) => void> = []
   const ptyDisposer = vi.fn()
   const cliOutputCallbacks: Array<(e: CliOutputEvent) => void> = []
   const appUpdateProgressCallbacks: Array<(e: AppUpdateProgressEvent) => void> = []
+  const connectionStateCallbacks: Array<(e: ConnectionStateChangedEvent) => void> = []
+  const remoteServerLogCallbacks: Array<(e: RemoteServerLogEvent) => void> = []
   const cliOutputDisposer = vi.fn()
   const taskDisposer = vi.fn()
   const activityDisposer = vi.fn()
+  const connectionStateDisposer = vi.fn()
+  const remoteServerLogDisposer = vi.fn()
 
   const api: CwbApiMock = {
     // v1.3：CWBApi 新增 platform——mock 钉死 'win32'（组件按平台分支的行为在
@@ -110,12 +174,22 @@ export function installCwbMock(
     activityCallbacks,
     cliOutputCallbacks,
     appUpdateProgressCallbacks,
+    connectionStateCallbacks,
+    remoteServerLogCallbacks,
     ptyDisposer,
     taskDisposer,
     activityDisposer,
     cliOutputDisposer,
+    connectionStateDisposer,
+    remoteServerLogDisposer,
     listProjects: vi.fn(async () => projects),
-    addProject: vi.fn(async (dir: string) => makeProject({ dir, isGit: true })),
+    // S6：第二可选参 connectionId——远程项目注册（返回记录带 connectionId/isGit 检测）
+    addProject: vi.fn(async (dir: string, connectionId?: string) => {
+      const base = makeProject({ dir, isGit: true })
+      return connectionId !== undefined && connectionId !== ''
+        ? { ...base, connectionId }
+        : base
+    }),
     removeProject: vi.fn(async (_id: string) => {}),
     renameProject: vi.fn(async (id: string, name: string) => makeProject({ id, name })),
     listTasks: vi.fn(async () => tasks),
@@ -179,8 +253,12 @@ export function installCwbMock(
     }),
     // v1.1.0 claude CLI 更新说明（默认空；CLI 检查更新用例覆写）
     getClaudeChangelog: vi.fn(async () => ({ notes: [], error: undefined })),
-    getAppSettings: vi.fn(async () => ({ closeToTray: true, launchAtLogin: false } as AppSettings)),
-    setAppSettings: vi.fn(async (patch: Partial<AppSettings>) => ({ closeToTray: true, launchAtLogin: false, ...patch } as AppSettings)),
+    getAppSettings: vi.fn(async () =>
+      ({ closeToTray: true, launchAtLogin: false, ...presetSettings } as AppSettings)
+    ),
+    setAppSettings: vi.fn(async (patch: Partial<AppSettings>) =>
+      ({ closeToTray: true, launchAtLogin: false, ...patch } as AppSettings)
+    ),
     // v0.5 契约第 19-30 法 mock（骨架默认；具体用例可 vi.mocked 覆写返回值）
     listSkills: vi.fn(async () => [] as SkillInfo[]),
     importSkillFolder: vi.fn(async () => {
@@ -231,18 +309,45 @@ export function installCwbMock(
       ok: true,
       commandId: 'skill-plugin-toggle-test'
     })),
-    // SSH 远程连接（S1 批0 契约的 mock 桩：默认不模拟任何成功路径——远程用例待 S6 起
-    // 按需覆写/扩捕获数组；照 importSkillFolder「NotImplemented（测试中覆写）」先例）
-    listConnections: vi.fn(async () => [] as ConnectionRecord[]),
-    saveConnection: vi.fn(async (connection: ConnectionRecord) => connection),
+    // SSH 远程连接（S1 批0 桩 + S6 起注入真实 mock 行为，mock 驱动开发）：
+    // 档案/状态订阅/浏览可用；installRemoteServer 留 NotImplemented 默认（成功路径
+    // 按用例覆写）；testConnection=S2 超集默认全通过清单（server=unknown 不阻断）
+    listConnections: vi.fn(async () => connections),
+    saveConnection: vi.fn(async (connection: ConnectionRecord) =>
+      connection.id === '' ? makeConnection({ ...connection, id: undefined }) : connection
+    ),
     removeConnection: vi.fn(async (_id: string) => {}),
-    testConnection: vi.fn(async () => ({ ok: false, error: 'NotImplemented（测试中覆写）' })),
+    testConnection: vi.fn(
+      async (_id: string): Promise<ConnTestResultMock> => ({
+        ok: true,
+        hostKeyFingerprint: 'SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        checks: [
+          { id: 'sshd', status: 'ok' },
+          { id: 'claude', status: 'ok', detail: '2.1.301' },
+          { id: 'node', status: 'ok', detail: 'v22.14.0' },
+          { id: 'server', status: 'unknown' }
+        ]
+      })
+    ),
     connectConnection: vi.fn(async (_id: string) => {}),
     disconnectConnection: vi.fn(async (_id: string) => {}),
-    browseRemoteDir: vi.fn(async () => ({ ok: false, error: 'NotImplemented（测试中覆写）' })),
+    browseRemoteDir: vi.fn(async (_connectionId: string, path?: string) => ({
+      ok: true as const,
+      path: path ?? '/home/dev',
+      entries: [
+        { name: 'projects', isDir: true },
+        { name: 'README.md', isDir: false }
+      ]
+    })),
     installRemoteServer: vi.fn(async () => ({ ok: false, error: 'NotImplemented（测试中覆写）' })),
-    onConnectionState: vi.fn((_cb: (e: ConnectionStateChangedEvent) => void) => () => {}),
-    onRemoteServerLog: vi.fn((_cb: (e: RemoteServerLogEvent) => void) => () => {}),
+    onConnectionState: vi.fn((cb: (e: ConnectionStateChangedEvent) => void) => {
+      connectionStateCallbacks.push(cb)
+      return connectionStateDisposer
+    }),
+    onRemoteServerLog: vi.fn((cb: (e: RemoteServerLogEvent) => void) => {
+      remoteServerLogCallbacks.push(cb)
+      return remoteServerLogDisposer
+    }),
     getRemoteProxyStatus: vi.fn(async () => ({
       running: false,
       stats: { total: 0, active: 0, direct: 0, viaProxy: 0 }

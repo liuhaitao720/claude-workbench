@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
+import { createPortal } from 'react-dom'
 import type { ProjectRecord, ProviderRegistryState, TaskRecord } from '../../../shared/types'
-import { useAppStore } from '../store'
+import {
+  SIDEBAR_WIDTH_DEFAULT,
+  clampSidebarWidth,
+  useAppStore
+} from '../store'
 import { APP_VERSION } from '../app-info'
 import { loadDefaultIsolation, persistDefaultIsolation } from '../default-isolation'
 import { useEscapeClose } from '../hooks/useEscapeClose'
@@ -13,12 +19,15 @@ import { TaskStatusDot } from './TaskStatusDot'
 const RECENT_LIMIT = 5
 
 /**
- * 左侧栏（S6 v0.3 ChatGPT 式改版）：
+ * 左侧栏（S6 v0.3 ChatGPT 式改版 + SSH 远程模式 3.7/3.10/3.11）：
  * - 顶部操作区（A）：☰ 折叠开关 + 标题 + 打开目录；「＋ 新建任务」主按钮
  *   （当前选中项目；无选中时禁用+tooltip，定夺见 A16）+ 搜索框实时过滤项目树
  * - 最近区块（C）：搜索框下方，跨项目按 lastActiveAt 取前 5，点击开 tab
  * - 折叠图标栏（D）：48px rail（＋/🔍/项目首字母圆形标+git 角标/底部 ☰）；
- *   折叠态存组件内不持久化（定夺见 A17，刷新重置）
+ *   3.10=A：折叠态持久化（sidebarCollapsedPersist，经 setAppSettings——推翻 A17）；
+ *   远程项目沿用首字母圆标+服务器归属角标（rail-server-dot）
+ * - 3.7=A：右缘拖拽调宽 240–480px（拖拽中本地 state 即时反馈，松手落
+ *   sidebarWidth 持久化；clamp 见 store.clampSidebarWidth）
  * - 快捷键（F）：Ctrl+N 新建 / Ctrl+F 聚焦搜索 / Ctrl+B 折叠——window 级监听，
  *   焦点在输入框/终端宿主时不劫持
  * - 新建任务对话框（A）：自旧每项目内联 NewTaskForm 迁移（三选/git 分支逻辑不变），
@@ -28,11 +37,20 @@ export function ProjectSidebar() {
   const t = useI18n()
   const projects = useAppStore((s) => s.projects)
   const tasks = useAppStore((s) => s.tasks)
+  const connections = useAppStore((s) => s.connections)
   const selectedProjectId = useAppStore((s) => s.selectedProjectId)
   const openProjectFlow = useAppStore((s) => s.openProjectFlow)
   const selectProject = useAppStore((s) => s.selectProject)
   const openTaskAutoResume = useAppStore((s) => s.openTaskAutoResume)
   const openSkills = useAppStore((s) => s.openSkills)
+  // 3.10=A 整栏折叠态持久化（消费 settings.sidebarCollapsedPersist；A17 推翻）
+  const railCollapsed = useAppStore((s) => s.uiSettings.sidebarCollapsedPersist === true)
+  const setSidebarCollapsed = useAppStore((s) => s.setSidebarCollapsed)
+  // 3.7=A 宽度持久化（settings.sidebarWidth；拖拽中的即时值走本地 state）
+  const sidebarWidthPref = useAppStore((s) => s.uiSettings.sidebarWidth)
+  const setSidebarWidth = useAppStore((s) => s.setSidebarWidth)
+  const [dragWidth, setDragWidth] = useState<number | null>(null)
+  const sidebarWidth = dragWidth ?? clampSidebarWidth(sidebarWidthPref ?? SIDEBAR_WIDTH_DEFAULT)
   // v1.1.0 更新角标数据源（null=未检查/已是最新/检查失败）；
   // v1.3：平台不支持自动升级（linux，platformSupported=false）不亮角标——
   // 角标引导的是应用内下载/升级链路，该链路在 linux 被门禁禁用
@@ -41,19 +59,59 @@ export function ProjectSidebar() {
     appUpdateInfo !== null && !appUpdateInfo.upToDate && appUpdateInfo.platformSupported !== false
   const openSettings = useAppStore((s) => s.openSettings)
 
-  const [railCollapsed, setRailCollapsed] = useState(false)
   const [query, setQuery] = useState('')
   /** 新建对话框目标项目（null=关闭）——项目菜单入口会预选中该项目 */
   const [newTaskProjectId, setNewTaskProjectId] = useState<string | null>(null)
   const [pendingSearchFocus, setPendingSearchFocus] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
-
+  /** 3.11 悬停预览（peek）：远程项目头像悬停 400ms 后的浮层锚点（null=关） */
+  const [peek, setPeek] = useState<{ projectId: string; top: number; left: number } | null>(null)
+  const peekTimer = useRef<number | null>(null)
+  const openPeek = (p: ProjectRecord, el: HTMLElement): void => {
+    if (peekTimer.current !== null) window.clearTimeout(peekTimer.current)
+    const rect = el.getBoundingClientRect()
+    peekTimer.current = window.setTimeout(() => {
+      setPeek({ projectId: p.id, top: rect.top, left: rect.right + 10 })
+    }, 400)
+  }
+  const closePeek = (): void => {
+    if (peekTimer.current !== null) {
+      window.clearTimeout(peekTimer.current)
+      peekTimer.current = null
+    }
+    setPeek(null)
+  }
+  useEffect(() => {
+    // 卸载清理 peek 计时器（对齐 clickTimer 先例）
+    return () => {
+      if (peekTimer.current !== null) window.clearTimeout(peekTimer.current)
+    }
+  }, [])
 
   /** 三入口共用的打开动作：预选中项目 + 展开侧栏 + 开对话框 */
   const openNewTask = (projectId: string) => {
     selectProject(projectId)
-    setRailCollapsed(false)
+    setSidebarCollapsed(false)
     setNewTaskProjectId(projectId)
+  }
+
+  // ── 3.7=A 宽度拖拽：mousedown 记起点 → mousemove 即时反馈（本地 state）→
+  //    mouseup 松手一次性持久化（store 内部再去抖合并 setAppSettings 写盘）──
+  const onResizerDown = (e: ReactMouseEvent<HTMLDivElement>): void => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = sidebarWidth
+    const onMove = (ev: MouseEvent): void => {
+      setDragWidth(clampSidebarWidth(startWidth + ev.clientX - startX))
+    }
+    const onUp = (ev: MouseEvent): void => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      setDragWidth(null)
+      setSidebarWidth(clampSidebarWidth(startWidth + ev.clientX - startX))
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
   }
 
   // 折叠态点 ＋/🔍（或 Ctrl+N/F）先展开再落对应动作——展开后的下一帧聚焦搜索框
@@ -78,18 +136,19 @@ export function ProjectSidebar() {
       if (isTypingTarget(e)) return
       const k = e.key.toLowerCase()
       if (k === 'b') {
-        setRailCollapsed((v) => !v)
+        // 3.10=A：折叠态经 store 落 sidebarCollapsedPersist（读 getState 防闭包过期）
+        setSidebarCollapsed(useAppStore.getState().uiSettings.sidebarCollapsedPersist !== true)
       } else if (k === 'n') {
         if (selectedProjectId !== null) openNewTask(selectedProjectId)
       } else if (k === 'f') {
         e.preventDefault() // 拦下浏览器查找
-        setRailCollapsed(false)
+        setSidebarCollapsed(false)
         setPendingSearchFocus(true)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedProjectId])
+  }, [selectedProjectId, setSidebarCollapsed])
 
   // 「最近」区块数据（C）：跨项目 lastActiveAt 前 5（含项目名后缀）——
   // find 返回 undefined（非 null）——判 undefined，孤儿任务过滤掉；
@@ -123,7 +182,7 @@ export function ProjectSidebar() {
             className="rail-btn"
             title={t('sidebar.searchExpand')}
             onClick={() => {
-              setRailCollapsed(false)
+              setSidebarCollapsed(false)
               setPendingSearchFocus(true)
             }}
           >
@@ -145,14 +204,31 @@ export function ProjectSidebar() {
                 type="button"
                 className={p.id === selectedProjectId ? 'rail-avatar selected' : 'rail-avatar'}
                 data-project-id={p.id}
-                title={p.name}
+                data-remote={p.connectionId !== undefined ? '1' : undefined}
+                title={
+                  p.connectionId !== undefined
+                    ? `${p.name} · ${connections.find((c) => c.id === p.connectionId)?.name ?? ''}`
+                    : p.name
+                }
                 onClick={() => {
                   selectProject(p.id)
-                  setRailCollapsed(false)
+                  setSidebarCollapsed(false)
                 }}
+                /* 3.11 悬停预览（peek）：远程项目头像悬停 400ms → 浮层看服务器归属与任务状态 */
+                onMouseEnter={(e) => {
+                  if (p.connectionId !== undefined) openPeek(p, e.currentTarget)
+                }}
+                onMouseLeave={closePeek}
               >
                 {initialsOf(p.name)}
                 {p.isGit && <span className="rail-git-dot" title={t('sidebar.gitProject')} />}
+                {/* 3.10 备注落地：rail 上远程项目=首字母圆标+服务器归属角标 */}
+                {p.connectionId !== undefined && (
+                  <span
+                    className="rail-server-dot"
+                    title={connections.find((c) => c.id === p.connectionId)?.name ?? ''}
+                  />
+                )}
               </button>
             ))}
           </div>
@@ -182,7 +258,7 @@ export function ProjectSidebar() {
             type="button"
             className="rail-btn rail-expand"
             title={t('sidebar.expand')}
-            onClick={() => setRailCollapsed(false)}
+            onClick={() => setSidebarCollapsed(false)}
           >
             ☰
           </button>
@@ -191,8 +267,13 @@ export function ProjectSidebar() {
         <aside
           className="sidebar"
           aria-hidden={railCollapsed}
-          style={railCollapsed ? { display: 'none' } : undefined}
+          style={{
+            ...(railCollapsed ? { display: 'none' as const } : {}),
+            width: `${sidebarWidth}px`
+          }}
         >
+          {/* 3.7=A 宽度拖拽手柄：右缘 4px 热区（css :hover 高亮），拖拽改宽 240–480 */}
+          <div className="sidebar-resizer" role="separator" aria-orientation="vertical" onMouseDown={onResizerDown} />
           {/* v1.2.1 用户指令：版本号改为纯文本（不再开弹窗）；Skills / 设置
               两个入口收敛为图标按钮，紧跟版本号之后——头部一行解决，不再单独占
               「Skills | 设置」一整行（腾出的空间给项目树）。
@@ -294,7 +375,55 @@ export function ProjectSidebar() {
             onCreated={() => setQuery('')} /* 评审 F4：过滤态创建的任务立即可见——清搜索词 */
           />
         )}
+        {peek !== null && (
+          <RailPeek projectId={peek.projectId} top={peek.top} left={peek.left} onClose={closePeek} />
+        )}
     </>
+  )
+}
+
+/**
+ * 3.11 悬停预览（peek）：折叠 rail 上远程项目头像悬停 → 浮层显示服务器归属 +
+ * 该项目任务状态点（最多 5 条，按最近活跃）。portal 挂 body；离开头像/浮层关闭。
+ */
+function RailPeek({
+  projectId,
+  top,
+  left,
+  onClose
+}: {
+  projectId: string
+  top: number
+  left: number
+  onClose: () => void
+}) {
+  const tr = useI18n()
+  const project = useAppStore((s) => s.projects.find((p) => p.id === projectId))
+  const connections = useAppStore((s) => s.connections)
+  // 注意选择器须返回稳定引用：tasks 取原数组，过滤在渲染期做（新建数组会无限重渲）
+  const tasks = useAppStore((s) => s.tasks)
+  if (project === undefined) return null
+  const server = connections.find((c) => c.id === project.connectionId)
+  const list = tasks
+    .filter((t) => t.projectId === projectId)
+    .sort((a, b) => Date.parse(b.lastActiveAt) - Date.parse(a.lastActiveAt))
+    .slice(0, 5)
+  return createPortal(
+    <div className="rail-peek" style={{ top, left }} role="tooltip" onMouseLeave={onClose}>
+      <div className="rail-peek-title">{project.name}</div>
+      {server !== undefined && <div className="rail-peek-server">{server.name}</div>}
+      {list.length === 0 ? (
+        <div className="rail-peek-empty">{tr('tree.noTasks')}</div>
+      ) : (
+        list.map((t) => (
+          <div key={t.id} className="rail-peek-task">
+            <TaskStatusDot task={t} />
+            <span className="rail-peek-task-name">{t.name}</span>
+          </div>
+        ))
+      )}
+    </div>,
+    document.body
   )
 }
 

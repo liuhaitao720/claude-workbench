@@ -11,7 +11,7 @@ import { isFontFamily, isFontInstalled, loadFontFamily, persistFontFamily } from
 import { terminalThemeFor } from '../theme'
 import { SidebarMenu } from './SidebarMenu'
 import type { EffectiveTheme } from '../theme'
-import { subscribeTaskData, useAppStore } from '../store'
+import { connectionStateOfTask, isTaskInputFrozen, subscribeTaskData, useAppStore } from '../store'
 import { useI18n } from '../i18n'
 
 /**
@@ -151,6 +151,11 @@ function disposeTaskTerminal(taskId: string, host: HTMLElement): void {
 function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
   const tr = useI18n()
   const hostRef = useRef<HTMLDivElement>(null)
+  // S6 5.3/5.5：任务归属连接的运行时状态（本地任务=undefined 恒不冻结）
+  const connEntry = useAppStore((s) => connectionStateOfTask(s, task))
+  const connId = useAppStore((s) => s.projects.find((p) => p.id === task.projectId)?.connectionId)
+  const connectFlow = useAppStore((s) => s.connectFlow)
+  const frozen = connEntry !== undefined && connEntry.state !== 'connected'
   // v1.0.4 右键菜单：光标锚点 + 打开时刻的选中快照；nullBtnRef 永空（占位满足
   // SidebarMenu 的 triggerRef 契约——outside-click 对任何点击都关闭，含终端区）
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; sel: string } | null>(null)
@@ -337,7 +342,12 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
     ta?.addEventListener('compositionend', onCompositionEnd)
     ta?.addEventListener('blur', onTextareaBlur)
 
-    const onDataDisposer = terminal.onData((d) => window.cwb.ptyWrite(task.id, d))
+    const onDataDisposer = terminal.onData((d) => {
+      // 5.3=A 断连冻结：连接态非 connected 时键入无效（不排队补发——重连瞬间一口气
+      // 到达易误提交）；重连恢复自动解冻（store 连接态驱动，每次键入实时读）
+      if (isTaskInputFrozen(task.id)) return
+      window.cwb.ptyWrite(task.id, d)
+    })
     const unsubscribePty = subscribeTaskData(task.id, (d) => {
       if (composing) {
         pending += d
@@ -461,6 +471,27 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
         setCtxMenu({ x: e.clientX, y: e.clientY, sel: term?.getSelection() ?? '' })
       }}
     >
+      {/* 5.3=A 断连冻结层：覆盖终端（pointer-events 拦截点击），重连自动解冻；
+          reconnecting 附「第 n 次」、offline 提供手动立即重试（5.5=a） */}
+      {frozen && (
+        <div className="term-frozen" data-conn={connEntry.state} role="status">
+          <span className="term-frozen-msg">{tr('conn.frozen')}</span>
+          {connEntry.state === 'reconnecting' && (
+            <span className="term-frozen-sub">
+              {tr('conn.state.reconnecting', { attempt: connEntry.attempt ?? 1 })}
+            </span>
+          )}
+          {connEntry.state !== 'connecting' && connId !== undefined && (
+            <button
+              type="button"
+              className="btn small"
+              onClick={() => void connectFlow(connId)}
+            >
+              {tr('conn.retryNow')}
+            </button>
+          )}
+        </div>
+      )}
       {ctxMenu !== null && (
         <SidebarMenu
           triggerRef={nullBtnRef}

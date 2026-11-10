@@ -1,9 +1,26 @@
 import { create } from 'zustand'
 import { useCallback } from 'react'
 import { LANGUAGE_LABELS, translate, type Language, type MessageKey } from '../../../shared/i18n'
+import { isS6Key, translateS6, type AnyMessageKey, type S6MessageKey } from './s6'
 
 export { LANGUAGE_LABELS, translate }
 export type { Language, MessageKey }
+export { translateS6 }
+export type { AnyMessageKey, S6MessageKey }
+
+/**
+ * renderer 统一取文案：shared 全量键优先，`s6.` 前缀键走 S6 补充字典（见 ./s6.ts
+ * 头注——S6 填值区 20 键之外的界面文案落 renderer 侧，待主控契约流程并入 shared）。
+ */
+export function translateAny(
+  lang: Language,
+  key: AnyMessageKey,
+  params?: Record<string, string | number>
+): string {
+  return isS6Key(key)
+    ? translateS6(lang, key as S6MessageKey, params)
+    : translate(lang, key, params)
+}
 
 /**
  * 语言状态（v1.2.0）：localStorage 持久化（键 cwb-language），默认中文。
@@ -54,17 +71,17 @@ export const useLanguageStore = create<LanguageState>()((set) => ({
   }
 }))
 
-export type TFn = (key: MessageKey, params?: Record<string, string | number>) => string
+/** 组件内取翻译函数：`const t = useI18n()`（键=shared 全量 + S6 补充） */
+export type TFn = (key: AnyMessageKey, params?: Record<string, string | number>) => string
 
-/** 组件内取翻译函数：`const t = useI18n()` */
 export function useI18n(): TFn {
   const language = useLanguageStore((s) => s.language)
-  return useCallback<TFn>((key, params) => translate(language, key, params), [language])
+  return useCallback<TFn>((key, params) => translateAny(language, key, params), [language])
 }
 
 /** 非组件环境（store action / 模块级常量）取翻译：读当前 store 值，语言切换后自动生效 */
-export function t(key: MessageKey, params?: Record<string, string | number>): string {
-  return translate(useLanguageStore.getState().language, key, params)
+export function t(key: AnyMessageKey, params?: Record<string, string | number>): string {
+  return translateAny(useLanguageStore.getState().language, key, params)
 }
 
 /**

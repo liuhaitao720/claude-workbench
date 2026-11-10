@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store'
+import type { SettingsSectionId } from '../store'
 import type { Theme } from '../theme'
 import { useEscapeClose } from '../hooks/useEscapeClose'
 import { CliOutputView } from './CliOutputView'
+import { ConnectionsSection } from './ConnectionsSettings'
 import { changeFontFamily, changeFontSize } from './TerminalPanel'
 import { FONT_FAMILY_WHITELIST, loadFontFamily } from '../font-family'
 import { FONT_SIZE_MAX, FONT_SIZE_MIN, clampFontSize, loadFontSize } from '../font-size'
@@ -158,14 +160,16 @@ const NATIVE_INSTALL_CMD = IS_LINUX_UI
 const NPM_INSTALL_CMD = 'npm install -g @anthropic-ai/claude-code'
 const CLAUDE_DOCS_URL = 'https://claude.ai/docs/setup'
 
-/** 设置中心分类 id（v1.4 重构：外观+终端+通知+启动 合并为「通用」，左栏收敛 4 项） */
-type SettingsSectionId = 'general' | 'providers' | 'cli' | 'about'
+/** 设置中心分类 id（v1.4 重构：外观+终端+通知+启动 合并为「通用」；S6 增「远程连接」
+ *  ——类型定义收敛在 store.ts，openSettings 直达与弹窗内导航共用同一集合） */
 
 /** 设置中心导航（id 稳定作 activeSection 锚点；label 经 i18n）。
- *  v1.4：通用（外观/终端/通知/启动）→ 模型服务（provider + 本地代理）→ claude CLI → 关于。 */
+ *  v1.4：通用（外观/终端/通知/启动）→ 模型服务（provider + 本地代理）→ claude CLI → 关于。
+ *  S6：模型服务后插「远程连接」（label 复用 conn.dialog.title；摘要=档案数）。 */
 const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; labelKey: MessageKey }> = [
   { id: 'general', labelKey: 'settings.sectionGeneral' },
   { id: 'providers', labelKey: 'settings.sectionProviders' },
+  { id: 'connections', labelKey: 'conn.dialog.title' },
   { id: 'cli', labelKey: 'settings.sectionCli' },
   { id: 'about', labelKey: 'settings.sectionAbout' }
 ]
@@ -248,8 +252,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [appUpdReady, setAppUpdReady] = useState(false)
   /** v1.2.1 自动升级开关（main settings.json 持久化；缺省开） */
   const [autoUpdate, setAutoUpdate] = useState(true)
-  /** S14：当前展示的分类（默认首项「外观」；v1.2.2 起无 ⓘ 直达入口） */
-  const [activeSection, setActiveSection] = useState<SettingsSectionId>('general')
+  /** S14：当前展示的分类（默认首项「外观」；v1.2.2 起无 ⓘ 直达入口）。
+   *  S6：初值取 store.settingsOpenSection（服务器菜单「编辑连接…」等入口直达用） */
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>(
+    () => useAppStore.getState().settingsOpenSection
+  )
+  /** S6：openSettings 携带的连接档案编辑目标（一次消费：仅初值传入子组件） */
+  const initialEditConnectionId = useRef(useAppStore.getState().settingsEditConnectionId)
 
   // v1.1.0 下载进度订阅（main 经 cwb:event:app-update-progress 推送；v1.2.1 增加
   // available=自动检查结果 / waiting-tasks=等任务结束）
@@ -410,7 +419,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   // S14 左栏当前值摘要：全部从既有 state 派生（字号输入清空的中间态回退到实际
   // 生效值；CLI 检测中/失败均不属于「已装」——失败与未装同示「未安装」；
-  // v1.2.2「关于」摘要改为应用更新状态——分类里更新是主要动态信息，版本号在内容区首行）
+  // v1.2.2「关于」摘要改为应用更新状态——分类里更新是主要动态信息，版本号在内容区首行；
+  // S6「远程连接」摘要=已配置档案数（未配置同 provider 惯例）
+  const connections = useAppStore((s) => s.connections)
   const sectionSummaries: Record<SettingsSectionId, string> = {
     general: `${themeChoices.find((c) => c.value === theme)?.label ?? ''} · ${
       fontSizeInput === '' ? String(loadFontSize()) : fontSizeInput
@@ -420,6 +431,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         ? t('settings.providerSummaryNone')
         : (providerState.providers.find((p) => p.id === providerState.defaultProviderId)?.name ??
           t('settings.providerSummaryCount', { count: providerState.providers.length })),
+    connections:
+      connections.length === 0
+        ? t('settings.providerSummaryNone')
+        : t('settings.providerSummaryCount', { count: connections.length }),
     cli: installed
       ? cliInfo.version
       : cliInfo !== null || cliError !== ''
@@ -1504,10 +1519,19 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               </div>
             )}
 
+            {/* S6 远程连接：连接档案 CRUD + 测试自检 + 远程代理面板（结构与交互见
+                ConnectionsSettings；服务器菜单「编辑连接…」直达本分类） */}
+            {activeSection === 'connections' && (
+              <ConnectionsSection initialEditId={initialEditConnectionId.current} />
+            )}
+
             {/* claude CLI：版本/路径/更新/安装（迁自 About） */}
             {activeSection === 'cli' && (
               <div className="dialog-section">
                 <p className="section-title">{t('settings.sectionCli')}</p>
+                {/* S6 远程上下文占位说明（6.3/6.5）：远程任务的 CLI 版本检测与更新
+                    面向远端，由「远程连接」分类接管（S5 落地后此说明接真实入口） */}
+                <p className="hint-small">{t('s6.cliRemoteNote')}</p>
                 {cliInfo === null && cliError === '' && <p className="muted">{t('common.detecting')}</p>}
                 {cliError !== '' && <p className="inline-error">{cliError}</p>}
                 {installed && (

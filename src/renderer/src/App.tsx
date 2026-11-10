@@ -6,6 +6,7 @@ import { TerminalPanel, focusActiveTerminal } from './components/TerminalPanel'
 import { SmokeBridge } from './components/SmokeBridge'
 import { SkillsDialog } from './components/SkillsDialog'
 import { SettingsDialog } from './components/SettingsDialog'
+import { ServerInstallDialog } from './components/ServerInstallDialog'
 import { useI18n, syncLanguageToMain } from './i18n'
 
 /** ?smoke=1：--smoke 冒烟模式下 main 注入的 URL query（模块加载时解析一次，运行期不变） */
@@ -50,6 +51,8 @@ export function App() {
   const openTaskIds = useAppStore((s) => s.openTaskIds)
   const skillsOpen = useAppStore((s) => s.skillsOpen)
   const settingsOpen = useAppStore((s) => s.settingsOpen)
+  // S6（6.7=A）：连接流程触发 needInstall 时的 server 安装/升级确认弹窗
+  const pendingServerInstall = useAppStore((s) => s.pendingServerInstall)
 
   return (
     <div className="app">
@@ -78,6 +81,11 @@ export function App() {
             useAppStore.getState().closeSettings()
             focusActiveTerminal()
           }}
+        />
+      )}
+      {pendingServerInstall !== null && (
+        <ServerInstallDialog
+          onClose={() => useAppStore.getState().dismissServerInstall()}
         />
       )}
     </div>

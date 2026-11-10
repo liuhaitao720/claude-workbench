@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { TaskActivityEvent, TaskRecord } from '../../../shared/types'
+import type { ConnectionRuntimeState, TaskActivityEvent, TaskRecord } from '../../../shared/types'
 import type { MessageKey } from '../../../shared/i18n'
 import { getLastDataAt } from '../store'
 
@@ -42,6 +42,27 @@ export const VISUAL_TITLE_KEYS: Record<VisualState, MessageKey> = {
   stopped: 'status.stopped',
   exited: 'status.exited',
   closed: 'status.closed'
+}
+
+// ── S6 连接状态视觉（5.5：四态胶囊；3.11=a 状态色规范——绿=正常/黄=进行中/灰=断连）──
+
+/** 连接四态 → 文案键（conn.state.*，S6 填值区） */
+export const CONN_STATE_TITLE_KEYS: Record<ConnectionRuntimeState, MessageKey> = {
+  connected: 'conn.state.connected',
+  connecting: 'conn.state.connecting',
+  reconnecting: 'conn.state.reconnecting',
+  offline: 'conn.state.offline'
+}
+
+/** 连接状态短文案（reconnecting 附尝试序号）——胶囊/冻结层/状态点 title 共用 */
+export function connStateText(
+  t: (key: MessageKey, params?: Record<string, string | number>) => string,
+  state: ConnectionRuntimeState,
+  attempt?: number
+): string {
+  return state === 'reconnecting'
+    ? t(CONN_STATE_TITLE_KEYS[state], { attempt: attempt ?? 1 })
+    : t(CONN_STATE_TITLE_KEYS[state])
 }
 
 /** 周期性自刷新的时钟（兜底字节启发的时间迁移：黄→绿）；activityMap 驱动的变迁

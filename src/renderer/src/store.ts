@@ -1,11 +1,15 @@
 import { create } from 'zustand'
 import type {
   AppUpdateInfo,
+  ConnectionRecord,
+  ConnectionRuntimeState,
+  ConnectionStateChangedEvent,
   CreateTaskOptions,
   ProjectRecord,
   ProviderRegistryState,
   PtyDataEvent,
   RemoveTaskOptions,
+  RemoteServerLogEvent,
   TaskActivityEvent,
   TaskRecord
 } from '../../shared/types'
@@ -56,6 +60,83 @@ const taskLastDataAt = new Map<string, number>()
 export function getLastDataAt(taskId: string): number | undefined {
   return taskLastDataAt.get(taskId)
 }
+
+// ── SSH 远程模式（S6）──────────────────────────────────────────────────
+
+/** 连接运行时状态条目（5.4=A：独立运行时维度，不落盘；attempt=自动重连序号） */
+export interface ConnectionStateEntry {
+  state: ConnectionRuntimeState
+  /** state='reconnecting' 时的自动重连尝试序号（5.7=A 指数退避） */
+  attempt?: number
+}
+
+/** 侧栏持久化键（3.7/3.8/3.10；S1 批0 锁键——renderer 经 setAppSettings 写，main 仅存取） */
+export interface SidebarPrefs {
+  sidebarWidth?: number
+  sidebarCollapsedPersist?: boolean
+  serverNodesCollapsed?: Record<string, boolean>
+}
+
+/** 设置中心分类 id（v1.4 四分类 + S6「远程连接」）——store 侧定义供 openSettings 直达 */
+export type SettingsSectionId = 'general' | 'connections' | 'providers' | 'cli' | 'about'
+
+/** 侧栏宽度拖拽区间（3.7=A：240–480px） */
+export const SIDEBAR_WIDTH_MIN = 240
+export const SIDEBAR_WIDTH_MAX = 480
+export const SIDEBAR_WIDTH_DEFAULT = 280
+
+export function clampSidebarWidth(px: number): number {
+  if (!Number.isFinite(px)) return SIDEBAR_WIDTH_DEFAULT
+  return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(px)))
+}
+
+/**
+ * 任务归属连接的运行时状态（本地任务=undefined）。
+ * TaskStatusDot 连接态着色叠加（5.5）/ TerminalPanel 断连冻结层（5.3）共用。
+ */
+export function connectionStateOfTask(
+  s: Pick<AppState, 'projects' | 'connectionStates'>,
+  task: Pick<TaskRecord, 'projectId'>
+): ConnectionStateEntry | undefined {
+  const connId = s.projects.find((p) => p.id === task.projectId)?.connectionId
+  return connId !== undefined ? s.connectionStates[connId] : undefined
+}
+
+/** 该任务此刻是否输入冻结（远程任务且连接态非 connected）——TerminalPanel 键入兜底用 */
+export function isTaskInputFrozen(taskId: string): boolean {
+  const s = useAppStore.getState()
+  const task = s.tasks.find((t) => t.id === taskId)
+  if (!task) return false
+  const entry = connectionStateOfTask(s, task)
+  return entry !== undefined && entry.state !== 'connected'
+}
+
+/**
+ * S5 接线桩：远程项目注册。现契约 CWBApi.addProject(dir) 单参（本地注册语义）；
+ * S5 将扩展可选 connectionId（契约变更走主控编译红流程）。桩期以宽签名调用——
+ * mock（test-helpers）与 S5 落地后的 preload 均按 (dir, connectionId) 生效，
+ * S5 前的真实 main 桩忽略第二参（差异即 NEEDS_CONTEXT，已随 S6 报告上报）。
+ */
+async function addProjectWithConnection(dir: string, connectionId: string): Promise<ProjectRecord> {
+  const fn = window.cwb.addProject as unknown as (
+    dir: string,
+    connectionId?: string
+  ) => Promise<ProjectRecord>
+  return fn(dir, connectionId)
+}
+
+/**
+ * connectFlow 失败 → 判定「需安装/升级 cwb-server」的错误信号：S2 未定形结构化
+ * 错误码前以文案标记匹配（mock/真实实现统一在 message 带 'needInstall' 或
+ * 'cwb-server' 字样，6.7=A 首连推送确认弹窗由此触发）；S2 联通后升级为结构化信号。
+ */
+const NEED_INSTALL_RE = /needinstall|cwb-server/i
+
+/** server 日志环形缓冲上限（8.1=A：仅脱敏元数据，弹窗进度展示够用即可） */
+const SERVER_LOG_CAP = 100
+
+/** sidebarWidth 落盘去抖计时器（模块级——拖拽高频写只留最后一拍） */
+let sidebarWidthPersistTimer: number | null = null
 
 // ── app store ──────────────────────────────────────────────────────────
 
@@ -117,6 +198,51 @@ interface AppState {
   providers: ProviderRegistryState
   reloadProviders: () => Promise<void>
 
+  // ── SSH 远程模式（S6）─────────────────────────────────────────────────
+  /** 连接档案（启动拉取；设置中心「远程连接」与侧栏服务器节点数据源） */
+  connections: ConnectionRecord[]
+  /** 连接运行时状态（onConnectionState 推送落地；5.4=A 独立维度不落 tasks.json） */
+  connectionStates: Record<string, ConnectionStateEntry>
+  /** 远程 server 日志环形缓冲（≤100 条；安装弹窗进度消费。8.1=A 仅脱敏元数据） */
+  serverLogs: RemoteServerLogEvent[]
+  /** 侧栏持久化键（getAppSettings 启动拉取；写入经 setAppSettings） */
+  uiSettings: SidebarPrefs
+  /** server 安装/升级确认弹窗目标（connectFlow 的 needInstall 信号触发，6.7=A） */
+  pendingServerInstall: { connectionId: string } | null
+
+  loadConnectionsFlow: () => Promise<void>
+  /** 侧栏持久化键拉取（getAppSettings → uiSettings；loadAll 独立调用） */
+  loadSidebarPrefs: () => Promise<void>
+  /** 新增/编辑连接档案；失败返回 null（错误已 console.error，调用方可另示反馈） */
+  saveConnectionFlow: (input: ConnectionRecord) => Promise<ConnectionRecord | null>
+  /**
+   * 删除连接档案（3.9=A 级联语义：仅删客户端记录与档案，不删 VM 内任何文件）。
+   * 删除后重拉 projects 对齐 tasks 视图——项目/任务记录级联去留以 S2/S5 落地为准。
+   */
+  removeConnectionFlow: (id: string) => Promise<void>
+  /** 手动连接（懒连接 2.5=a 之外的显式入口；状态迁移经 onConnectionState 推送） */
+  connectFlow: (id: string) => Promise<void>
+  /** 断开（5.9=b：断开不杀远端会话，server 保活） */
+  disconnectFlow: (id: string) => Promise<void>
+  /**
+   * 注册远程项目（3.1=C：手输 VM 绝对路径）。远端存在性/git 检测由 main 侧
+   * addProject 链完成（存在性反馈=返回记录 isGit / 失败 error）。
+   */
+  registerRemoteProjectFlow: (
+    connectionId: string,
+    dir: string
+  ) => Promise<{ ok: true; project: ProjectRecord } | { ok: false; error: string }>
+  /** onConnectionState 推送落地；迁入 connected 时触发 5.6 重连自动恢复 */
+  applyConnectionState: (e: ConnectionStateChangedEvent) => void
+  /** onRemoteServerLog 推送落地（环形 ≤100 条） */
+  appendServerLog: (e: RemoteServerLogEvent) => void
+  /** 侧栏持久化键动作（setAppSettings patch 落盘，失败静默——仅本会话生效） */
+  setSidebarWidth: (px: number) => void
+  setSidebarCollapsed: (collapsed: boolean) => void
+  toggleServerNodeCollapsed: (connectionId: string) => void
+  /** 关闭 server 安装确认弹窗（取消路径） */
+  dismissServerInstall: () => void
+
   openTask: (taskId: string) => void
   /** 打开 tab 且任务非 running 时自动恢复（用户 v3.2 确认：点击=加载上下文）；2s 节流防抖 */
   openTaskAutoResume: (taskId: string) => void
@@ -129,9 +255,14 @@ interface AppState {
 
   openSkills: () => void
   closeSkills: () => void
-  /** 打开设置中心（v1.2.2：ⓘ 入口已删，无直达分类需求——一律从「外观」进） */
-  openSettings: () => void
+  /** 打开设置中心（v1.2.2：ⓘ 入口已删，无直达分类需求——一律从「外观」进；
+   *  S6 起可选 section/editConnectionId 直达「远程连接」分类/编辑目标档案） */
+  openSettings: (section?: SettingsSectionId, editConnectionId?: string) => void
   closeSettings: () => void
+  /** 设置中心打开时展示的分类（openSettings 直达用；关闭后保留无副作用） */
+  settingsOpenSection: SettingsSectionId
+  /** openSettings 携带的连接档案编辑目标（SettingsDialog 消费一次后自行管理） */
+  settingsEditConnectionId: string | null
   /** v1.0.8 面板内搜索浮层（作用于当前活跃终端；切换 tab 自动关） */
   openSearch: () => void
   closeSearch: () => void
@@ -179,7 +310,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
   loadAll: async () => {
     // v1.4 注：providers 档案不并入本批 Promise.all——延长全量加载完成时机会放大
     // "启动加载迟到覆盖并发变更"竞态（如用户秒点打开目录后被全量 set 抹掉），
-    // 独立拉取只写自己的字段，零竞态面
+    // 独立拉取只写自己的字段，零竞态面。
+    // S6：connections 同理独立拉取（并发起跑、只写 connections 字段——批1 真实
+    // listConnections 仍是 NotImplemented 桩，失败仅丢服务器分组不炸 projects/tasks；
+    // 并入主 Promise.all 会给其落定加一拍，实测会翻动上述竞态，App.test 打开目录流变红）
+    const connP = get().loadConnectionsFlow()
     try {
       const [projects, tasks] = await Promise.all([
         window.cwb.listProjects(),
@@ -196,8 +331,186 @@ export const useAppStore = create<AppState>()((set, get) => ({
     } catch (err) {
       console.error('[cwb] loadAll failed:', err)
     }
+    void connP
     void get().reloadProviders()
+    void get().loadSidebarPrefs()
   },
+
+  loadConnectionsFlow: async () => {
+    try {
+      set({ connections: await window.cwb.listConnections() })
+    } catch (err) {
+      console.error('[cwb] loadConnections failed:', err)
+    }
+  },
+
+  loadSidebarPrefs: async () => {
+    try {
+      const s = await window.cwb.getAppSettings()
+      set({
+        uiSettings: {
+          sidebarWidth:
+            typeof s.sidebarWidth === 'number' ? clampSidebarWidth(s.sidebarWidth) : undefined,
+          sidebarCollapsedPersist: s.sidebarCollapsedPersist === true,
+          serverNodesCollapsed: s.serverNodesCollapsed ?? {}
+        }
+      })
+    } catch (err) {
+      console.error('[cwb] loadSidebarPrefs failed:', err)
+    }
+  },
+
+  saveConnectionFlow: async (input) => {
+    try {
+      const saved = await window.cwb.saveConnection(input)
+      await get().loadConnectionsFlow()
+      return saved
+    } catch (err) {
+      console.error('[cwb] saveConnection failed:', err)
+      return null
+    }
+  },
+
+  removeConnectionFlow: async (id) => {
+    try {
+      await window.cwb.removeConnection(id)
+    } catch (err) {
+      console.error('[cwb] removeConnection failed:', err)
+      return
+    }
+    // 级联语义（3.9=A）：VM 内文件不动；客户端记录以删除后的 listProjects 为准对齐
+    // （S2/S5 决定是否连带删项目记录——mock 侧 projects 保留，孤儿远程项目回根级平铺）
+    let projects: ProjectRecord[]
+    try {
+      projects = await window.cwb.listProjects()
+    } catch (err) {
+      console.error('[cwb] listProjects failed:', err)
+      projects = get().projects
+    }
+    void get().loadConnectionsFlow()
+    set((s) => {
+      const ids = new Set(projects.map((p) => p.id))
+      const tasks = s.tasks.filter((t) => ids.has(t.projectId))
+      const openTaskIds = s.openTaskIds.filter((tid) => tasks.some((t) => t.id === tid))
+      const activityMap = { ...s.activityMap }
+      for (const t of s.tasks) if (!ids.has(t.projectId)) delete activityMap[t.id]
+      const connectionStates = { ...s.connectionStates }
+      delete connectionStates[id]
+      const nodesCollapsed = { ...(s.uiSettings.serverNodesCollapsed ?? {}) }
+      delete nodesCollapsed[id]
+      return {
+        projects,
+        tasks,
+        openTaskIds,
+        activityMap,
+        connectionStates,
+        uiSettings: { ...s.uiSettings, serverNodesCollapsed: nodesCollapsed },
+        selectedProjectId:
+          s.selectedProjectId !== null && ids.has(s.selectedProjectId)
+            ? s.selectedProjectId
+            : (projects[0]?.id ?? null),
+        activeTaskId:
+          s.activeTaskId !== null && openTaskIds.includes(s.activeTaskId)
+            ? s.activeTaskId
+            : (openTaskIds[openTaskIds.length - 1] ?? null)
+      }
+    })
+  },
+
+  connectFlow: async (id) => {
+    try {
+      await window.cwb.connectConnection(id)
+      // 状态迁移不在此落地——A2 权属：ConnectionStateChanged 由 S2 唯一产生（经订阅回填）
+    } catch (err) {
+      if (err instanceof Error && NEED_INSTALL_RE.test(err.message)) {
+        // 6.7=A 首连推送：server 组件缺失/需升级 → 确认弹窗（installRemoteServer
+        // 的 promise 形态由弹窗消费）
+        set({ pendingServerInstall: { connectionId: id } })
+        return
+      }
+      console.error('[cwb] connectConnection failed:', err)
+    }
+  },
+
+  disconnectFlow: async (id) => {
+    try {
+      await window.cwb.disconnectConnection(id)
+    } catch (err) {
+      console.error('[cwb] disconnectConnection failed:', err)
+    }
+  },
+
+  registerRemoteProjectFlow: async (connectionId, dir) => {
+    let project: ProjectRecord
+    try {
+      project = await addProjectWithConnection(dir, connectionId)
+    } catch (err) {
+      console.error('[cwb] registerRemoteProject failed:', err)
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+    set((s) => ({
+      projects: s.projects.some((p) => p.id === project.id)
+        ? s.projects.map((p) => (p.id === project.id ? project : p))
+        : [...s.projects, project],
+      selectedProjectId: project.id
+    }))
+    return { ok: true, project }
+  },
+
+  applyConnectionState: (e) => {
+    const prev = get().connectionStates[e.connectionId]
+    set((s) => ({
+      connectionStates: {
+        ...s.connectionStates,
+        [e.connectionId]: { state: e.state, ...(e.attempt !== undefined ? { attempt: e.attempt } : {}) }
+      }
+    }))
+    // 5.6=A 重连自动恢复：迁入 connected 时，该连接下「视作运行中」的任务（5.9=b
+    // server 保活——断连期间 status 仍为 running，含应用重启后的远程 running 记录）
+    // 批量恢复视图。openTaskAutoResume 对 running 任务只开 tab 不重复 resume。
+    if (e.state === 'connected' && prev?.state !== 'connected') {
+      const s = get()
+      const connProjectIds = new Set(
+        s.projects.filter((p) => p.connectionId === e.connectionId).map((p) => p.id)
+      )
+      for (const task of s.tasks) {
+        if (task.status === 'running' && connProjectIds.has(task.projectId)) {
+          s.openTaskAutoResume(task.id)
+        }
+      }
+    }
+  },
+
+  appendServerLog: (e) =>
+    set((s) => {
+      const logs = [...s.serverLogs, e]
+      return { serverLogs: logs.length > SERVER_LOG_CAP ? logs.slice(logs.length - SERVER_LOG_CAP) : logs }
+    }),
+
+  setSidebarWidth: (px) => {
+    const width = clampSidebarWidth(px)
+    set((s) => ({ uiSettings: { ...s.uiSettings, sidebarWidth: width } }))
+    // 拖拽期间高频触发——落盘去抖（300ms），拖完只写一次
+    if (sidebarWidthPersistTimer !== null) window.clearTimeout(sidebarWidthPersistTimer)
+    sidebarWidthPersistTimer = window.setTimeout(() => {
+      sidebarWidthPersistTimer = null
+      window.cwb.setAppSettings({ sidebarWidth: width }).catch(() => {})
+    }, 300)
+  },
+
+  setSidebarCollapsed: (collapsed) => {
+    set((s) => ({ uiSettings: { ...s.uiSettings, sidebarCollapsedPersist: collapsed } }))
+    window.cwb.setAppSettings({ sidebarCollapsedPersist: collapsed }).catch(() => {})
+  },
+
+  toggleServerNodeCollapsed: (connectionId) => {
+    const cur = get().uiSettings.serverNodesCollapsed ?? {}
+    const serverNodesCollapsed = { ...cur, [connectionId]: !cur[connectionId] }
+    set((s) => ({ uiSettings: { ...s.uiSettings, serverNodesCollapsed } }))
+    window.cwb.setAppSettings({ serverNodesCollapsed }).catch(() => {})
+  },
+
+  dismissServerInstall: () => set({ pendingServerInstall: null }),
 
   selectProject: (id) => set({ selectedProjectId: id }),
 
@@ -338,6 +651,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   providers: { providers: [] },
+  connections: [],
+  connectionStates: {},
+  serverLogs: [],
+  uiSettings: {},
+  pendingServerInstall: null,
+  settingsOpenSection: 'general',
+  settingsEditConnectionId: null,
 
   reloadProviders: async () => {
     try {
@@ -356,6 +676,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
   openTaskAutoResume: (taskId) => {
     get().openTask(taskId)
     const task = get().tasks.find((t) => t.id === taskId)
+    // S6 懒连接（2.5=a）：点开远程任务先确保 SSH 连接建立（幂等；实际状态迁移经
+    // onConnectionState 事件回填；spawn/resume 的远程路由与 re-attach 由 S4 接管）
+    if (task !== undefined) {
+      const connId = get().projects.find((p) => p.id === task.projectId)?.connectionId
+      if (connId !== undefined) {
+        const st = get().connectionStates[connId]?.state
+        if (st !== 'connected' && st !== 'connecting') void get().connectFlow(connId)
+      }
+    }
     // 用户确认（v3.2）：点击任务/最近记录时若无已加载上下文（非 running）→ 默认恢复操作
     if (!task || task.status === 'running') return
     const last = autoResumeAt.get(taskId) ?? 0
@@ -375,7 +704,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   openSkills: () => set({ skillsOpen: true }),
   closeSkills: () => set({ skillsOpen: false }),
-  openSettings: () => set({ settingsOpen: true }),
+  openSettings: (section, editConnectionId) =>
+    set({
+      settingsOpen: true,
+      settingsOpenSection: section ?? 'general',
+      settingsEditConnectionId: editConnectionId ?? null
+    }),
   closeSettings: () => set({ settingsOpen: false }),
   openSearch: () => set({ searchOpen: true }),
   closeSearch: () => set({ searchOpen: false }),
@@ -424,9 +758,19 @@ export function initListeners(): () => void {
   const offActivity = window.cwb.onTaskActivity((e) => {
     useAppStore.getState().applyTaskActivity(e.taskId, e.activity)
   })
+  // S6（A2 装配消费侧）：连接状态由 S2 唯一产生（S1 挂钩 broadcast）→ 落 store；
+  // server 日志（S3 产生/S4 桥接）→ 环形缓冲
+  const offConnState = window.cwb.onConnectionState((e) => {
+    useAppStore.getState().applyConnectionState(e)
+  })
+  const offServerLog = window.cwb.onRemoteServerLog((e) => {
+    useAppStore.getState().appendServerLog(e)
+  })
   return () => {
     offPty()
     offTask()
     offActivity()
+    offConnState()
+    offServerLog()
   }
 }
