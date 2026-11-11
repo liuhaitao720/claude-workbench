@@ -91,6 +91,34 @@ function genPrivateKeyPem(): string {
 
 const HOST_KEY_A = genPrivateKeyPem()
 const HOST_KEY_B = genPrivateKeyPem()
+/** 客户端私钥（v1.5.2 密钥认证 TOFU 测试）：RSA PKCS1——同 genPrivateKeyPem 的 ssh2 keyParser 格式约束 */
+const CLIENT_KEY_PEM = genPrivateKeyPem()
+
+/** 把客户端私钥写到一次性 temp 文件（openSshClient 按 keyPath readFileSync） */
+function writeClientKeyFile(): string {
+  const p = join(newTempDir(), 'id_rsa')
+  writeFileSync(p, CLIENT_KEY_PEM)
+  return p
+}
+
+/** 密钥认证档案（v1.5.2 起 TOFU 仅对密钥认证生效——hostVerifier 的密钥路径测试入口） */
+async function saveKeyRecord(
+  store: ConnectionsStore,
+  port: number,
+  keyPath: string
+): Promise<string> {
+  const parsed = parseConnectionInput('zh', {
+    id: '',
+    name: '密钥连接',
+    host: '127.0.0.1',
+    port,
+    user: 'vmuser',
+    authMethod: 'key',
+    keyPath
+  })
+  const saved = store.save(parsed.record, parsed.plainPassword)
+  return saved.id
+}
 
 /** 自检通过形态的 exec 脚本（claude/node 探测命令 → 成功输出；S4 起命令包 bash -ic） */
 const CHECK_CLAUDE = `bash -ic 'command -v claude && claude --version'`
@@ -145,6 +173,8 @@ async function startMockSshd(opts: {
   hostKeyPem: string
   /** undefined=接受任意密码（仅验证可连通的流程用）；有值=校验密码 */
   expectedPassword?: string
+  /** true=接受任意带签名的 publickey 认证（v1.5.2 密钥认证 TOFU 测试用） */
+  acceptPublickey?: boolean
   exec?: Record<string, ExecScript>
 }): Promise<MockSshdHandle> {
   const proxySockets = new Set<Socket>()
@@ -152,6 +182,16 @@ async function startMockSshd(opts: {
   const sshd = new SshServer({ hostKeys: [opts.hostKeyPem] }, (client) => {
     client.on('authentication', (ctx) => {
       const c = ctx as typeof ctx & { password?: string }
+      if (c.method === 'publickey') {
+        // ssh2 客户端语义：先无签名探询（探询被拒即整体放弃）——接受探询后客户端
+        // 才发签名尝试；两次都 accept（测试替身不校验密钥内容，测的是客户端 TOFU）
+        if (opts.acceptPublickey === true) {
+          ctx.accept()
+        } else {
+          ctx.reject(['password', 'publickey'])
+        }
+        return
+      }
       if (c.method === 'password') {
         if (opts.expectedPassword === undefined || c.password === opts.expectedPassword) {
           ctx.accept()
@@ -344,24 +384,7 @@ async function savePasswordRecord(
   return saved.id
 }
 
-/** TOFU 锁定（UI 确认流的等价操作：取 hostKeyConfirm 错误中的指纹落档案） */
-async function lockHostKey(
-  mgr: RealConnectionManager,
-  store: ConnectionsStore,
-  id: string
-): Promise<string> {
-  const err = await mgr.connect(id).then(
-    () => {
-      throw new Error('expected hostKeyConfirm')
-    },
-    (e: unknown) => e as ConnectionError
-  )
-  expect(err).toBeInstanceOf(ConnectionError)
-  expect(err.kind).toBe('hostKeyConfirm')
-  expect(err.hostKeyFingerprint).toMatch(/^SHA256:[A-Za-z0-9+/]{43}$/)
-  store.save({ ...store.get(id)!, lastHostKeyFingerprint: err.hostKeyFingerprint! })
-  return err.hostKeyFingerprint!
-}
+/** TOFU 锁定步骤已随 v1.5.2 密码认证免校验移除（密钥认证的锁定流由测试 ② 内联覆盖） */
 
 let tempDirs: string[] = []
 
@@ -561,12 +584,11 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
     const mgr = makeManager(store)
 
     const goodId = await savePasswordRecord(store, sshd.port, 'pw-ok')
-    await lockHostKey(mgr, store, goodId)
+    // v1.5.2：密码认证不校验主机指纹——无锁定指纹直连成功（无需 TOFU 锁定步骤）
     await mgr.connect(goodId)
     expect(mgr.getState(goodId)).toBe('connected')
 
     const badId = await savePasswordRecord(store, sshd.port, 'pw-wrong')
-    await lockHostKey(mgr, store, badId) // TOFU 先于认证：锁定流程不受密码对错影响
     const err = await mgr.connect(badId).then(
       () => {
         throw new Error('expected auth failure')
@@ -581,15 +603,15 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
     expect(mgr.getState(goodId)).toBe('connected')
   }, 15_000)
 
-  it('② host key TOFU：首连 hostKeyConfirm（needConfirm+指纹）→ 档案锁定后成功 → 指纹变更阻断', async () => {
+  it('② host key TOFU（密钥认证，v1.5.2 起唯一生效面）：首连 hostKeyConfirm（needConfirm+指纹）→ 档案锁定后成功 → 指纹变更阻断', async () => {
     const sshd = await startMockSshd({
       hostKeyPem: HOST_KEY_A,
-      expectedPassword: 'pw-ok',
+      acceptPublickey: true,
       exec: SELF_CHECK_EXEC_OK
     })
     const store = makeStore(newTempDir())
     const mgr = makeManager(store)
-    const id = await savePasswordRecord(store, sshd.port, 'pw-ok')
+    const id = await saveKeyRecord(store, sshd.port, writeClientKeyFile())
 
     // 首连：无锁定指纹 → needConfirm 语义（kind+指纹），状态回 offline
     const first = await mgr.connect(id).then(
@@ -615,7 +637,7 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
     await sshd.destroy()
     const sshd2 = await startMockSshd({
       hostKeyPem: HOST_KEY_B,
-      expectedPassword: 'pw-ok',
+      acceptPublickey: true,
       exec: SELF_CHECK_EXEC_OK
     })
     store.save({ ...store.get(id)!, port: sshd2.port })
@@ -632,6 +654,33 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
     expect(mgr.getState(id)).toBe('offline')
   }, 15_000)
 
+  it('②b 密码认证不校验主机指纹（v1.5.2 用户指令）：首连直通 + 指纹变更不阻断', async () => {
+    const sshd = await startMockSshd({
+      hostKeyPem: HOST_KEY_A,
+      expectedPassword: 'pw-ok',
+      exec: SELF_CHECK_EXEC_OK
+    })
+    const store = makeStore(newTempDir())
+    const mgr = makeManager(store)
+    const id = await savePasswordRecord(store, sshd.port, 'pw-ok')
+
+    // 首连：无锁定指纹 → 直接 connected（不产生 hostKeyConfirm——代理面板等懒连接入口直通）
+    await mgr.connect(id)
+    expect(mgr.getState(id)).toBe('connected')
+    await mgr.disconnect(id)
+
+    // 服务器换 key（VM 重装场景）→ 不阻断（hostKeyChanged 不产生），仍可连接
+    await sshd.destroy()
+    const sshd2 = await startMockSshd({
+      hostKeyPem: HOST_KEY_B,
+      expectedPassword: 'pw-ok',
+      exec: SELF_CHECK_EXEC_OK
+    })
+    store.save({ ...store.get(id)!, port: sshd2.port })
+    await mgr.connect(id)
+    expect(mgr.getState(id)).toBe('connected')
+  }, 15_000)
+
   it('③ keepalive 连续 3 次无响应判死（4.4=A；短间隔注入）→ reconnecting → 恢复', async () => {
     const sshd = await startMockSshd({
       hostKeyPem: HOST_KEY_A,
@@ -641,7 +690,6 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
     const store = makeStore(newTempDir())
     const mgr = makeManager(store)
     const id = await savePasswordRecord(store, sshd.port, 'pw-ok')
-    await lockHostKey(mgr, store, id)
     await mgr.connect(id)
     expect(mgr.getState(id)).toBe('connected')
 
@@ -671,7 +719,6 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
     const store = makeStore(newTempDir())
     const mgr = makeManager(store)
     const id = await savePasswordRecord(store, sshd.port, 'pw-ok')
-    await lockHostKey(mgr, store, id)
     await mgr.connect(id)
     expect(mgr.getState(id)).toBe('connected')
 
@@ -724,7 +771,6 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
     const store = makeStore(newTempDir())
     const mgr = makeManager(store)
     const id = await savePasswordRecord(store, sshd.port, 'pw-ok')
-    await lockHostKey(mgr, store, id)
     const err = await mgr.connect(id).then(
       () => {
         throw new Error('expected selfCheckFailed')
@@ -751,7 +797,6 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
     const store = makeStore(newTempDir())
     const mgr = makeManager(store)
     const id = await savePasswordRecord(store, sshd.port, 'pw-ok')
-    await lockHostKey(mgr, store, id)
     await mgr.connect(id)
 
     // exec（UTF-8 聚合 + 退出码）
@@ -911,36 +956,25 @@ describe('L2.5 S2 装配（createAppContext 注入 Real 栈 / broadcast 到 EVEN
     expect(saved.passwordEncrypted).toBeUndefined()
     expect(await invoke(IpcChannels.ConnectionsList)).toHaveLength(1)
 
-    // Test：TOFU 未确认 → needConfirm 语义回执（kind + 指纹）
+    // Test：v1.5.2 密码认证免指纹校验——无锁定指纹直接全绿（自检清单：sshd/claude/
+    // node/server——S5 起 server 项为 probeServerVersion 真实探活，mock sshd 以
+    // /dev/tcp 子串应答健康体）
     const test1 = (await invoke(IpcChannels.ConnectionsTest, saved.id)) as {
-      ok: boolean
-      kind?: string
-      hostKeyFingerprint?: string
-    }
-    expect(test1.ok).toBe(false)
-    expect(test1.kind).toBe('hostKeyConfirm')
-    expect(test1.hostKeyFingerprint).toMatch(/^SHA256:/)
-
-    // UI 确认=指纹落档案 → Test 全绿（自检清单：sshd/claude/node/server 全 ok——S5 起
-    // server 项为 probeServerVersion 真实探活，mock sshd 以 /dev/tcp 子串应答健康体）
-    await invoke(IpcChannels.ConnectionsSave, {
-      ...saved,
-      lastHostKeyFingerprint: test1.hostKeyFingerprint
-    })
-    const test2 = (await invoke(IpcChannels.ConnectionsTest, saved.id)) as {
       ok: boolean
       error?: string
       kind?: string
+      hostKeyFingerprint?: string
       checks?: Array<{ id: string; status: string; detail?: string }>
     }
-    expect(test2.ok).toBe(true)
-    expect(test2.checks?.map((c) => `${c.id}:${c.status}`)).toEqual([
+    expect(test1.ok).toBe(true)
+    expect(test1.hostKeyFingerprint).toMatch(/^SHA256:/) // ok=true 时=已验证指纹原串
+    expect(test1.checks?.map((c) => `${c.id}:${c.status}`)).toEqual([
       'sshd:ok',
       'claude:ok',
       'node:ok',
       'server:ok'
     ])
-    expect(test2.checks?.find((c) => c.id === 'server')?.detail).toBe('0.1.0')
+    expect(test1.checks?.find((c) => c.id === 'server')?.detail).toBe('0.1.0')
 
     // Connect：真实状态机 → connecting/connected 经 EVENT 面到达（A2 全链）。
     // S4：SSH 连通后连接流程做 cwb-server 健康检查（WS+ping）——mock sshd 无

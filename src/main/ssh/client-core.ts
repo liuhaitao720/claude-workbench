@@ -93,9 +93,14 @@ export function openSshClient(
     }
 
     // TOFU（1.5=A）：hostVerifier 在 KEX 期、认证前被调——指纹未确认/变更时
-    // 先于任何凭据交互阻断（SyncHostVerifier 返回 false → ssh2 断开）
+    // 先于任何凭据交互阻断（SyncHostVerifier 返回 false → ssh2 断开）。
+    // v1.5.2（用户指令）：密码认证不校验主机指纹——跳过 TOFU 首连确认与
+    // 变更阻断（hostKeyConfirm/hostKeyChanged 不再产生，代理面板等懒连接
+    // 入口对密码认证直通）。指纹仍计算（连接日志/诊断展示）。密钥认证保留
+    // 完整 TOFU。
     config.hostVerifier = (key: Buffer): boolean => {
       fingerprint = fingerprintOfKey(key)
+      if (record.authMethod === 'password') return true
       const locked = record.lastHostKeyFingerprint?.trim() ?? ''
       if (locked === '') {
         fail(new ConnectionError('hostKeyConfirm', lang, { fingerprint }))
