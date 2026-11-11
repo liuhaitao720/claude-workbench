@@ -10,6 +10,7 @@ import type {
   CreateTaskOptions,
   ProjectRecord,
   ProviderConfig,
+  ProviderRegistryState,
   PtyDataEvent,
   RemoteProxyConfig,
   RemoteProxyStatus,
@@ -34,6 +35,13 @@ import { FontScanner } from './font-scan'
 import { NotifyService } from './notify'
 import { ProjectStore } from './project-store'
 import { ProviderStore } from './providers-store'
+import {
+  probeRemoteModels,
+  readRemoteProviders,
+  removeRemoteProvider,
+  saveRemoteProvider,
+  setRemoteDefault
+} from './remote-providers'
 import { createModelsProbe, type ModelsProbeResult } from './provider-models'
 import { createLocalProxy, type LocalProxyHandle } from './local-proxy'
 import { mainLanguage, setMainLanguage } from './language'
@@ -568,7 +576,16 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
    *    取 $HOME，一次往返；taskId 为 uuid 无注入面）；返回远端路径作 --settings 参数。
    * epoch 顺序照本地先例：调用方先 activity.noteSpawn 再调本函数（捕获新 epoch）。
    */
-  async function buildRemoteSettings(connectionId: string, taskId: string): Promise<string> {
+  /**
+   * 远程任务 settings 构造（S4 hooks 载体；v1.6.0 增 provider env 注入缝）：
+   * env 非空时并入 settings JSON 的 env 段（claude 启动时应用——与本地 spawn env
+   * 等效；值源自 VM 侧 ~/.cwb/providers.json 解析，非客户端本地配置）。
+   */
+  async function buildRemoteSettings(
+    connectionId: string,
+    taskId: string,
+    env?: Record<string, string>
+  ): Promise<string> {
     const hookPort = await remotePty.hookPortFor(connectionId)
     const prep = await connection.exec(
       connectionId,
@@ -581,8 +598,30 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     const sftp = await connection.sftp(connectionId)
     return activity.buildSettings(taskId, {
       urlBase: `http://127.0.0.1:${hookPort}`,
-      sink: { path, write: (content) => sftp.writeFile(path, content) }
+      sink: { path, write: (content) => sftp.writeFile(path, content) },
+      ...(env !== undefined ? { env } : {})
     })
+  }
+
+  /**
+   * v1.6.0 远程任务的 provider env 解析：注册表读 VM `~/.cwb/providers.json`
+   * （缺失/损坏=空注册表=不注入——与本地容错同语义）。任何读取失败（SSH 异常/
+   * 桩 exec 未支持等）一律降级为不注入——模型配置解析绝不阻断任务创建/恢复。
+   * S5 的 3.3=A 边界（远程不注入 ANTHROPIC_*）就此升级：配置与任务同侧（VM），
+   * 注入值全部源自 VM 文件，客户端本地配置不再参与远程任务。
+   */
+  async function resolveRemoteProviderEnv(
+    connectionId: string,
+    providerId: string | undefined,
+    model: string | undefined,
+    modelMode: 'auto' | undefined
+  ): Promise<Record<string, string> | undefined> {
+    try {
+      const registry = await readRemoteProviders(connection, connectionId)
+      return resolveProviderEnvFrom(registry, providerId, model, modelMode, 'remote')
+    } catch {
+      return undefined
+    }
   }
 
   // v1.2.0 skill 市场 / v1.2.1 插件 skill 的注入缝（同 CWB_SKILLS_USER_ROOT 先例，防读真实 ~/.claude）
@@ -795,8 +834,16 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     activity.noteSpawn(taskId)
     try {
       if (remoteCid !== undefined) {
-        // settings 写 VM 入 try：失败与 spawn 失败同路径清理（评审 #5 同语义）
-        const settingsPath = await buildRemoteSettings(remoteCid, taskId)
+        // settings 写 VM 入 try：失败与 spawn 失败同路径清理（评审 #5 同语义）。
+        // v1.6.0：provider env 自 VM 侧注册表解析并入 settings（用户指令——远程
+        // 模型配置存 VM；S5 3.3=A 的「不注入」升级为「注入值源自 VM 文件」）
+        const remoteEnv = await resolveRemoteProviderEnv(
+          remoteCid,
+          opts.providerId,
+          opts.model,
+          opts.modelMode
+        )
+        const settingsPath = await buildRemoteSettings(remoteCid, taskId, remoteEnv)
         await remotePty.managerFor(remoteCid).spawnClaude(
           taskId,
           buildNewSessionArgs(taskId, name, {
@@ -872,7 +919,14 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     activity.noteSpawn(task.id)
     try {
       if (remoteCid !== undefined) {
-        const settingsPath = await buildRemoteSettings(remoteCid, task.id)
+        // v1.6.0：resume 同 createTask——远程 provider env 解析并入 settings 重写
+        const remoteEnv = await resolveRemoteProviderEnv(
+          remoteCid,
+          task.providerId,
+          task.model,
+          task.modelMode
+        )
+        const settingsPath = await buildRemoteSettings(remoteCid, task.id, remoteEnv)
         await remotePty.managerFor(remoteCid).spawnClaude(
           task.id,
           buildResumeArgs(task.sessionId, task.name, {
@@ -1009,9 +1063,28 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     model: string | undefined,
     modelMode?: 'auto'
   ): Record<string, string> | undefined {
+    return resolveProviderEnvFrom(providers.state(), providerId, model, modelMode, 'local')
+  }
+
+  /**
+   * v1.6.0 抽出（远程任务经 VM 侧 ~/.cwb/providers.json 解析——与本地同一条逻辑）：
+   * proxyMode='local' 走本地代理分支（运行中优先）；'remote' 只认 provider.proxyUrl
+   * （VM 侧无客户端本地代理概念——端点由 VM 的 claude 消费，代理可达性以 VM 视角为准）。
+   */
+  function resolveProviderEnvFrom(
+    registry: ProviderRegistryState,
+    providerId: string | undefined,
+    model: string | undefined,
+    modelMode: 'auto' | undefined,
+    proxyMode: 'local' | 'remote'
+  ): Record<string, string> | undefined {
     const provider =
-      (providerId !== undefined && providerId !== '' ? providers.get(providerId) : undefined) ??
-      providers.getDefault()
+      (providerId !== undefined && providerId !== ''
+        ? registry.providers.find((p) => p.id === providerId)
+        : undefined) ??
+      (registry.defaultProviderId !== undefined
+        ? registry.providers.find((p) => p.id === registry.defaultProviderId)
+        : undefined)
     if (provider === undefined) return undefined
     const env: Record<string, string> = { ANTHROPIC_BASE_URL: provider.baseUrl }
     if (provider.apiKey !== '') {
@@ -1054,9 +1127,13 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       env['NO_PROXY'] = '127.0.0.1,localhost'
       env['no_proxy'] = '127.0.0.1,localhost'
     }
-    const local = localProxy.status()
-    if (local.running && local.port !== undefined) {
-      applyProxy(`http://127.0.0.1:${local.port}`)
+    if (proxyMode === 'local') {
+      const local = localProxy.status()
+      if (local.running && local.port !== undefined) {
+        applyProxy(`http://127.0.0.1:${local.port}`)
+      } else if (provider.proxyUrl !== undefined && provider.proxyUrl !== '') {
+        applyProxy(provider.proxyUrl)
+      }
     } else if (provider.proxyUrl !== undefined && provider.proxyUrl !== '') {
       applyProxy(provider.proxyUrl)
     }
@@ -1368,29 +1445,59 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   )
   ipcMain.handle(IpcChannels.NotifyTest, () => ctx.notify.sendTest())
   // v1.4 模型服务 provider：档案 CRUD + 默认切换（入参校验拒绝即 invoke reject，renderer 展示错误）
-  ipcMain.handle(IpcChannels.ProvidersList, () => ctx.providers.state())
-  ipcMain.handle(IpcChannels.ProvidersSave, (_e, raw: unknown) =>
-    ctx.providers.save(validateProviderInput(mainLanguage(), raw))
-  )
-  ipcMain.handle(IpcChannels.ProvidersRemove, (_e, id: unknown) => {
+  // v1.6.0（用户指令）：远程连接活跃时模型配置的存储/读取/修改源全在远程——
+  // VM `~/.cwb/providers.json`（remote-providers 经 SSH exec+SFTP read-modify-write，
+  // 校验/变更语义与本地零分叉）。本地项目活跃（无已连接远程）走本地 userData。
+  const remoteProvidersCid = (): string | undefined => activeConnectionId()
+  ipcMain.handle(IpcChannels.ProvidersList, async () => {
+    const cid = remoteProvidersCid()
+    return cid !== undefined ? readRemoteProviders(ctx.connection, cid) : ctx.providers.state()
+  })
+  ipcMain.handle(IpcChannels.ProvidersSave, async (_e, raw: unknown) => {
+    const input = validateProviderInput(mainLanguage(), raw)
+    const cid = remoteProvidersCid()
+    if (cid !== undefined) return saveRemoteProvider(ctx.connection, cid, input)
+    return ctx.providers.save(input)
+  })
+  ipcMain.handle(IpcChannels.ProvidersRemove, async (_e, id: unknown) => {
     if (typeof id !== 'string' || id === '') {
       throw new Error(translate(mainLanguage(), 'provider.errShape'))
+    }
+    const cid = remoteProvidersCid()
+    if (cid !== undefined) {
+      await removeRemoteProvider(ctx.connection, cid, id)
+      return
     }
     if (!ctx.providers.remove(id)) {
       throw new Error(translate(mainLanguage(), 'provider.errNotFound', { id }))
     }
   })
-  ipcMain.handle(IpcChannels.ProvidersSetDefault, (_e, id: unknown) => {
+  ipcMain.handle(IpcChannels.ProvidersSetDefault, async (_e, id: unknown) => {
     if (typeof id !== 'string') {
       throw new Error(translate(mainLanguage(), 'provider.errShape'))
+    }
+    const cid = remoteProvidersCid()
+    if (cid !== undefined) {
+      await setRemoteDefault(ctx.connection, cid, id)
+      return
     }
     if (!ctx.providers.setDefault(id)) {
       throw new Error(translate(mainLanguage(), 'provider.errNotFound', { id }))
     }
   })
-  ipcMain.handle(IpcChannels.ProvidersProbeModels, (_e, id: unknown) => {
+  ipcMain.handle(IpcChannels.ProvidersProbeModels, async (_e, id: unknown) => {
     if (typeof id !== 'string' || id === '') {
       throw new Error(translate(mainLanguage(), 'provider.errShape'))
+    }
+    const cid = remoteProvidersCid()
+    if (cid !== undefined) {
+      // VM 侧探测（curl 经 exec）：消费端点的正是 VM 的 claude——VM 视角可达性为真相
+      const state = await readRemoteProviders(ctx.connection, cid)
+      const provider = state.providers.find((p) => p.id === id)
+      if (provider === undefined) {
+        throw new Error(translate(mainLanguage(), 'provider.errNotFound', { id }))
+      }
+      return probeRemoteModels(ctx.connection, cid, provider)
     }
     return ctx.probeProviderModels(id)
   })

@@ -2,6 +2,12 @@
 
 SSH Workbench 版本更新说明（新版本在前；应用内「设置 → 应用更新」读取本文件展示）。v1.5.0 前产品名为 Claude Workbench。
 
+## 1.6.0
+
+- **远程连接的模型配置改存远程服务器**（用户指令：读取与修改源同在远程）：远程连接活跃时，设置「模型服务」的新增/编辑/删除/设默认/模型探测全部读写 VM `~/.cwb/providers.json`（经 SSH exec+SFTP read-modify-write，格式与校验和本地零分叉——共用纯函数）；本地项目活跃时仍走本地 userData。apiKey 仅经 SSH 加密通道单程写 VM 文件（0700 目录）
+- **远程任务接入模型配置**：创建/恢复远程任务时从 VM 侧注册表解析 provider env（ANTHROPIC_BASE_URL/鉴权/模型/档位映射/代理），并入任务 settings 的 env 段随 `--settings` 注入——零 server/协议改动（v1.5.0 前「远程任务不注入任何 ANTHROPIC_*」的边界升级为「注入值全部源自 VM 文件，客户端本地配置不参与」）；注册表读取失败一律降级为不注入，绝不阻断任务创建
+- 模型探测在 VM 侧执行（curl 经 exec）：消费该端点的正是 VM 的 claude，VM 视角可达性才是真相；apiKey 经 shell 单引号硬化进命令行
+
 ## 1.5.4
 
 - **修复远程目录浏览把「指向目录的符号链接」误判为文件**（Windows 实测）：SFTP readdir 对符号链接只见 LNK 模式（mode 120777）→ isDirectory()=false——现对链接条目跟链 stat 复核，目标为目录的链接正常进入浏览（死链/指向文件的链接自然落选）

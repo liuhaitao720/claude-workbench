@@ -71,6 +71,11 @@ export interface BuildSettingsOptions {
   urlBase?: string
   /** 远端写落点（提供时跳过本地写，返回 sink.path；缺省=本地 settingsDir 原子写） */
   sink?: RemoteSettingsSink
+  /**
+   * provider env 并入 settings 的 env 段（v1.6.0 远程任务注入缝：claude 启动时
+   * 应用——与本地 spawn env 等效；值源自 VM 侧 ~/.cwb/providers.json 解析）。
+   */
+  env?: Record<string, string>
 }
 
 export interface TaskActivityHandle {
@@ -328,6 +333,8 @@ export function startTaskActivityServer(opts: TaskActivityOptions): TaskActivity
         ]
       })
       const settings = {
+        // v1.6.0 远程 provider env（claude settings env 段——启动时应用）
+        ...(buildOpts?.env !== undefined ? { env: buildOpts.env } : {}),
         hooks: {
           UserPromptSubmit: [hook('UserPromptSubmit')],
           Stop: [hook('Stop')],
