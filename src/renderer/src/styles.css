@@ -1535,9 +1535,10 @@ button {
 
 .form-row {
   display: grid;
-  /* v1.7.4（用户实测反馈）：标签精简后列宽收窄 110→96，标签左对齐——所有输入框
-    左缘严格对齐（此前右对齐标签 + 长标签折行导致行高不齐、视觉零乱） */
-  grid-template-columns: 96px minmax(0, 1fr);
+  /* v1.7.4：标签左对齐 + nowrap；v1.7.7 列宽自适应 minmax(96px, max-content)——
+    定宽 96px 在英文界面裁切长标签（"Terminal font size" 等，用户实测），自适应后
+    以表单内最长标签统一列宽：不裁切且输入框左缘仍严格对齐 */
+  grid-template-columns: minmax(96px, max-content) minmax(0, 1fr);
   align-items: center;
   gap: 12px;
 }

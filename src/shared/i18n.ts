@@ -780,7 +780,7 @@ export const en: Record<MessageKey, string> = {
   'settings.providerApiKeyType': 'Auth header',
   'settings.providerApiKeyTypeToken': 'Authorization Bearer',
   'settings.providerApiKeyTypeKey': 'x-api-key',
-  'settings.providerModels': 'Preset models (one per row)',
+  'settings.providerModels': 'Preset models',
   'settings.providerModelsPlaceholder': 'glm-4.6',
   'settings.providerModelAdd': 'Add model',
   'settings.providerModelRemove': 'Remove this model',
@@ -1114,7 +1114,7 @@ export const en: Record<MessageKey, string> = {
   's6.authKey': 'Private key',
   's6.pwdHint':
     'The password is stored encrypted via OS credential protection; leave it blank when editing to keep the current one',
-  's6.keyPassphrase': 'Key passphrase (optional)',
+  's6.keyPassphrase': 'Key passphrase',
   's6.keyPassphraseHint':
     'The key passphrase is stored encrypted exactly like the password; leave blank when editing to keep the current value (skip for passphrase-less keys)',
   's6.hostKeyFingerprint': 'Host key fingerprint',

@@ -104,8 +104,14 @@ export function broadcastConnectionState(e: ConnectionStateChangedEvent): void {
 }
 
 /** 远程 server 日志 → cwb:event:remote-server-log【S4 桥接（S2 连接层同路）/ S6 消费】 */
-/** v1.7.0 远程通知配置缓存（模块级：createAppContext 触发分流与 registerIpcHandlers 写穿失效共用） */
-const remoteNotifyCache = new Map<string, NotifyConfig | null>()
+/**
+ * v1.7.0 远程通知配置缓存（模块级：createAppContext 触发分流与 registerIpcHandlers
+ * 写穿失效共用）。v1.7.7：加 60s TTL——配置可在 VM 侧直接编辑（如运维排障），
+ * 仅靠 App 内保存写穿失效会让客户端无限期持有旧值（实测：VM 侧启用后推送仍不触
+ * 发，根因即此）。TTL 过期后下次 awaiting 事件重读。
+ */
+const remoteNotifyCache = new Map<string, { cfg: NotifyConfig | null; at: number }>()
+const REMOTE_NOTIFY_CACHE_TTL_MS = 60_000
 
 export function broadcastRemoteServerLog(e: RemoteServerLogEvent): void {
   broadcastEvent(IpcChannels.RemoteServerLog, e)
@@ -585,17 +591,17 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       return
     }
     const cached = remoteNotifyCache.get(cid)
-    if (cached !== undefined) {
-      notify.onActivityEvent(e, cached ?? { url: '', enabled: false, channel: 'generic' })
+    if (cached !== undefined && Date.now() - cached.at < REMOTE_NOTIFY_CACHE_TTL_MS) {
+      notify.onActivityEvent(e, cached.cfg ?? { url: '', enabled: false, channel: 'generic' })
       return
     }
     void readRemoteNotify(connection, cid)
       .then((cfg) => {
-        remoteNotifyCache.set(cid, cfg)
+        remoteNotifyCache.set(cid, { cfg, at: Date.now() })
         notify.onActivityEvent(e, cfg)
       })
       .catch(() => {
-        remoteNotifyCache.set(cid, null)
+        remoteNotifyCache.set(cid, { cfg: null, at: Date.now() })
       })
   }
   // ctx.pty = 路由后端（本地/远程按 connectionId 分派；spawn 前的显式远程分支
