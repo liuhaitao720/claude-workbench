@@ -96,15 +96,26 @@ describe('createLocalProxy（真 server）', () => {
   }
 
   it('status 初始 stopped；start 幂等；stop 幂等回 stopped；端口从 12700 起', async () => {
+    // v1.7.1 环境自适应：用户实测场景 VM 内 cwb-server 远程代理常驻 12700（占用）——
+    // 期望端口按 12700 是否空闲决定（占用时自动 +1 递增，断言语义不变）
+    const basePortOpen = await new Promise<boolean>((resolve) => {
+      const sock = netConnect(12700, '127.0.0.1')
+      sock.once('connect', () => {
+        sock.destroy()
+        resolve(false)
+      })
+      sock.once('error', () => resolve(true))
+    })
+    const expectPort = basePortOpen ? 12700 : 12701
     const proxy = createLocalProxy({ preferPort: 12700, resolveRouting: () => [] })
     try {
       expect(proxy.status()).toMatchObject({ running: false, stats: { total: 0 } })
       const s1 = await proxy.start()
       expect(s1.running).toBe(true)
-      expect(s1.port).toBe(12700)
+      expect(s1.port).toBe(expectPort)
       expect(s1.startedAt).toBeDefined()
       const s2 = await proxy.start()
-      expect(s2.port).toBe(12700) // 幂等
+      expect(s2.port).toBe(expectPort) // 幂等
       proxy.stop()
       expect(proxy.status()).toMatchObject({ running: false })
       expect(proxy.status().port).toBeUndefined()

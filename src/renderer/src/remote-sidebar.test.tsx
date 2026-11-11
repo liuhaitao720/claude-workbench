@@ -699,7 +699,7 @@ describe('设置中心「远程连接」分类', () => {
       config: { proxyUrl: 'http://10.0.0.2:7890' }
     })
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
-    const dialog = await screen.findByRole('dialog', { name: '设置' })
+    await screen.findByRole('dialog', { name: '设置' })
     fireEvent.click(screen.getByTestId('scope-tab-c1')) // v1.7.0 作用域化导航
     act(() => {
       useAppStore.setState({ connectionStates: { c1: { state: 'connected' } } })
@@ -723,7 +723,7 @@ describe('设置中心「远程连接」分类', () => {
       new Error('[cwb:need-server-install] cwb-server unreachable over SSH tunnel (socket hang up)')
     )
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
-    const dialog = await screen.findByRole('dialog', { name: '设置' })
+    await screen.findByRole('dialog', { name: '设置' })
     fireEvent.click(screen.getByTestId('scope-tab-c1')) // v1.7.0 作用域化导航
     act(() => {
       useAppStore.setState({ connectionStates: { c1: { state: 'connected' } } })
@@ -760,7 +760,7 @@ describe('设置中心「远程连接」分类', () => {
       config: savedConfig
     }))
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
-    const dialog = await screen.findByRole('dialog', { name: '设置' })
+    await screen.findByRole('dialog', { name: '设置' })
     fireEvent.click(screen.getByTestId('scope-tab-c1')) // v1.7.0 作用域化导航
     act(() => {
       useAppStore.setState({ connectionStates: { c1: { state: 'connected' } } })
@@ -791,7 +791,7 @@ describe('设置中心「远程连接」分类', () => {
       stats: { total: 0, active: 0, direct: 0, viaProxy: 0 }
     })
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
-    const dialog = await screen.findByRole('dialog', { name: '设置' })
+    await screen.findByRole('dialog', { name: '设置' })
     fireEvent.click(screen.getByTestId('scope-tab-c1')) // v1.7.0 作用域化导航
     act(() => {
       useAppStore.setState({ connectionStates: { c1: { state: 'connected' } } })

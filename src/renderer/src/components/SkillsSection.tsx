@@ -151,7 +151,8 @@ export function SkillsSection({ cid }: { cid?: string }) {
     if (cmd === '') return
     setCliError('')
     try {
-      const r = await window.cwb.runCliCommand(cmd)
+      // v1.7.0：远程作用域经 cid 走 runRemote（VM 内 bash -ic 执行）
+      const r = await window.cwb.runCliCommand(cmd, cid)
       setCommandId(r.commandId)
     } catch (err) {
       setCliError(errMsg(err)) // 校验失败（白名单/元字符）原因行内显示

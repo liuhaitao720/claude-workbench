@@ -2,6 +2,11 @@
 
 SSH Workbench 版本更新说明（新版本在前；应用内「设置 → 应用更新」读取本文件展示）。v1.5.0 前产品名为 Claude Workbench。
 
+## 1.7.1
+
+- **修复：远程作用域「更新 claude CLI」跑错侧**（Windows 实测）——更新按钮漏传作用域 cid，`claude update` 在 Windows 本机执行而非 VM；现远程作用域经 cid 走 runRemote（Linux bash -ic 包装，VM 内执行）。Skills 分类的 CLI 命令输入同链路修复
+- 本地代理端口断言环境自适应（VM 内远程代理常驻 12700 时测试自动 +1 期望）
+
 ## 1.7.0
 
 - **设置中心作用域化重构**（用户确认原型 design/settings-scope-redesign.html）：顶部作用域条 = 连接档案列表（动态增删；＋新建直接展开连接配置表单，保存即入该作用域）；本机与远程两侧分类**不同构**——本机：通用/模型服务/claude CLI/本地代理/Webhook 通知/Skills/关于；远程：连接与自检/claude CLI/cwb-server/远程代理/模型服务/Webhook 通知/Skills。作用域条右侧常显数据源提示（本机 userData / VM ~/.cwb）；对话框加大至 1120×760

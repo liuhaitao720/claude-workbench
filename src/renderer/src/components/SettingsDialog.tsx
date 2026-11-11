@@ -560,7 +560,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     setUpdateError('')
     setStarting(true) // v1.1.0：立即给反馈（spawn 有 0.5~3s 冷启动，期间界面无变化）
     try {
-      const r = await window.cwb.runCliCommand('claude update')
+      // v1.7.0 修复：远程作用域必须穿 cid——此前漏传导致 `claude update` 跑在
+      // Windows 本机（用户实测"远程更新失败"）；穿 cid 后走 runRemote（Linux
+      // bash -ic 包装，VM 内执行）
+      const r = await window.cwb.runCliCommand('claude update', scopeCid)
       setCommandId(r.commandId)
     } catch (err) {
       setUpdateError(errMsg(err))

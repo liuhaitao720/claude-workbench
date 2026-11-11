@@ -534,7 +534,7 @@ describe('claude CLI（迁自 About）', () => {
     expect(await s.findByText(/当前 2\.1\.301 · 最新 2\.1\.304 · 可更新/)).toBeDefined()
 
     fireEvent.click(s.getByRole('button', { name: '更新' }))
-    await waitFor(() => expect(api.runCliCommand).toHaveBeenCalledWith('claude update'))
+    await waitFor(() => expect(api.runCliCommand).toHaveBeenCalledWith('claude update', undefined))
     // mock runCliCommand 返回 {commandId:'cmd-test'} → onCliOutput 输出区追加
     await waitFor(() => expect(s.getByRole('log')).toBeDefined())
     fireCliOutput(api, { commandId: 'cmd-test', data: 'Updating claude code...\n' })

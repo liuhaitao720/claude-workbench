@@ -96,7 +96,7 @@ const groupTitles = (): string[] =>
 describe('入口与列表', () => {
   it('侧栏「Skills」按钮 + 折叠态 rail skills 图标（v1.2.2 内联 SVG）均开设置 Skills 分类', async () => {
     await renderApp()
-    const skills = await openSkills()
+    await openSkills()
     expect(screen.getByTestId('skills-section')).toBeDefined()
 
     // rail 折叠态入口（SVG 拼图图标，无文本——data-icon 锚点）
@@ -475,7 +475,7 @@ describe('导入通道②：CLI 命令', () => {
     })
     fireEvent.click(skills.getByRole('button', { name: '执行' }))
     await waitFor(() =>
-      expect(api.runCliCommand).toHaveBeenCalledWith('claude plugin install foo@marketplace')
+      expect(api.runCliCommand).toHaveBeenCalledWith('claude plugin install foo@marketplace', undefined)
     )
     // mock runCliCommand → {commandId:'cmd-test'}：输出经 onCliOutput 追加
     await waitFor(() => expect(skills.getByRole('log')).toBeDefined())
