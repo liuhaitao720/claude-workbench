@@ -18,7 +18,8 @@ import type { ConnectionTestResult,
   SkillMarketplaceInfo,
   TaskActivityEvent,
   TaskRecord,
-  TaskUpdateEvent
+  TaskUpdateEvent,
+  TransferItem
 } from '../../shared/types'
 
 let idCounter = 0
@@ -99,6 +100,8 @@ export type CwbApiMock = Omit<CWBApi, 'addProject' | 'testConnection'> & {
   testConnection: (id: string) => Promise<ConnTestResultMock>
   /** 捕获的 onPtyData 回调（App mount 后由 initListeners 注册） */
   ptyCallbacks: Array<(e: PtyDataEvent) => void>
+  /** v2.0 捕获的 onTransfersProgress 回调（测试注入进度用） */
+  transfersProgressCallbacks: Array<(items: TransferItem[]) => void>
   /** 捕获的 onTaskUpdate 回调 */
   taskUpdateCallbacks: Array<(t: TaskUpdateEvent) => void>
   /** 捕获的 onTaskActivity 回调（v3.2） */
@@ -129,6 +132,8 @@ export type CwbApiMock = Omit<CWBApi, 'addProject' | 'testConnection'> & {
  *  v1.4：providers/defaultProviderId 预置模型服务档案（loadAll mount 即拉取——
  *  事后覆写 mock 来不及，必须经 opts 在 render 前注入）。
  *  S6：connections/appSettings 同理预置（侧栏分组树与持久化键消费）。 */
+const transfersProgressCbs: Array<(items: TransferItem[]) => void> = []
+
 export function installCwbMock(
   opts: {
     projects?: ProjectRecord[]
@@ -372,6 +377,22 @@ export function installCwbMock(
         models: []
       })
     ),
+    listRemoteFiles: vi.fn(async () => ({ ok: true, path: '/home/dev', entries: [] })),
+    mkdirRemote: vi.fn(async () => undefined),
+    renameRemote: vi.fn(async () => undefined),
+    deleteRemote: vi.fn(async () => undefined),
+    pickLocalForUpload: vi.fn(async () => null),
+    uploadRemoteFiles: vi.fn(async () => ({ items: [], conflicts: [] })),
+    downloadRemoteFile: vi.fn(async () => null),
+    listTransfers: vi.fn(async () => []),
+    cancelTransfer: vi.fn(async () => undefined),
+    retryTransfer: vi.fn(async () => undefined),
+    transfersProgressCallbacks: transfersProgressCbs,
+    onTransfersProgress: vi.fn((cb: (items: TransferItem[]) => void) => {
+      transfersProgressCbs.push(cb)
+      return () => {}
+    }),
+    getPathForFile: vi.fn(() => undefined),
     reportSmoke: vi.fn()
   }
 

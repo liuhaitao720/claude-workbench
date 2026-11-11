@@ -103,6 +103,8 @@ export interface SidebarPrefs {
   sidebarWidth?: number
   sidebarCollapsedPersist?: boolean
   serverNodesCollapsed?: Record<string, boolean>
+  /** v2.0 文件面板 per-connection 目录记忆 */
+  filesPanelPath?: Record<string, string>
 }
 
 /** 设置中心分类 id（v1.7.0 作用域化：本机 7 项 / 远程 7 项——见 SETTINGS_SECTIONS_OF）。

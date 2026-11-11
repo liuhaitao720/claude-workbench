@@ -27,7 +27,7 @@ describe('App（布局与侧栏）', () => {
   it('renders the version text + header icon entries（v1.2.2：版本号纯文本，其后只有 Skills / 设置）', () => {
     installCwbMock()
     render(<App />)
-    expect(document.querySelector('.version-text')?.textContent).toContain('v1.7.7')
+    expect(document.querySelector('.version-text')?.textContent).toContain('v2.0.0')
     // 版本号不再可点开弹窗
     expect(screen.queryByRole('button', { name: /^v1\./ })).toBeNull()
     // Skills / 设置 两个图标按钮（@title 与 aria-label 同名，读屏可达）；ⓘ 已删

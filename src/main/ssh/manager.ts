@@ -1,5 +1,5 @@
 import { createServer as createNetServer, type AddressInfo, type Socket } from 'node:net'
-import { Client, type Channel, type SFTPWrapper } from 'ssh2'
+import { Client, type Channel, type SFTPWrapper, type Stats } from 'ssh2'
 import type { Language } from '../../shared/i18n'
 import type {
   ConnectionRuntimeState,
@@ -575,7 +575,7 @@ export class RealSftpSession implements SftpSession {
       // 符号链接：跟链 stat 复核目标是否目录（每链接一次往返——目录内链接通常少量）
       const mode = e.attrs.mode ?? 0
       if ((mode & S_IFMT) === S_IFLNK) {
-        const st = await this.statFile(`${dir === '/' ? '' : dir}/${e.filename}`).catch(() => null)
+        const st = await this.statAny(`${dir === '/' ? '' : dir}/${e.filename}`).catch(() => null)
         if (st?.isDirectory() === true) out.push({ name: e.filename, isDir: true })
       }
     }
@@ -583,13 +583,113 @@ export class RealSftpSession implements SftpSession {
   }
 
   /** SFTP stat（跟符号链接；list 的 LNK 复核用——路径为远端 POSIX 形态，手动拼接防 Windows path.join 反斜杠） */
-  private async statFile(path: string): Promise<{ isDirectory(): boolean }> {
+  /** 单点 stat（跟链；不存在 reject）——list 的 LNK 复核与 mkdir 幂等共用 */
+  private async statAny(path: string): Promise<{ isDirectory(): boolean }> {
     return new Promise((resolve, reject) => {
       this.sftp.stat(path, (err, st) => {
         if (err != null) reject(new Error(sanitize(err.message)))
         else resolve(st as { isDirectory(): boolean })
       })
     })
+  }
+
+  // ── v2.0 远程文件管理原语（契约见 SftpSession；无句柄态——每操作自足）────
+
+  /** 全量清单：readdir attrs → {name,isDir,size,mtimeMs}；符号链接跟链 stat
+   *  判目录（与 list() 的 LNK 复核同语义——链接指向目录在文件面板可进入）。 */
+  async listAll(dir: string): Promise<Array<{ name: string; isDir: boolean; size: number; mtimeMs: number }>> {
+    const raw = await new Promise<Array<{ filename: string; attrs: Stats }>>((resolve, reject) => {
+      this.sftp.readdir(dir, (err, list) => {
+        if (err != null) reject(new Error(sanitize(err.message)))
+        else resolve(list as Array<{ filename: string; attrs: Stats }>)
+      })
+    })
+    const out: Array<{ name: string; isDir: boolean; size: number; mtimeMs: number }> = []
+    for (const e of raw) {
+      if (e.filename === '.' || e.filename === '..') continue
+      const isDir = e.attrs.isDirectory()
+      if (isDir) {
+        out.push({ name: e.filename, isDir: true, size: 0, mtimeMs: statMtimeMs(e.attrs) })
+        continue
+      }
+      out.push({ name: e.filename, isDir: false, size: e.attrs.size, mtimeMs: statMtimeMs(e.attrs) })
+    }
+    return out.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      this.sftp.rename(from, to, (err) => {
+        if (err != null) reject(new Error(sanitize(err.message)))
+        else resolve()
+      })
+    })
+  }
+
+  async unlinkFile(path: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      this.sftp.unlink(path, (err) => {
+        if (err != null) reject(new Error(sanitize(err.message)))
+        else resolve()
+      })
+    })
+  }
+
+  async statFile(path: string): Promise<{ isDir: boolean; size: number; mtimeMs: number; exists: boolean }> {
+    return new Promise((resolve) => {
+      this.sftp.stat(path, (err, st) => {
+        if (err != null || st == null) {
+          resolve({ isDir: false, size: 0, mtimeMs: 0, exists: false })
+          return
+        }
+        resolve({ isDir: st.isDirectory(), size: st.size, mtimeMs: statMtimeMs(st), exists: true })
+      })
+    })
+  }
+
+  async readRange(path: string, start: number, length: number): Promise<Buffer> {
+    const handle = await new Promise<Buffer>((resolve, reject) => {
+      this.sftp.open(path, 'r', (err, h) => {
+        if (err != null) reject(new Error(sanitize(err.message)))
+        else resolve(h as Buffer)
+      })
+    })
+    try {
+      const buf = Buffer.alloc(length)
+      const read = await new Promise<{ br: number; b: Buffer }>((resolve, reject) => {
+        this.sftp.read(handle, buf, 0, length, start, (err, br, b) => {
+          if (err != null) reject(new Error(sanitize(err.message)))
+          else resolve({ br, b })
+        })
+      })
+      return read.br === length ? read.b : read.b.subarray(0, Math.max(0, read.br))
+    } finally {
+      await new Promise<void>((resolve) => {
+        this.sftp.close(handle, () => resolve())
+      })
+    }
+  }
+
+  async writeRange(path: string, start: number, data: Buffer): Promise<void> {
+    const handle = await new Promise<Buffer>((resolve, reject) => {
+      // start=0 覆盖语义：'w' 截断建；>0 续写：'r+' 定位（断点续传预留）
+      this.sftp.open(path, start === 0 ? 'w' : 'r+', (err, h) => {
+        if (err != null) reject(new Error(sanitize(err.message)))
+        else resolve(h as Buffer)
+      })
+    })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.sftp.write(handle, data, 0, data.length, start, (err) => {
+          if (err != null) reject(new Error(sanitize(err.message)))
+          else resolve()
+        })
+      })
+    } finally {
+      await new Promise<void>((resolve) => {
+        this.sftp.close(handle, () => resolve())
+      })
+    }
   }
 
   /** v1.7.0 建远端目录（远程 skills 导入递归上传）；已存在视为成功（幂等） */
@@ -601,7 +701,7 @@ export class RealSftpSession implements SftpSession {
           resolve()
           return
         }
-        this.statFile(dir)
+        this.statAny(dir)
           .then((st) => (st.isDirectory() ? resolve() : reject(new Error(sanitize(err.message)))))
           .catch(() => reject(err))
       })
@@ -660,4 +760,11 @@ export async function browseRemoteDir(
       error: err instanceof Error ? err.message : String(err)
     }
   }
+}
+
+/** v2.0：ssh2 Stats → epoch ms（attrs 缺失字段兜 0；ssh2 内部为秒/毫秒双态） */
+function statMtimeMs(st: { mtime?: number; mtimeMs?: number }): number {
+  if (typeof st.mtimeMs === 'number') return st.mtimeMs
+  if (typeof st.mtime === 'number') return st.mtime * 1000
+  return 0
 }

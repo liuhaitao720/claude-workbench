@@ -308,6 +308,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [proxyError, setProxyError] = useState('')
   const [closeToTray, setCloseToTray] = useState(true)
   const [launchAtLogin, setLaunchAtLogin] = useState(false)
+  // v2.0 下载落位三键（确认单：目录/方式/按连接分档）
+  const [downloadDir, setDownloadDir] = useState('')
+  const [downloadMode, setDownloadMode] = useState<'direct' | 'ask'>('direct')
+  const [downloadPerConn, setDownloadPerConn] = useState(true)
   // v1.1.0 应用自更新：检查结果（初值取启动静默检查落库值）/进度/已就绪标记
   const [appUpd, setAppUpd] = useState<AppUpdateInfo | null>(() => useAppStore.getState().appUpdateInfo)
   const [appUpdChecking, setAppUpdChecking] = useState(false)
@@ -435,6 +439,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         setLaunchAtLogin(s.launchAtLogin)
         setAutoUpdate(s.autoUpdate !== false)
         setProxyAutoStart(s.proxyAutoStart === true)
+        setDownloadDir(s.downloadDir ?? '')
+        setDownloadMode(s.downloadMode === 'ask' ? 'ask' : 'direct')
+        setDownloadPerConn(s.downloadPerConnection !== false)
       })
       .catch(() => {})
   }, [
@@ -982,6 +989,87 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 </div>
               </div>
             )}
+
+            {/* v2.0 文件传输（下载落位——确认单：目录/方式/按连接分档；仅本机作用域） */}
+            <p className="form-subtitle">{t('settings.sectionTransfers')}</p>
+            <div className="settings-form">
+              <div className="form-row">
+                <span className="form-label">{t('settings.downloadDir')}</span>
+                <div className="form-control">
+                  <input
+                    className="settings-input grow mono"
+                    type="text"
+                    aria-label={t('settings.downloadDir')}
+                    placeholder={t('settings.downloadDirHint')}
+                    value={downloadDir}
+                    onChange={(e) => {
+                      setDownloadDir(e.target.value)
+                      void window.cwb.setAppSettings({ downloadDir: e.target.value })
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn small"
+                    onClick={() =>
+                      void window.cwb.pickDirectory().then((d) => {
+                        if (d !== null) {
+                          setDownloadDir(d)
+                          void window.cwb.setAppSettings({ downloadDir: d })
+                        }
+                      })
+                    }
+                  >
+                    …
+                  </button>
+                </div>
+              </div>
+              <div className="form-row">
+                <span className="form-label">{t('settings.downloadMode')}</span>
+                <div className="form-control theme-choice" role="radiogroup" aria-label={t('settings.downloadMode')}>
+                  <label>
+                    <input
+                      type="radio"
+                      name="dl-mode"
+                      checked={downloadMode === 'direct'}
+                      onChange={() => {
+                        setDownloadMode('direct')
+                        void window.cwb.setAppSettings({ downloadMode: 'direct' })
+                      }}
+                    />
+                    {t('settings.downloadDirect')}
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="dl-mode"
+                      checked={downloadMode === 'ask'}
+                      onChange={() => {
+                        setDownloadMode('ask')
+                        void window.cwb.setAppSettings({ downloadMode: 'ask' })
+                      }}
+                    />
+                    {t('settings.downloadAsk')}
+                  </label>
+                </div>
+              </div>
+              <div className="form-row">
+                <span className="form-label">{t('settings.downloadPerConn')}</span>
+                <div className="form-control">
+                  <label style={{ color: 'var(--text-2)' }}>
+                    <input
+                      type="checkbox"
+                      aria-label={t('settings.downloadPerConn')}
+                      checked={downloadPerConn}
+                      onChange={(e) => {
+                        setDownloadPerConn(e.target.checked)
+                        void window.cwb.setAppSettings({ downloadPerConnection: e.target.checked })
+                      }}
+                    />
+                    <span className="hint-inline">{t('settings.downloadPerConnHint')}</span>
+                  </label>
+                </div>
+              </div>
+            </div>
 
             {/* v1.4 模型服务：provider 档案列表 + 新增/编辑表单 + 默认切换（参考 cc-switch）。
                 v1.7.0 作用域化：远程作用域读写 VM ~/.cwb/providers.json（providersCid 穿参） */}

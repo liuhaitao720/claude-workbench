@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer , webUtils } from 'electron'
 import type {
   AppChangelogEntry,
   AppSettings,
@@ -23,7 +23,9 @@ import type {
   ProjectRecord,
   PtyDataEvent,
   TaskRecord,
-  TaskUpdateEvent
+  TaskUpdateEvent,
+  TransferItem,
+  FilesBrowseResult
 } from '../shared/types'
 import { IpcChannels } from '../shared/ipc-channels'
 
@@ -185,6 +187,31 @@ const api: CWBApi = {
     }>,
   copyProvider: (source, target, providerId) =>
     ipcRenderer.invoke(IpcChannels.ProvidersCopy, source, target, providerId) as Promise<ProviderConfig>,
+  // ── v2.0 远程文件管理 ──────────────────────────────────────────────
+  listRemoteFiles: (cid, path?) =>
+    ipcRenderer.invoke(IpcChannels.FilesList, cid, path) as Promise<FilesBrowseResult>,
+  mkdirRemote: (cid, path) => ipcRenderer.invoke(IpcChannels.FilesMkdir, cid, path) as Promise<void>,
+  renameRemote: (cid, from, to) =>
+    ipcRenderer.invoke(IpcChannels.FilesRename, cid, from, to) as Promise<void>,
+  deleteRemote: (cid, path, isDir) =>
+    ipcRenderer.invoke(IpcChannels.FilesDelete, cid, path, isDir) as Promise<void>,
+  pickLocalForUpload: (files, dirs) =>
+    ipcRenderer.invoke(IpcChannels.FilesPickUpload, files, dirs) as Promise<string[] | null>,
+  uploadRemoteFiles: (cid, localPaths, remoteDir, policy) =>
+    ipcRenderer.invoke(IpcChannels.FilesUpload, cid, localPaths, remoteDir, policy) as Promise<{
+      items: TransferItem[]
+      conflicts: Array<{ remotePath: string; renameTo?: string }>
+    }>,
+  downloadRemoteFile: (cid, remotePath, suggestedName?) =>
+    ipcRenderer.invoke(IpcChannels.FilesDownload, cid, remotePath, suggestedName) as Promise<TransferItem | null>,
+  listTransfers: () => ipcRenderer.invoke(IpcChannels.TransfersList) as Promise<TransferItem[]>,
+  cancelTransfer: (id) => ipcRenderer.invoke(IpcChannels.TransferCancel, id) as Promise<void>,
+  retryTransfer: (id) => ipcRenderer.invoke(IpcChannels.TransferRetry, id) as Promise<void>,
+  onTransfersProgress: (cb) => {
+    const listener = (_e: unknown, items: TransferItem[]): void => cb(items)
+    ipcRenderer.on(IpcChannels.TransfersProgress, listener as never)
+    return () => ipcRenderer.removeListener(IpcChannels.TransfersProgress, listener as never)
+  },
   setTaskProvider: (taskId, opts) =>
     ipcRenderer.invoke(IpcChannels.TasksSetProvider, taskId, opts) as Promise<TaskRecord>,
   // v1.4 本地代理（纯隧道）
@@ -234,6 +261,9 @@ const api: CWBApi = {
     ipcRenderer.invoke(IpcChannels.RemoteProxyStart, connectionId) as Promise<RemoteProxyStatus>,
   stopRemoteProxy: (connectionId) =>
     ipcRenderer.invoke(IpcChannels.RemoteProxyStop, connectionId) as Promise<RemoteProxyStatus>,
+  /** v2.0 拖拽文件 → 本机绝对路径（Electron 44 File.path 已废——webUtils 官方口） */
+  getPathForFile: (file: File): string | undefined =>
+    webUtils?.getPathForFile?.(file) ?? (file as File & { path?: string }).path,
   reportSmoke: (payload) => {
     void ipcRenderer.send(IpcChannels.SmokeReport, payload)
   }

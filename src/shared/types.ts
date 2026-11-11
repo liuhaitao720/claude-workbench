@@ -148,6 +148,35 @@ export interface NotifyConfig {
   channel: 'wecom' | 'dingtalk' | 'generic'
 }
 
+/** v2.0 远程文件条目（FilesPanel 列表） */
+export interface RemoteFileEntry {
+  name: string
+  isDir: boolean
+  size: number
+  /** epoch ms；取不到=0 */
+  mtimeMs: number
+}
+
+/** v2.0 传输条目（传输条/队列） */
+export interface TransferItem {
+  id: string
+  direction: 'upload' | 'download'
+  name: string
+  status: 'queued' | 'active' | 'done' | 'error' | 'canceled'
+  transferredBytes: number
+  totalBytes: number
+  error?: string
+  finishedAt?: number
+}
+
+/** v2.0 文件浏览结果（FilesList） */
+export interface FilesBrowseResult {
+  ok: boolean
+  path?: string
+  entries?: RemoteFileEntry[]
+  error?: string
+}
+
 /** 应用更新说明条目【v1.1.0：main 解析仓库 CHANGELOG.md → 设置中心展示】 */
 export interface AppChangelogEntry {
   version: string
@@ -352,6 +381,15 @@ export interface AppSettings {
    * 供 main 侧的托盘菜单与退出确认框取文案。缺省='zh'。
    */
   language?: 'zh' | 'en'
+  /* ── v2.0 远程文件管理（下载落位；确认单：目录/方式/按连接分档）────── */
+  /** 下载根目录（空串=默认「系统下载目录/SSH Workbench」） */
+  downloadDir?: string
+  /** direct=直接存入（同名自动重命名）；ask=每次弹保存框。缺省 direct */
+  downloadMode?: 'direct' | 'ask'
+  /** 按连接分子目录（缺省 true） */
+  downloadPerConnection?: boolean
+  /** v2.0 文件面板 per-connection 目录记忆（cid → 远端路径） */
+  filesPanelPath?: Record<string, string>
   /**
    * 自动升级（v1.2.1，缺省 true）：启动静默检查 → 有新版本后台下载校验 →
    * 运行中的任务全部结束后自动退出替换重启（有任务在跑时不打断）。
@@ -650,6 +688,25 @@ export interface CWBApi {
   probeProviderModels(id: string, cid?: string): Promise<{ ok: boolean; models?: string[]; error?: string }>
   /** v1.7.0 provider 跨作用域复制（源/目标：{kind:'local'} 或 {kind:'remote',id:连接id}；源侧重分配 id） */
   copyProvider(source: { kind: 'local' } | { kind: 'remote'; id: string }, target: { kind: 'local' } | { kind: 'remote'; id: string }, providerId: string): Promise<ProviderConfig>
+  /* ── v2.0 远程文件管理 ──────────────────────────────────────────── */
+  /** 目录清单（缺省=远端 home；realpath 解析后返回） */
+  listRemoteFiles(cid: string, path?: string): Promise<FilesBrowseResult>
+  mkdirRemote(cid: string, path: string): Promise<void>
+  renameRemote(cid: string, from: string, to: string): Promise<void>
+  /** 删除：文件=unlink；目录=VM trash mv（~/.cwb/.trash——可找回） */
+  deleteRemote(cid: string, path: string, isDir: boolean): Promise<void>
+  /** 本机选择上传源（多选；files=true 含文件 / dirs=true 含目录） */
+  pickLocalForUpload(files: boolean, dirs: boolean): Promise<string[] | null>
+  /** 上传入队（冲突按 policy；返回条目与冲突清单——skip 由调用方对冲突项 cancel） */
+  uploadRemoteFiles(cid: string, localPaths: string[], remoteDir: string, policy: 'overwrite' | 'skip' | 'rename'): Promise<{ items: TransferItem[]; conflicts: Array<{ remotePath: string; renameTo?: string }> }>
+  /** 下载（main 按下载设置解析落位；ask 模式弹保存框，取消返回 null） */
+  downloadRemoteFile(cid: string, remotePath: string, suggestedName?: string): Promise<TransferItem | null>
+  /** 传输清单（跨连接合并，新→旧） */
+  listTransfers(): Promise<TransferItem[]>
+  cancelTransfer(id: string): Promise<void>
+  retryTransfer(id: string): Promise<void>
+  /** 传输进度订阅（节流 ~100ms；disposer 模式） */
+  onTransfersProgress(cb: (items: TransferItem[]) => void): () => void
   /**
    * v1.4 任务级 provider/model 事后修改（照 setTaskSkipPermissions 第 17 法先例）：
    * 仅元数据，下次 spawn/resume 生效；undefined/空串=清除该项（回退默认链）；
@@ -715,5 +772,7 @@ export interface CWBApi {
 
   // ── smoke（1，测试专用）──────────────────────
   /** S4 冒烟回执：renderer 收到 PTY 数据后回报 main */
+  /** v2.0 拖拽文件 → 本机绝对路径（webUtils；Electron 44 File.path 已废） */
+  getPathForFile(file: File): string | undefined
   reportSmoke(payload: string): void
 }

@@ -14,6 +14,12 @@ export interface AppSettingsChange {
  * =既有行为不变（照 proxyAutoStart 条件展开先例）。
  */
 
+/** filesPanelPath 形状校验：Record<string, string>（连接档案 id → 远端路径） */
+function isFilesPanelPath(v: unknown): v is Record<string, string> {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false
+  return Object.values(v).every((x) => typeof x === 'string')
+}
+
 /** serverNodesCollapsed 形状校验：Record<string, boolean>（连接档案 id → 折叠态） */
 function isServerNodesCollapsed(v: unknown): v is Record<string, boolean> {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false
@@ -57,6 +63,14 @@ export class AppSettingsStore {
             : {}),
           ...(isServerNodesCollapsed(rec['serverNodesCollapsed'])
             ? { serverNodesCollapsed: { ...rec['serverNodesCollapsed'] } }
+            : {}),
+          // v2.0 文件面板目录记忆（Record<cid, string>——同 serverNodesCollapsed 容错口径）
+          ...(isFilesPanelPath(rec['filesPanelPath']) ? { filesPanelPath: { ...rec['filesPanelPath'] } } : {}),
+          // v2.0 下载落位三键（缺省不落键=现行为：direct + 默认目录 + 按连接分档）
+          ...(typeof rec['downloadDir'] === 'string' ? { downloadDir: rec['downloadDir'] } : {}),
+          ...(rec['downloadMode'] === 'ask' ? { downloadMode: 'ask' as const } : {}),
+          ...(typeof rec['downloadPerConnection'] === 'boolean'
+            ? { downloadPerConnection: rec['downloadPerConnection'] }
             : {})
         }
       }

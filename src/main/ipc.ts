@@ -46,6 +46,7 @@ import {
 } from './remote-providers'
 import { readRemoteNotify, writeRemoteNotify } from './remote-notify'
 import { importRemoteSkillFolder, removeRemoteSkill } from './remote-skills'
+import { FileTransferManager, type TransferItem } from './file-transfer'
 import { createModelsProbe, type ModelsProbeResult } from './provider-models'
 import { createLocalProxy, type LocalProxyHandle } from './local-proxy'
 import { mainLanguage, setMainLanguage } from './language'
@@ -71,7 +72,7 @@ import {
 } from './connections-store'
 import { testConnectionRecord } from './ssh/test-connection'
 import { ConnectionError } from './ssh/errors'
-import { browseRemoteDir } from './ssh/manager'
+import { RealSftpSession, browseRemoteDir } from './ssh/manager'
 import { ensureServer } from './server-installer'
 
 /** main→renderer 推送：广播到全部窗口 */
@@ -111,6 +112,14 @@ export function broadcastConnectionState(e: ConnectionStateChangedEvent): void {
  * 发，根因即此）。TTL 过期后下次 awaiting 事件重读。
  */
 const remoteNotifyCache = new Map<string, { cfg: NotifyConfig | null; at: number }>()
+
+/** v2.0 传输进度广播（模块级：任一连接的 manager 节流触发即推合并清单） */
+let broadcastTransfers: ((items: TransferItem[]) => void) | null = null
+
+/** v2.0 广播装配器：main.ts 经此注入真实 webContents 广播（handler 注册前生效） */
+export function registerTransfersBroadcaster(send: (items: TransferItem[]) => void): void {
+  broadcastTransfers = send
+}
 const REMOTE_NOTIFY_CACHE_TTL_MS = 60_000
 
 export function broadcastRemoteServerLog(e: RemoteServerLogEvent): void {
@@ -1252,6 +1261,146 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     ctx.setTaskSkipPermissions(taskId, on)
   )
   ipcMain.handle(IpcChannels.DialogPickDirectory, () => ctx.pickDirectory())
+
+  // ── v2.0 远程文件管理（用户确认原型；管理器 per-connection，队列域隔离）────
+  const fileManagers = new Map<string, FileTransferManager>()
+  const managerFor = (cid: string): FileTransferManager => {
+    let m = fileManagers.get(cid)
+    if (m === undefined) {
+      m = new FileTransferManager({
+        connection: ctx.connection,
+        connectionId: cid,
+        onProgress: () => broadcastTransfers?.(allTransfers())
+      })
+      fileManagers.set(cid, m)
+    }
+    return m
+  }
+  const allTransfers = (): TransferItem[] => {
+    const all: TransferItem[] = []
+    for (const m of fileManagers.values()) all.push(...(m.list() as TransferItem[]))
+    return all.sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0) || b.id.localeCompare(a.id))
+  }
+
+  ipcMain.handle(IpcChannels.FilesList, async (_e, cid: unknown, path: unknown) => {
+    const c = asCid(cid)
+    if (c === undefined) return { ok: false, error: 'no connection' }
+    try {
+      const sftp = await ctx.connection.sftp(c)
+      const dir = typeof path === 'string' && path.trim() !== '' ? path.trim() : '.'
+      const real = sftp instanceof RealSftpSession ? sftp : (sftp as unknown as RealSftpSession)
+      const resolved = await real.realpath(dir)
+      const entries = await real.listAll!(resolved)
+      return { ok: true, path: resolved, entries }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle(IpcChannels.FilesMkdir, async (_e, cid: unknown, path: unknown) => {
+    const c = asCid(cid)
+    if (c === undefined || typeof path !== 'string' || path === '') {
+      throw new Error('files: invalid mkdir args')
+    }
+    await (await ctx.connection.sftp(c)).mkdir!(path)
+  })
+
+  ipcMain.handle(IpcChannels.FilesRename, async (_e, cid: unknown, from: unknown, to: unknown) => {
+    const c = asCid(cid)
+    if (c === undefined || typeof from !== 'string' || typeof to !== 'string' || to === '') {
+      throw new Error('files: invalid rename args')
+    }
+    await (await ctx.connection.sftp(c)).rename!(from, to)
+  })
+
+  ipcMain.handle(IpcChannels.FilesDelete, async (_e, cid: unknown, path: unknown, isDir: unknown) => {
+    // 删除红线：目录 → VM trash mv（~/.cwb/.trash/<name>-<ts>，可找回——确认单）；
+    // 文件 → unlink。路径经 posixQuote 硬化（remote-skills 同法）
+    const c = asCid(cid)
+    if (c === undefined || typeof path !== 'string' || path === '') {
+      throw new Error('files: invalid delete args')
+    }
+    if (isDir === true) {
+      const r = await ctx.connection.exec(
+        c,
+        `h=$(printf %s "$HOME"); mkdir -p "$h/.cwb/.trash" && mv ${posixQuote(path)} "$h/.cwb/.trash/$(basename ${posixQuote(path)})-$(date +%Y%m%d-%H%M%S)" && printf moved`
+      )
+      if (r.code !== 0 || !r.stdout.includes('moved')) {
+        throw new Error(r.stderr.trim() !== '' ? r.stderr.trim() : `remote delete failed (exit ${r.code})`)
+      }
+      return
+    }
+    await (await ctx.connection.sftp(c)).unlinkFile!(path)
+  })
+
+  ipcMain.handle(IpcChannels.FilesPickUpload, async (_e, files: unknown, dirs: unknown) => {
+    // 本机选择上传源（多选；files/dirs 至少一真）
+    const props: Array<'multiSelections' | 'openFile' | 'openDirectory'> = ['multiSelections']
+    if (files === true) props.push('openFile')
+    if (dirs === true) props.push('openDirectory')
+    if (props.length === 1) return null
+    const r = await dialog.showOpenDialog({ properties: props })
+    return r.canceled ? null : r.filePaths
+  })
+
+  ipcMain.handle(
+    IpcChannels.FilesUpload,
+    async (_e, cid: unknown, localPaths: unknown, remoteDir: unknown, policy: unknown) => {
+      const c = asCid(cid)
+      const paths = Array.isArray(localPaths) ? localPaths.filter((x): x is string => typeof x === 'string') : []
+      const p =
+        policy === 'overwrite' || policy === 'skip' || policy === 'rename' ? policy : 'overwrite'
+      if (c === undefined || paths.length === 0 || typeof remoteDir !== 'string') {
+        throw new Error('files: invalid upload args')
+      }
+      const r = await managerFor(c).enqueueUpload({ localPaths: paths, remoteDir, policy: p })
+      return { items: r.items, conflicts: r.conflicts }
+    }
+  )
+
+  ipcMain.handle(
+    IpcChannels.FilesDownload,
+    async (_e, cid: unknown, remotePath: unknown, suggestedName: unknown) => {
+      // 落位解析：downloadMode=ask → 保存框（取消返回 null）；direct → 下载目录
+      // （+按连接子目录）+ 同名自动重命名（ (1) 循环——与上传 rename 策略同形）
+      const c = asCid(cid)
+      if (c === undefined || typeof remotePath !== 'string' || remotePath === '') return null
+      const name =
+        typeof suggestedName === 'string' && suggestedName !== ''
+          ? suggestedName
+          : remotePath.split('/').pop() ?? 'download.bin'
+      const appSettings = ctx.appSettings.get()
+      const mode = appSettings.downloadMode === 'ask' ? 'ask' : 'direct'
+      let target: string
+      if (mode === 'ask') {
+        const r = await dialog.showSaveDialog({ defaultPath: name })
+        if (r.canceled || r.filePath === undefined) return null
+        target = r.filePath
+      } else {
+        const root =
+          appSettings.downloadDir !== undefined && appSettings.downloadDir.trim() !== ''
+            ? appSettings.downloadDir.trim()
+            : join(app.getPath('downloads'), 'SSH Workbench')
+        const connName = connectionsStore.get(c)?.name
+        const sub =
+          appSettings.downloadPerConnection === false || connName === undefined ? '' : sanitizeFileName(connName)
+        const dir = sub === '' ? root : join(root, sub)
+        target = uniqueLocalPath(join(dir, sanitizeFileName(name)))
+      }
+      return managerFor(c).enqueueDownload({ remotePath, localPath: target })
+    }
+  )
+
+  ipcMain.handle(IpcChannels.TransfersList, () => allTransfers())
+  ipcMain.handle(IpcChannels.TransferCancel, (_e, id: unknown) => {
+    if (typeof id !== 'string') return
+    for (const m of fileManagers.values()) m.cancel(id)
+  })
+  ipcMain.handle(IpcChannels.TransferRetry, (_e, id: unknown) => {
+    if (typeof id !== 'string') return
+    for (const m of fileManagers.values()) m.retry(id)
+  })
+
   // v0.9 S13 会话导入（addProject 已自动调用；此为项目菜单手动触发/重扫入口）
   ipcMain.handle(IpcChannels.TasksImportFromSessions, (_e, projectId: string) =>
     ctx.importTasksFromSessions(projectId)
@@ -1806,4 +1955,24 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     ctx.cli.kill(commandId)
   })
   return ctx
+}
+
+/** v2.0：文件名清理（跨平台保留可打印子集；连接名做目录名/建议名兜底） */
+function sanitizeFileName(name: string): string {
+  const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim()
+  return cleaned === '' ? '_' : cleaned
+}
+
+/** v2.0：同名自动重命名「name (1).ext」循环（与上传 rename 策略同形） */
+function uniqueLocalPath(p: string): string {
+  const { existsSync } = require('node:fs') as typeof import('node:fs')
+  if (!existsSync(p)) return p
+  const dot = p.lastIndexOf('.')
+  const stem = dot > 0 ? p.slice(0, dot) : p
+  const ext = dot > 0 ? p.slice(dot) : ''
+  for (let i = 1; i < 1000; i++) {
+    const cand = `${stem} (${i})${ext}`
+    if (!existsSync(cand)) return cand
+  }
+  return `${stem} (${Date.now()})${ext}`
 }

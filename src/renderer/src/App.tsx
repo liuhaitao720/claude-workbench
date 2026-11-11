@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect , useState } from 'react'
 import { initListeners, useAppStore } from './store'
 import { ProjectSidebar } from './components/ProjectSidebar'
 import { TabBar } from './components/TabBar'
@@ -7,6 +7,7 @@ import { SmokeBridge } from './components/SmokeBridge'
 import { SettingsDialog } from './components/SettingsDialog'
 import { ServerInstallDialog } from './components/ServerInstallDialog'
 import { ConnectErrorToast, HostKeyConfirmDialog } from './components/HostKeyConfirmDialog'
+import { RemoteFilesPanel } from './components/RemoteFilesPanel'
 import { useI18n, syncLanguageToMain } from './i18n'
 
 /** ?smoke=1：--smoke 冒烟模式下 main 注入的 URL query（模块加载时解析一次，运行期不变） */
@@ -50,6 +51,13 @@ export function App() {
   const projects = useAppStore((s) => s.projects)
   const openTaskIds = useAppStore((s) => s.openTaskIds)
   const settingsOpen = useAppStore((s) => s.settingsOpen)
+  // v2.0 远程文件面板开合 + 目标连接（首个已连接远程；面板内目录记忆 per-cid）
+  const [filesOpen, setFilesOpen] = useState(false)
+  const connectionsForFiles = useAppStore((s) => s.connections)
+  const connectionStates = useAppStore((s) => s.connectionStates)
+  const connectedConn =
+    connectionsForFiles.find((c) => connectionStates[c.id]?.state === 'connected')?.id ?? null
+  const filesConnId = filesOpen && connectedConn !== null ? connectedConn : null
   // S6（6.7=A）：连接流程触发 needInstall 时的 server 安装/升级确认弹窗
   const pendingServerInstall = useAppStore((s) => s.pendingServerInstall)
 
@@ -65,6 +73,32 @@ export function App() {
         )}
         <TabBar />
         <TerminalPanel />
+        {/* v2.0 远程文件面板（FinalShell 式右侧——用户确认原型）：开合状态 +
+            目标连接为 renderer 态（第一个已连接远程；记忆 per-connection 目录） */}
+        {filesConnId === null ? (
+          connectedConn !== null && (
+            <button
+              type="button"
+              className="files-rail-toggle"
+              title={t('files.openPanel')}
+              onClick={() => setFilesOpen(true)}
+            >
+              {t('files.openPanel')}
+            </button>
+          )
+        ) : (
+          <div className="remote-files-host" data-testid="remote-files-host">
+            <RemoteFilesPanel connectionId={filesConnId} />
+            <button
+              type="button"
+              className="files-rail-toggle"
+              title={t('files.closePanel')}
+              onClick={() => setFilesOpen(false)}
+            >
+              ✕ {t('files.closePanel')}
+            </button>
+          </div>
+        )}
       </div>
       {settingsOpen && (
         <SettingsDialog

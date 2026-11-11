@@ -79,7 +79,18 @@ const HANDLE = {
   RemoteProxyConfigSet: 'cwb:remote-proxy:config-set', // S4：VM 侧代理配置写（A5 回环）
   RemoteProxyStart: 'cwb:remote-proxy:start', // v1.6.1：VM 侧代理启动（server 帧 proxy.start——S6 遗留缺口补齐）
   RemoteProxyStop: 'cwb:remote-proxy:stop', // v1.6.1：VM 侧代理停止（server 帧 proxy.stop）
-  ProvidersCopy: 'cwb:providers:copy' // v1.7.0：provider 跨作用域复制（本机↔VM / VM↔VM）
+  ProvidersCopy: 'cwb:providers:copy', // v1.7.0：provider 跨作用域复制（本机↔VM / VM↔VM）
+  // ── v2.0 远程文件管理 ──────────────────────────────────────────────
+  FilesList: 'cwb:files:list',
+  FilesMkdir: 'cwb:files:mkdir',
+  FilesRename: 'cwb:files:rename',
+  FilesDelete: 'cwb:files:delete',
+  FilesPickUpload: 'cwb:files:pick-upload',
+  FilesUpload: 'cwb:files:upload',
+  FilesDownload: 'cwb:files:download',
+  TransfersList: 'cwb:transfers:list',
+  TransferCancel: 'cwb:transfer:cancel',
+  TransferRetry: 'cwb:transfer:retry'
 } as const
 
 const SEND = {
@@ -100,7 +111,9 @@ const EVENT = {
   /** SSH 远程连接状态变迁（S1 落通道：S2 唯一产生，经 ipc.ts broadcastConnectionState；S6 侧栏消费） */
   ConnectionStateChanged: 'cwb:event:connection-state-changed',
   /** 远程 server 日志（S1 落通道：S3 server.log 帧→S4 桥接 broadcastRemoteServerLog；脱敏元数据，8.1=A） */
-  RemoteServerLog: 'cwb:event:remote-server-log'
+  RemoteServerLog: 'cwb:event:remote-server-log',
+  /** v2.0 传输进度（FileTransferManager 节流 ~100ms；items=跨连接合并清单） */
+  TransfersProgress: 'cwb:event:transfers-progress'
 } as const
 
 export const IpcChannels = { ...HANDLE, ...SEND, ...EVENT } as const

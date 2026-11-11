@@ -36,6 +36,54 @@ export interface SftpSession {
   writeFile(path: string, data: string | Buffer): Promise<void>
   /** 建远端目录（v1.7.0 远程 skills 导入递归上传用；已存在时幂等成功） */
   mkdir?(dir: string): Promise<void>
+
+  /* ── v2.0 远程文件管理（FilesPanel：全量清单 + 分块读写 + 元数据操作）──── */
+
+  /** 全量目录清单（含文件：name/isDir/size/mtimeMs；不含 . / ..）——区别于
+   *  list()（仅目录，注册对话框专用语义 v1.5.4，两接口并存互不影响） */
+  listAll?(dir: string): Promise<RemoteFileEntry[]>
+
+  /** 重命名/移动（同目录重命名；跨目录移动由调用方组合 mkdir+rename） */
+  rename?(from: string, to: string): Promise<void>
+
+  /** 删除单个文件/符号链接（目录删除走 exec 递归协议，不经此口） */
+  unlinkFile?(path: string): Promise<void>
+
+  /** 元数据（冲突预检/列表刷新单点探测用；不存在 → Error） */
+  statFile?(path: string): Promise<RemoteFileStat>
+
+  /**
+   * 分块读（下载）：读 [start, start+length) 区间，不足 length 返回短块（EOF）。
+   * 每 chunk 一次 open-read-close（无句柄态——取消/重试无泄漏面；SFTP open
+   * 单 RTT 开销相对 1MB 传输可忽略）。
+   */
+  readRange?(path: string, start: number, length: number): Promise<Buffer>
+
+  /**
+   * 分块写（上传）：start=0 → open 'w'（存在即截断，覆盖语义）；start>0 →
+   * open 'r+' 定位写（断点续传预留——v2.0 失败重试从头，接口已就位）。
+   */
+  writeRange?(path: string, start: number, data: Buffer): Promise<void>
+}
+
+/** v2.0 文件条目（FilesPanel 列表；mtimeMs 取不到=0） */
+export interface RemoteFileEntry {
+  name: string
+  isDir: boolean
+  /** 文件字节数；目录=0 */
+  size: number
+  /** 修改时刻（epoch ms；attrs 缺失=0） */
+  mtimeMs: number
+}
+
+/** v2.0 单点元数据（冲突预检等） */
+export interface RemoteFileStat {
+  isDir: boolean
+  size: number
+  mtimeMs: number
+  /** 目标是否存在（statFile 对不存在路径 resolve exists:false 而非 reject——
+   *  调用方分支更平） */
+  exists: boolean
 }
 
 export interface ConnectionManager {
