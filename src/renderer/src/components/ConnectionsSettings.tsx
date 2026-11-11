@@ -79,13 +79,22 @@ function errMsg(err: unknown): string {
  * - 远程代理面板（6.4=c）：getRemoteProxyStatus 状态卡 + setRemoteProxyConfig
  *   配置表单（本批 mock 驱动；S3/S4 联通后即活）
  */
-export function ConnectionsSection({ initialEditId }: { initialEditId: string | null }) {
+export function ConnectionsSection({
+  initialEditId,
+  startInAdd = false
+}: {
+  initialEditId: string | null
+  /** v1.7.0：__new__ 伪作用域——直接展开新建表单（保存成功切到新档案作用域） */
+  startInAdd?: boolean
+}) {
   const t = useI18n()
   const connections = useAppStore((s) => s.connections)
   const connectionStates = useAppStore((s) => s.connectionStates)
   const saveConnectionFlow = useAppStore((s) => s.saveConnectionFlow)
   const removeConnectionFlow = useAppStore((s) => s.removeConnectionFlow)
+  const setSettingsScope = useAppStore((s) => s.setSettingsScope)
   const [form, setForm] = useState<ConnFormState | null>(() => {
+    if (startInAdd) return emptyConnForm()
     if (initialEditId === null) return null
     const target = useAppStore.getState().connections.find((c) => c.id === initialEditId)
     return target !== undefined ? connFormOf(target) : null
@@ -154,6 +163,10 @@ export function ConnectionsSection({ initialEditId }: { initialEditId: string | 
     }
     setForm(null)
     setSavedMsg(t('settings.providerSaved'))
+    // v1.7.0：新建态保存成功 → 作用域从 __new__ 切到新档案（后续配置直接落右侧）
+    if (startInAdd && useAppStore.getState().settingsScope === '__new__') {
+      setSettingsScope(saved.id)
+    }
   }
 
   const runTest = async (): Promise<void> => {
@@ -465,7 +478,6 @@ export function ConnectionsSection({ initialEditId }: { initialEditId: string | 
           )}
         </div>
       )}
-      <RemoteProxyPanel />
     </div>
   )
 }
@@ -475,7 +487,7 @@ export function ConnectionsSection({ initialEditId }: { initialEditId: string | 
  * server 协议读写（getRemoteProxyStatus/setRemoteProxyConfig——本批 mock 驱动，
  * S3/S4 联通后即活）。连接选择 + 状态卡 + proxyUrl 配置表单。
  */
-function RemoteProxyPanel() {
+export function RemoteProxyPanel() {
   const t = useI18n()
   const connections = useAppStore((s) => s.connections)
   const requestServerInstall = useAppStore((s) => s.requestServerInstall)

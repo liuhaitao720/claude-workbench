@@ -176,12 +176,12 @@ describe('A1：Escape 统一修复（document 级——焦点不在弹窗内也�
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '设置' })).toBeNull())
   })
 
-  it('Skills：Escape 关闭', async () => {
+  it('Skills（v1.7.0 移植进设置）：Escape 关闭设置弹窗即关 Skills 分类', async () => {
     await renderApp()
     fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
-    expect(await screen.findByRole('dialog', { name: 'Skills 管理' })).toBeDefined()
+    expect(await screen.findByRole('dialog', { name: '设置' })).toBeDefined()
     fireEvent.keyDown(document.body, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Skills 管理' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '设置' })).toBeNull())
   })
 
   it('删除确认：Escape 关闭且 removeTask 不被调用；遮罩空白 mousedown 也关闭', async () => {

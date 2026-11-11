@@ -4,7 +4,6 @@ import { ProjectSidebar } from './components/ProjectSidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalPanel, focusActiveTerminal } from './components/TerminalPanel'
 import { SmokeBridge } from './components/SmokeBridge'
-import { SkillsDialog } from './components/SkillsDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { ServerInstallDialog } from './components/ServerInstallDialog'
 import { ConnectErrorToast, HostKeyConfirmDialog } from './components/HostKeyConfirmDialog'
@@ -50,7 +49,6 @@ export function App() {
 
   const projects = useAppStore((s) => s.projects)
   const openTaskIds = useAppStore((s) => s.openTaskIds)
-  const skillsOpen = useAppStore((s) => s.skillsOpen)
   const settingsOpen = useAppStore((s) => s.settingsOpen)
   // S6（6.7=A）：连接流程触发 needInstall 时的 server 安装/升级确认弹窗
   const pendingServerInstall = useAppStore((s) => s.pendingServerInstall)
@@ -68,14 +66,6 @@ export function App() {
         <TabBar />
         <TerminalPanel />
       </div>
-      {skillsOpen && (
-        <SkillsDialog
-          onClose={() => {
-            useAppStore.getState().closeSkills()
-            focusActiveTerminal()
-          }}
-        />
-      )}
       {settingsOpen && (
         <SettingsDialog
           onClose={() => {

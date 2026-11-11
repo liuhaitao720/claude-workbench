@@ -81,10 +81,11 @@ const api: CWBApi = {
   pickDirectory: () => ipcRenderer.invoke(IpcChannels.DialogPickDirectory) as Promise<string | null>,
   // smoke
   // skills（v0.5③）
-  listSkills: () => ipcRenderer.invoke(IpcChannels.SkillsList) as Promise<SkillInfo[]>,
-  importSkillFolder: (fromDir, target) =>
-    ipcRenderer.invoke(IpcChannels.SkillsImport, fromDir, target) as Promise<SkillInfo>,
-  removeSkill: (skill) => ipcRenderer.invoke(IpcChannels.SkillsRemove, skill) as Promise<void>,
+  listSkills: (cid?: string) => ipcRenderer.invoke(IpcChannels.SkillsList, cid) as Promise<SkillInfo[]>,
+  importSkillFolder: (fromDir, target, cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.SkillsImport, cid, fromDir, target) as Promise<SkillInfo>,
+  removeSkill: (skill, cid?) =>
+    ipcRenderer.invoke(IpcChannels.SkillsRemove, cid, skill) as Promise<void>,
   // cli 执行（v0.5③；M10 增可选 connectionId——缺省本机执行，既有调用零改动）
   runCliCommand: (command, connectionId) =>
     ipcRenderer.invoke(IpcChannels.CliRun, command, connectionId) as Promise<{ commandId: string }>,
@@ -97,14 +98,14 @@ const api: CWBApi = {
     void ipcRenderer.send(IpcChannels.CliKill, commandId)
   },
   // claude 版本/更新/安装（v0.5⑤）
-  getClaudeVersionInfo: () =>
-    ipcRenderer.invoke(IpcChannels.VersionGet) as Promise<{ version: string; path: string }>,
-  checkClaudeUpdate: () =>
-    ipcRenderer.invoke(IpcChannels.UpdateCheck) as Promise<
+  getClaudeVersionInfo: (cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.VersionGet, cid) as Promise<{ version: string; path: string }>,
+  checkClaudeUpdate: (cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.UpdateCheck, cid) as Promise<
       { current: string; latest: string; upToDate: boolean; degraded?: boolean }
     >,
-  installClaudeCli: (method) =>
-    ipcRenderer.invoke(IpcChannels.InstallCli, method) as Promise<{ commandId: string }>,
+  installClaudeCli: (method: 'native' | 'npm', cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.InstallCli, cid, method) as Promise<{ commandId: string }>,
   // 应用设置（v0.9）
   getAppSettings: () => ipcRenderer.invoke(IpcChannels.SettingsGet) as Promise<AppSettings>,
   getInstalledMonoFonts: () =>
@@ -133,27 +134,27 @@ const api: CWBApi = {
   importTasksFromSessions: (projectId) =>
     ipcRenderer.invoke(IpcChannels.TasksImportFromSessions, projectId) as Promise<TaskRecord[]>,
   // v1.2.0 skill 市场（搜索本机 marketplace 目录；安装/刷新走 CLI 受控执行面）
-  searchSkillMarket: (query, marketplace, limit) =>
-    ipcRenderer.invoke(IpcChannels.SkillSearch, query, marketplace, limit) as Promise<
+  searchSkillMarket: (query, marketplace, limit, cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.SkillSearch, cid, query, marketplace, limit) as Promise<
       SkillMarketEntry[]
     >,
-  listSkillMarketplaces: () =>
-    ipcRenderer.invoke(IpcChannels.SkillMarketplaces) as Promise<SkillMarketplaceInfo[]>,
-  installMarketSkill: (installId) =>
-    ipcRenderer.invoke(IpcChannels.SkillMarketInstall, installId) as Promise<{
+  listSkillMarketplaces: (cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.SkillMarketplaces, cid) as Promise<SkillMarketplaceInfo[]>,
+  installMarketSkill: (installId, cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.SkillMarketInstall, cid, installId) as Promise<{
       ok: boolean
       commandId?: string
       error?: string
     }>,
-  refreshSkillMarket: () =>
-    ipcRenderer.invoke(IpcChannels.SkillMarketRefresh) as Promise<{
+  refreshSkillMarket: (cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.SkillMarketRefresh, cid) as Promise<{
       ok: boolean
       commandId?: string
       error?: string
     }>,
   // v1.2.1 插件 skill 启用/停用（claude plugin enable|disable <id> -s user）
-  setSkillPluginEnabled: (pluginId, enabled) =>
-    ipcRenderer.invoke(IpcChannels.SkillPluginSetEnabled, pluginId, enabled) as Promise<{
+  setSkillPluginEnabled: (pluginId, enabled, cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.SkillPluginSetEnabled, cid, pluginId, enabled) as Promise<{
       ok: boolean
       commandId?: string
       error?: string
@@ -161,25 +162,29 @@ const api: CWBApi = {
   setAppSettings: (patch) =>
     ipcRenderer.invoke(IpcChannels.SettingsSet, patch) as Promise<AppSettings>,
   // webhook 通知（v0.5④N）
-  getNotifyConfig: () => ipcRenderer.invoke(IpcChannels.NotifyGet) as Promise<NotifyConfig>,
-  setNotifyWebhook: (url, enabled) =>
-    ipcRenderer.invoke(IpcChannels.NotifySet, url, enabled) as Promise<NotifyConfig>,
-  sendTestNotify: () =>
-    ipcRenderer.invoke(IpcChannels.NotifyTest) as Promise<{ ok: boolean; error?: string }>,
+  getNotifyConfig: (cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.NotifyGet, cid) as Promise<NotifyConfig>,
+  setNotifyWebhook: (url: string, enabled: boolean, cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.NotifySet, cid, url, enabled) as Promise<NotifyConfig>,
+  sendTestNotify: (cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.NotifyTest, cid) as Promise<{ ok: boolean; error?: string }>,
   // v1.4 模型服务 provider（参考 cc-switch：档案 CRUD + 默认切换；仅配置注入）
-  listProviders: () =>
-    ipcRenderer.invoke(IpcChannels.ProvidersList) as Promise<ProviderRegistryState>,
-  saveProvider: (provider) =>
-    ipcRenderer.invoke(IpcChannels.ProvidersSave, provider) as Promise<ProviderConfig>,
-  removeProvider: (id) => ipcRenderer.invoke(IpcChannels.ProvidersRemove, id) as Promise<void>,
-  setDefaultProvider: (id) =>
-    ipcRenderer.invoke(IpcChannels.ProvidersSetDefault, id) as Promise<void>,
-  probeProviderModels: (id) =>
-    ipcRenderer.invoke(IpcChannels.ProvidersProbeModels, id) as Promise<{
+  listProviders: (cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.ProvidersList, cid) as Promise<ProviderRegistryState>,
+  saveProvider: (provider, cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.ProvidersSave, cid, provider) as Promise<ProviderConfig>,
+  removeProvider: (id, cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.ProvidersRemove, cid, id) as Promise<void>,
+  setDefaultProvider: (id, cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.ProvidersSetDefault, cid, id) as Promise<void>,
+  probeProviderModels: (id, cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.ProvidersProbeModels, cid, id) as Promise<{
       ok: boolean
       models?: string[]
       error?: string
     }>,
+  copyProvider: (source, target, providerId) =>
+    ipcRenderer.invoke(IpcChannels.ProvidersCopy, source, target, providerId) as Promise<ProviderConfig>,
   setTaskProvider: (taskId, opts) =>
     ipcRenderer.invoke(IpcChannels.TasksSetProvider, taskId, opts) as Promise<TaskRecord>,
   // v1.4 本地代理（纯隧道）

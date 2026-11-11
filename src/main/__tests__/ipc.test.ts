@@ -537,21 +537,22 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
   })
 
   it('v0.5④N NotifyGet/NotifySet：默认配置、保存读回（channel 按 URL 推断）', async () => {
-    expect(await invoke(IpcChannels.NotifyGet)).toEqual({ url: '', enabled: false, channel: 'wecom' })
+    expect(await invoke(IpcChannels.NotifyGet, undefined)).toEqual({ url: '', enabled: false, channel: 'wecom' })
     const saved = await invoke<NotifyConfig>(
       IpcChannels.NotifySet,
+      undefined, // v1.7.0 cid（本机）
       'https://qyapi.weixin.qq.com/send?key=k',
       true
     )
     expect(saved).toEqual({ url: 'https://qyapi.weixin.qq.com/send?key=k', enabled: true, channel: 'wecom' })
-    expect(await invoke<NotifyConfig>(IpcChannels.NotifyGet)).toEqual(saved)
+    expect(await invoke<NotifyConfig>(IpcChannels.NotifyGet, undefined)).toEqual(saved)
   })
 
   // ── v1.4 模型服务 provider ─────────────────────────────────────────────
   it('v1.4 Providers CRUD：默认空；保存（校验+归一+uuid）/设默认/删除（默认清空）；非法入参拒绝', async () => {
     expect(await invoke(IpcChannels.ProvidersList)).toEqual({ providers: [] })
 
-    const saved = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+    const saved = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, undefined, {
       id: '',
       name: '  GLM  ',
       format: 'anthropic',
@@ -567,33 +568,33 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
     })
     expect(saved.id).toMatch(/^[0-9a-f-]{36}$/)
 
-    await invoke(IpcChannels.ProvidersSetDefault, saved.id)
+    await invoke(IpcChannels.ProvidersSetDefault, undefined, saved.id)
     expect(await invoke<ProviderRegistryState>(IpcChannels.ProvidersList)).toEqual({
       providers: [saved],
       defaultProviderId: saved.id
     })
 
     // 非法入参逐项拒绝（i18n 文案；invoke reject）
-    await expect(invoke(IpcChannels.ProvidersSave, { ...saved, id: '', name: '' })).rejects.toThrow(
+    await expect(invoke(IpcChannels.ProvidersSave, undefined, { ...saved, id: '', name: '' })).rejects.toThrow(
       /名称/
     )
     await expect(
-      invoke(IpcChannels.ProvidersSave, { ...saved, id: '', format: 'bogus' })
+      invoke(IpcChannels.ProvidersSave, undefined, { ...saved, id: '', format: 'bogus' })
     ).rejects.toThrow(/anthropic 或 openai/)
     await expect(
-      invoke(IpcChannels.ProvidersSave, { ...saved, id: '', baseUrl: 'ftp://x' })
+      invoke(IpcChannels.ProvidersSave, undefined, { ...saved, id: '', baseUrl: 'ftp://x' })
     ).rejects.toThrow(/http\(s\)/)
     await expect(
-      invoke(IpcChannels.ProvidersSave, { ...saved, id: '', proxyUrl: 'socks5://x' })
+      invoke(IpcChannels.ProvidersSave, undefined, { ...saved, id: '', proxyUrl: 'socks5://x' })
     ).rejects.toThrow(/代理/)
 
-    await invoke(IpcChannels.ProvidersRemove, saved.id)
+    await invoke(IpcChannels.ProvidersRemove, undefined, saved.id)
     expect(await invoke(IpcChannels.ProvidersList)).toEqual({ providers: [] }) // 默认随删除清空
-    await expect(invoke(IpcChannels.ProvidersRemove, 'ghost')).rejects.toThrow(/不存在/)
-    await expect(invoke(IpcChannels.ProvidersSetDefault, 'ghost')).rejects.toThrow(/不存在/)
+    await expect(invoke(IpcChannels.ProvidersRemove, undefined, 'ghost')).rejects.toThrow(/不存在/)
+    await expect(invoke(IpcChannels.ProvidersSetDefault, undefined, 'ghost')).rejects.toThrow(/不存在/)
 
     // 空白 proxyUrl 归一为未设置（放末尾——save 会新增档案，不干扰上方列表断言）
-    const blankProxy = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+    const blankProxy = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, undefined, {
       ...saved,
       id: '',
       proxyUrl: '  '
@@ -602,7 +603,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
   })
 
   it('v1.4 createTask 带 provider/model：spawnClaude 收到注入 env、记录落 providerId/model', async () => {
-    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, undefined, {
       id: '',
       name: 'GLM',
       format: 'anthropic',
@@ -633,7 +634,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
   })
 
   it('v1.4 默认 provider 兜底：任务未指定时用默认 provider 的 defaultModel；无任何配置不注入', async () => {
-    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, undefined, {
       id: '',
       name: '默认网关',
       format: 'openai',
@@ -642,7 +643,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
       models: ['m1'],
       defaultModel: 'm1'
     })
-    await invoke(IpcChannels.ProvidersSetDefault, provider.id)
+    await invoke(IpcChannels.ProvidersSetDefault, undefined, provider.id)
 
     const projDir = join(h.tempDir, 'work', 'def')
     mkdirSync(projDir, { recursive: true })
@@ -665,13 +666,13 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
     expect(taskUpdates()).toContainEqual(updated)
 
     // 取消默认 → 不再有任何注入（TasksSetProvider 只改元数据不 spawn；此为第 2 次 spawn）
-    await invoke(IpcChannels.ProvidersSetDefault, '')
+    await invoke(IpcChannels.ProvidersSetDefault, undefined, '')
     await invoke(IpcChannels.TasksCreate, proj.id, '无注入', { isolation: 'shared' })
     expect(currentPty().spawnCalls[1].providerEnv).toBeUndefined()
   })
 
   it('v1.4 档位映射 + CLI 自主：slotModels 注入 ANTHROPIC_DEFAULT_*_MODEL；modelMode:auto 跳过 ANTHROPIC_MODEL', async () => {
-    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, undefined, {
       id: '',
       name: '档位网关',
       format: 'anthropic',
@@ -712,7 +713,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
   })
 
   it('v1.4.2 1M 声明：声明模型注入时追加 [1m] 后缀（主模型/档位/defaultModel）；未声明不动、已带后缀不重复', async () => {
-    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, undefined, {
       id: '',
       name: '1M 网关',
       format: 'anthropic',
@@ -762,7 +763,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
   })
 
   it('v1.4 模型探测：按 id 取档案请求 /v1/models（端点拼装+鉴权头+去重）；未知 id 报错', async () => {
-    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, undefined, {
       id: '',
       name: 'GW',
       format: 'anthropic',
@@ -784,6 +785,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
     try {
       const r = await invoke<{ ok: boolean; models?: string[] }>(
         IpcChannels.ProvidersProbeModels,
+        undefined, // v1.7.0 cid（本机）
         provider.id
       )
       expect(r.ok).toBe(true)
@@ -795,6 +797,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
       // 探测按结果对象返回（不抛）：未知 id → ok:false + 错误文案
       const ghost = await invoke<{ ok: boolean; error?: string }>(
         IpcChannels.ProvidersProbeModels,
+        undefined,
         'ghost'
       )
       expect(ghost.ok).toBe(false)
@@ -805,7 +808,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
   })
 
   it('v1.4 网络代理（照搬 cc-switch）：proxyUrl 注入 HTTP(S)_PROXY 大小写双写 + NO_PROXY 本机豁免', async () => {
-    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, undefined, {
       id: '',
       name: '官方',
       format: 'anthropic',
@@ -830,7 +833,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
   })
 
   it('v1.4 本地代理：start/status/stop + env 联动（运行中统一指本地代理，停止回退直注 provider 代理）', async () => {
-    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, {
+    const provider = await invoke<ProviderConfig>(IpcChannels.ProvidersSave, undefined, {
       id: '',
       name: '官方',
       format: 'anthropic',
@@ -878,8 +881,8 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
 
   it('v1.2.0 SkillSearch/SkillMarketplaces：读注入的 marketplace 根；安装目标非法时直接返回错误（不 spawn）', async () => {
     // 注入根下无 known_marketplaces.json → 空结果不抛
-    expect(await invoke(IpcChannels.SkillSearch, '', undefined, 50)).toEqual([])
-    expect(await invoke(IpcChannels.SkillMarketplaces)).toEqual([])
+    expect(await invoke(IpcChannels.SkillSearch, undefined, '', undefined, 50)).toEqual([])
+    expect(await invoke(IpcChannels.SkillMarketplaces, undefined)).toEqual([])
 
     // 造一个 marketplace 检出 + known_marketplaces.json
     const marketDir = join(h.tempDir, 'market-home', 'marketplaces', 'official')
@@ -898,10 +901,10 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
       JSON.stringify({ official: { installLocation: marketDir } })
     )
 
-    const found = await invoke<Array<{ installId: string; name: string }>>(IpcChannels.SkillSearch, 'pdf')
+    const found = await invoke<Array<{ installId: string; name: string }>>(IpcChannels.SkillSearch, undefined, 'pdf')
     expect(found.map((e) => e.installId)).toEqual(['pdf-tools@official'])
-    expect(await invoke(IpcChannels.SkillSearch, 'nope')).toEqual([])
-    expect(await invoke(IpcChannels.SkillMarketplaces)).toEqual([{ name: 'official', count: 1 }])
+    expect(await invoke(IpcChannels.SkillSearch, undefined, 'nope')).toEqual([])
+    expect(await invoke(IpcChannels.SkillMarketplaces, undefined)).toEqual([{ name: 'official', count: 1 }])
 
     // 安装目标不可信（目录内容来自外部）→ 白名单拦下，返回错误且不启动进程
     const bad = await invoke<{ ok: boolean; error?: string }>(
@@ -910,7 +913,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
     )
     expect(bad.ok).toBe(false)
     expect(bad.error).toBeTruthy()
-    const notString = await invoke<{ ok: boolean; error?: string }>(IpcChannels.SkillMarketInstall, 42)
+    const notString = await invoke<{ ok: boolean; error?: string }>(IpcChannels.SkillMarketInstall, undefined, 42)
     expect(notString.ok).toBe(false)
     expect(currentPty().spawnCalls).toHaveLength(0)
   })
@@ -1012,7 +1015,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
       (s) => s.source === 'plugin'
     )
     await expect(
-      invoke(IpcChannels.SkillsRemove, skill)
+      invoke(IpcChannels.SkillsRemove, undefined, skill)
     ).rejects.toThrow(/插件机制/)
   })
 
@@ -1021,12 +1024,14 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
 
     const badId = await invoke<{ ok: boolean; error?: string }>(
       IpcChannels.SkillPluginSetEnabled,
+      undefined, // v1.7.0 cid（本机）
       'x@y&calc',
       true
     )
     expect(badId.ok).toBe(false)
     const notInstalled = await invoke<{ ok: boolean; error?: string }>(
       IpcChannels.SkillPluginSetEnabled,
+      undefined, // v1.7.0 cid（本机）
       'ghost@official',
       false
     )
@@ -1041,6 +1046,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
     try {
       const off = await invoke<{ ok: boolean; commandId?: string }>(
         IpcChannels.SkillPluginSetEnabled,
+        undefined, // v1.7.0 cid（本机）
         'skill-creator@official',
         false
       )
@@ -1052,7 +1058,7 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
         '-s',
         'user'
       ])
-      await invoke(IpcChannels.SkillPluginSetEnabled, 'skill-creator@official', true)
+      await invoke(IpcChannels.SkillPluginSetEnabled, undefined, 'skill-creator@official', true)
       expect(runPlugin).toHaveBeenLastCalledWith([
         'plugin',
         'enable',

@@ -2220,11 +2220,11 @@ button {
    声明在 .dialog/.dialog-wide 之后（同特异性按源序覆盖宽高） */
 
 .settings-dialog {
-  width: 880px; /* v1.4 加宽：模型服务双栏（rail+编辑器）与各节双列表单需要横向余量 */
+  width: 1120px; /* v1.7.0 加大（用户确认原型）：作用域条 + 两侧 7 分类一屏尽览 */
   max-width: calc(100vw - 32px);
   /* v1.4 定高：以「通用」页完整显示为准——切页高度不跳，长页（模型服务）在 body 内滚 */
-  height: 640px;
-  max-height: 84vh;
+  height: 760px;
+  max-height: 88vh;
   display: flex;
   flex-direction: column;
   overflow: hidden; /* 滚动收敛到 .settings-body */
@@ -2606,3 +2606,83 @@ button {
   display: flex;
   gap: 6px;
 }
+
+
+/* ── v1.7.0 设置中心作用域条 ─────────────────────────────────────────── */
+.scope-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 18px 10px;
+  border-bottom: 1px solid var(--border-2);
+  flex-wrap: wrap;
+}
+
+.scope-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-3);
+  background: var(--bg-panel);
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.scope-tab:hover { background: var(--bg-hover); }
+.scope-tab.active {
+  background: var(--bg-sel);
+  border-color: var(--accent);
+  color: var(--text-max);
+  font-weight: 600;
+}
+
+.scope-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--dot-gray); }
+.scope-dot[data-state='connected'] { background: var(--ok-dot); box-shadow: 0 0 4px var(--ok-dot); }
+.scope-sub { font-size: 10px; color: var(--text-4); }
+.scope-src { margin-left: auto; font-size: 11px; color: var(--text-4); }
+.scope-tab.add { border-style: dashed; }
+
+/* 分类标题的作用域后缀（· 本机 / · VM） */
+.scope-suffix { font-size: 11px; font-weight: 400; color: var(--text-4); margin-left: 6px; }
+
+/* 远程作用域离线锁定空态 */
+.scope-locked {
+  border: 1px dashed var(--border-3);
+  border-radius: 8px;
+  padding: 36px 20px;
+  text-align: center;
+  color: var(--text-3);
+  margin-top: 20px;
+}
+
+.scope-locked .muted { margin: 8px 0 12px; }
+
+/* provider 行的「复制到」菜单 */
+.provider-copy-menu { position: relative; }
+.provider-copy-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  background: var(--bg-dialog);
+  border: 1px solid var(--border-3);
+  border-radius: 7px;
+  box-shadow: var(--shadow-lg);
+  min-width: 180px;
+  z-index: 30;
+  padding: 4px;
+}
+.provider-copy-pop button {
+  all: unset;
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: 5px;
+}
+.provider-copy-pop button:hover { background: var(--bg-hover); color: var(--text-1); }
+.provider-copy-pop .cap { font-size: 10px; color: var(--text-4); padding: 4px 12px 2px; }

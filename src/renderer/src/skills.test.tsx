@@ -48,7 +48,9 @@ beforeEach(() => {
     selectedProjectId: null,
     openTaskIds: [],
     activeTaskId: null,
-    skillsOpen: false
+    skillsOpen: false,
+    settingsOpen: false,
+    settingsScope: 'local'
   })
 })
 afterEach(() => {
@@ -64,11 +66,14 @@ async function renderApp(skills: SkillInfo[] = []): Promise<CwbApiMock> {
   return api
 }
 
-/** 侧栏「Skills」按钮开弹窗（rail 🧩 入口另有专门用例） */
+/** v1.7.0：Skills 管理自独立弹窗移植进设置中心——侧栏按钮现开设置并直达 Skills 分类 */
 async function openSkills(): Promise<ReturnType<typeof within>> {
   fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
-  const dialog = await screen.findByRole('dialog', { name: 'Skills 管理' })
-  return within(dialog)
+  const dialog = await screen.findByRole('dialog', { name: '设置' })
+  await within(dialog).findByRole('button', { name: 'Skills' })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Skills' }))
+  const section = await screen.findByTestId('skills-section')
+  return within(section)
 }
 
 /** v1.2.1 三页签：切到指定页签（已安装 / 在线搜索 / 导入） */
@@ -89,19 +94,19 @@ const groupTitles = (): string[] =>
   Array.from(document.querySelectorAll('.skill-group-title')).map((el) => el.textContent ?? '')
 
 describe('入口与列表', () => {
-  it('侧栏「Skills」按钮 + 折叠态 rail skills 图标（v1.2.2 内联 SVG）均开弹窗', async () => {
+  it('侧栏「Skills」按钮 + 折叠态 rail skills 图标（v1.2.2 内联 SVG）均开设置 Skills 分类', async () => {
     await renderApp()
     const skills = await openSkills()
-    expect(skills.getByText('Skills 管理')).toBeDefined()
+    expect(screen.getByTestId('skills-section')).toBeDefined()
 
     // rail 折叠态入口（SVG 拼图图标，无文本——data-icon 锚点）
-    fireEvent.click(skills.getByRole('button', { name: '关闭' }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Skills 管理' })).toBeNull())
+    fireEvent.click(screen.getAllByRole('button', { name: '关闭' })[0] as HTMLElement)
+    await waitFor(() => expect(screen.queryByTestId('skills-section')).toBeNull())
     fireEvent.keyDown(window, { key: 'b', ctrlKey: true }) // v0.5.1：顶部 ☰ 移除
     const rail = document.querySelector('.sidebar-rail') as HTMLElement
     expect(rail.querySelector('button[data-icon="skills"] svg')).not.toBeNull()
     fireEvent.click(within(rail).getByTitle('Skills 管理'))
-    expect(await screen.findByRole('dialog', { name: 'Skills 管理' })).toBeDefined()
+    expect(await screen.findByTestId('skills-section')).toBeDefined()
   })
 
   it('listSkills 按生效方式分组：默认生效组头；行=名称+描述+版本/作者+来源标签', async () => {
@@ -148,7 +153,7 @@ describe('移除 skill', () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     fireEvent.click(skills.getByRole('button', { name: '移除' }))
     await waitFor(() =>
-      expect(api.removeSkill).toHaveBeenCalledWith(expect.objectContaining({ name: 'pdf' }))
+      expect(api.removeSkill).toHaveBeenCalledWith(expect.objectContaining({ name: 'pdf' }), undefined) // v1.7.0 cid
     )
     expect(confirmSpy.mock.calls[0][0]).toContain('移除 skill “pdf”') // 回收站语义提示
     await waitFor(() => expect(api.listSkills).toHaveBeenCalledTimes(2)) // 成功后刷新
@@ -184,7 +189,7 @@ describe('导入通道①：导入文件夹', () => {
     gotoTab(skills, '导入')
     fireEvent.click(skills.getByRole('button', { name: '导入文件夹…' }))
     await waitFor(() =>
-      expect(api.importSkillFolder).toHaveBeenCalledWith('D:\\skill-src', { scope: 'user' })
+      expect(api.importSkillFolder).toHaveBeenCalledWith('D:\\skill-src', { scope: 'user' }, undefined) // v1.7.0 cid
     )
     await waitFor(() => expect(api.listSkills).toHaveBeenCalledTimes(2)) // 列表刷新
     // 一次性 toast：新 skill 对已运行会话不生效
@@ -204,7 +209,7 @@ describe('导入通道①：导入文件夹', () => {
       expect(api.importSkillFolder).toHaveBeenCalledWith('D:\\skill-src', {
         scope: 'project',
         projectId: 'ps'
-      })
+      }, undefined)
     )
   })
 
@@ -266,7 +271,7 @@ describe('v1.2.1 插件 skill（市场装完要能在已安装列表看到）', 
     await skills.findByText('skill-creator')
     fireEvent.click(skills.getByRole('button', { name: '停用' }))
     await waitFor(() =>
-      expect(api.setSkillPluginEnabled).toHaveBeenCalledWith('skill-creator@official', false)
+      expect(api.setSkillPluginEnabled).toHaveBeenCalledWith('skill-creator@official', false, undefined)
     )
     // 命令输出与退出后的重扫共用 CLI 输出通道
     await waitFor(() => expect(skills.getByRole('log')).toBeDefined())
@@ -387,14 +392,14 @@ describe('v1.2.0 在线搜索与安装', () => {
 
     fireEvent.change(skills.getByLabelText('搜索 skill 市场'), { target: { value: 'pdf' } })
     await waitFor(() =>
-      expect(api.searchSkillMarket).toHaveBeenCalledWith('pdf', undefined, 100)
+      expect(api.searchSkillMarket).toHaveBeenCalledWith('pdf', undefined, 100, undefined)
     )
 
     fireEvent.change(skills.getByLabelText('marketplace 过滤'), {
       target: { value: 'official' }
     })
     await waitFor(() =>
-      expect(api.searchSkillMarket).toHaveBeenCalledWith('pdf', 'official', 100)
+      expect(api.searchSkillMarket).toHaveBeenCalledWith('pdf', 'official', 100, undefined)
     )
   })
 
@@ -406,7 +411,7 @@ describe('v1.2.0 在线搜索与安装', () => {
     const skills = await openSkills()
     gotoTab(skills, '在线搜索')
     fireEvent.click(await skills.findByRole('button', { name: '安装' }))
-    await waitFor(() => expect(api.installMarketSkill).toHaveBeenCalledWith('pdf-tools@official'))
+    await waitFor(() => expect(api.installMarketSkill).toHaveBeenCalledWith('pdf-tools@official', undefined))
     // 安装命令的 commandId 挂进 CliOutputView
     await waitFor(() => expect(skills.getByRole('log')).toBeDefined())
     fireCliOutput(api, { commandId: 'skill-install-test', data: 'Installing pdf-tools...\n' })
@@ -449,9 +454,13 @@ describe('v1.2.0 在线搜索与安装', () => {
     const api = await renderApp()
     vi.mocked(api.searchSkillMarket).mockResolvedValue([])
     fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Manage skills' })
-    fireEvent.click(within(dialog).getByRole('tab', { name: /^Find skills/ }))
-    expect(within(dialog).getByPlaceholderText('Search skills (name / description / category)…')).toBeDefined()
+    // v1.7.0：Skills 移植进设置——英文弹窗名为 Settings，Skills 分类内找页签
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' })
+    await within(dialog).findByRole('button', { name: 'Skills' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Skills' }))
+    const section = await screen.findByTestId('skills-section')
+    fireEvent.click(within(section).getByRole('tab', { name: /^Find skills/ }))
+    expect(within(section).getByPlaceholderText('Search skills (name / description / category)…')).toBeDefined()
   })
 })
 
@@ -503,8 +512,9 @@ describe('导入通道②：CLI 命令', () => {
     })
     fireEvent.click(skills.getByRole('button', { name: '执行' }))
     await waitFor(() => expect(api.runCliCommand).toHaveBeenCalledTimes(1))
-    fireEvent.click(skills.getByRole('button', { name: '关闭' }))
+    // v1.7.0：分类无独立关闭——关设置弹窗即卸载分类（同一 unmount 清理路径）
+    fireEvent.click(screen.getAllByRole('button', { name: '关闭' })[0] as HTMLElement)
     await waitFor(() => expect(api.killCliCommand).toHaveBeenCalledWith('cmd-test'))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Skills 管理' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '设置' })).toBeNull())
   })
 })

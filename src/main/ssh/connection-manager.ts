@@ -34,6 +34,8 @@ export interface SftpSession {
   readFile(path: string): Promise<Buffer>
   /** 覆写远端文件（4.6 --settings 写 VM；6.7 server 推送） */
   writeFile(path: string, data: string | Buffer): Promise<void>
+  /** 建远端目录（v1.7.0 远程 skills 导入递归上传用；已存在时幂等成功） */
+  mkdir?(dir: string): Promise<void>
 }
 
 export interface ConnectionManager {

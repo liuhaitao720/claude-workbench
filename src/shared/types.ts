@@ -524,11 +524,11 @@ export interface CWBApi {
 
   // ── skills（3，v0.5③）──────────────────────
   /** 全部 skill（用户级+项目级；项目级需先有项目记录） */
-  listSkills(): Promise<SkillInfo[]>
+  listSkills(cid?: string): Promise<SkillInfo[]>
   /** 导入本地 skill 文件夹（复制到目标 scope；同名冲突报错） */
-  importSkillFolder(fromDir: string, target: { scope: 'user' | 'project'; projectId?: string }): Promise<SkillInfo>
+  importSkillFolder(fromDir: string, target: { scope: 'user' | 'project'; projectId?: string }, cid?: string): Promise<SkillInfo>
   /** 移除 skill（回收站 shell.trashItem；main 做 realpath 归属校验） */
-  removeSkill(skill: SkillInfo): Promise<void>
+  removeSkill(skill: SkillInfo, cid?: string): Promise<void>
 
   // ── cli 执行（3，v0.5③）────────────────────
   /**
@@ -544,11 +544,11 @@ export interface CWBApi {
 
   // ── claude 版本/更新/安装（3，v0.5⑤）───────
   /** 当前 claude CLI 版本+实际路径（version='' 表示未安装） */
-  getClaudeVersionInfo(): Promise<{ version: string; path: string }>
+  getClaudeVersionInfo(cid?: string): Promise<{ version: string; path: string }>
   /** 检查更新（npm registry 对比；无 node 环境 degraded=true） */
-  checkClaudeUpdate(): Promise<{ current: string; latest: string; upToDate: boolean; degraded?: boolean }>
+  checkClaudeUpdate(cid?: string): Promise<{ current: string; latest: string; upToDate: boolean; degraded?: boolean }>
   /** 下载安装 claude CLI（固定模板：native=官方安装器 / npm=npm install -g；输出走 onCliOutput） */
-  installClaudeCli(method: 'native' | 'npm'): Promise<{ commandId: string }>
+  installClaudeCli(method: 'native' | 'npm', cid?: string): Promise<{ commandId: string }>
 
   // ── 应用设置（2，v0.9）─────────────────────
   /** 读取 main 侧应用设置（关闭行为/自启） */
@@ -597,55 +597,59 @@ export interface CWBApi {
 
   // ── Skill 市场（3，v1.2.0）─────────────────
   /** 从本机已配置 marketplace 目录搜索 skill（空 query = 按安装量排序的推荐列表） */
-  searchSkillMarket(query: string, marketplace?: string, limit?: number): Promise<SkillMarketEntry[]>
+  searchSkillMarket(query: string, marketplace?: string, limit?: number, cid?: string): Promise<SkillMarketEntry[]>
   /** 已配置的 marketplace 概要（名称 + 条目数；用于过滤器） */
-  listSkillMarketplaces(): Promise<SkillMarketplaceInfo[]>
+  listSkillMarketplaces(cid?: string): Promise<SkillMarketplaceInfo[]>
   /**
    * 安装市场 skill：`claude plugin install <name>@<marketplace> -y`
    * （经 CLI 受控模板执行；返回 commandId 供弹窗挂 onCliOutput 展示进度）
    */
   installMarketSkill(
-    installId: string
+    installId: string,
+    cid?: string
   ): Promise<{ ok: boolean; commandId?: string; error?: string }>
   /** 刷新所有 marketplace 目录（`claude plugin marketplace update`，走 CLI 网络/凭据策略） */
-  refreshSkillMarket(): Promise<{ ok: boolean; commandId?: string; error?: string }>
+  refreshSkillMarket(cid?: string): Promise<{ ok: boolean; commandId?: string; error?: string }>
   /**
    * v1.2.1 启用/停用插件（`claude plugin enable|disable <id> -s user`）。
    * pluginId 必须来自已安装记录（main 侧白名单校验），否则直接返回错误不启动进程。
    */
   setSkillPluginEnabled(
     pluginId: string,
-    enabled: boolean
+    enabled: boolean,
+    cid?: string
   ): Promise<{ ok: boolean; commandId?: string; error?: string }>
 
   // ── webhook 通知（3，v0.5④N）───────────────
   /** 读取通知配置（默认 {url:'', enabled:false}） */
-  getNotifyConfig(): Promise<NotifyConfig>
+  getNotifyConfig(cid?: string): Promise<NotifyConfig>
   /** 保存 webhook 配置 */
-  setNotifyWebhook(url: string, enabled: boolean): Promise<NotifyConfig>
+  setNotifyWebhook(url: string, enabled: boolean, cid?: string): Promise<NotifyConfig>
   /** 立即推送测试消息 */
-  sendTestNotify(): Promise<{ ok: boolean; error?: string }>
+  sendTestNotify(cid?: string): Promise<{ ok: boolean; error?: string }>
 
   // ── 模型服务 provider（5，v1.4）─────────────
   /** 全部 provider 档案 + 默认 id（设置中心「模型服务」与新建任务选择的数据源） */
-  listProviders(): Promise<ProviderRegistryState>
+  listProviders(cid?: string): Promise<ProviderRegistryState>
   /**
    * 新增/编辑 provider（id 空串=新增）；main 侧校验（名称/baseUrl 非空、format 合法、
    * baseUrl 为 http(s)）拒绝抛带原因 Error。返回保存后记录（含分配的 id）。
    */
-  saveProvider(provider: ProviderConfig): Promise<ProviderConfig>
+  saveProvider(provider: ProviderConfig, cid?: string): Promise<ProviderConfig>
   /**
    * 删除 provider（引用它的任务不级联清理——回退默认链）；被删者恰为默认时默认清空。
    * 不存在返回错误。
    */
-  removeProvider(id: string): Promise<void>
+  removeProvider(id: string, cid?: string): Promise<void>
   /** 设默认 provider（id 空串=取消默认）；不存在返回错误 */
-  setDefaultProvider(id: string): Promise<void>
+  setDefaultProvider(id: string, cid?: string): Promise<void>
   /**
    * v1.4 模型列表探测：GET {baseUrl}/v1/models（Anthropic/OpenAI 同形响应 {data:[{id}]}）；
    * provider 配了代理时走代理出口。失败返回 ok:false + error（网络/鉴权）。
    */
-  probeProviderModels(id: string): Promise<{ ok: boolean; models?: string[]; error?: string }>
+  probeProviderModels(id: string, cid?: string): Promise<{ ok: boolean; models?: string[]; error?: string }>
+  /** v1.7.0 provider 跨作用域复制（源/目标：{kind:'local'} 或 {kind:'remote',id:连接id}；源侧重分配 id） */
+  copyProvider(source: { kind: 'local' } | { kind: 'remote'; id: string }, target: { kind: 'local' } | { kind: 'remote'; id: string }, providerId: string): Promise<ProviderConfig>
   /**
    * v1.4 任务级 provider/model 事后修改（照 setTaskSkipPermissions 第 17 法先例）：
    * 仅元数据，下次 spawn/resume 生效；undefined/空串=清除该项（回退默认链）；

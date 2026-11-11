@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { SkillInfo, SkillMarketEntry, SkillMarketplaceInfo } from '../../../shared/types'
 import { useAppStore } from '../store'
-import { useEscapeClose } from '../hooks/useEscapeClose'
 import { useI18n } from '../i18n'
 import { CliOutputView } from './CliOutputView'
 
@@ -12,7 +11,10 @@ function errMsg(err: unknown): string {
 type SkillsTab = 'installed' | 'market' | 'import'
 
 /**
- * Skills 管理弹窗（v0.5③；v1.2.0 在线搜索安装；v1.2.1 改为三页签）。
+ * v1.7.0 Skills 管理分类（自侧栏独立弹窗移植进设置中心，用户指令）：
+ * cid=undefined 本机 / 连接 id=VM 侧（清单远端读；市场安装/刷新经 SSH 远端执行；
+ * 导入=本机目录递归 SFTP 上传 VM ~/.claude/skills；移除=VM 侧 trash mv）。
+ * 原弹窗（v0.5③；v1.2.0 在线搜索安装；v1.2.1 三页签）三页签结构原样保留。
  *
  * 之前的单页布局把「已安装 / 在线搜索 / 导入」三块从上到下摞在一起，列表一长就要
  * 整页滚动、底部导入区常常看不见。现在拆成三个页签：弹窗高度固定，只有当前页签的
@@ -24,7 +26,7 @@ type SkillsTab = 'installed' | 'market' | 'import'
  * - 导入：目标 scope 单选 + 导入文件夹 + CLI 命令输入 + 内嵌输出区
  * 三页签共用同一个命令输出区（commandId 生命周期跨页签，切页签不丢进度）。
  */
-export function SkillsDialog({ onClose }: { onClose: () => void }) {
+export function SkillsSection({ cid }: { cid?: string }) {
   const t = useI18n()
   const projects = useAppStore((s) => s.projects)
   const selectedProjectId = useAppStore((s) => s.selectedProjectId)
@@ -53,12 +55,9 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
   /** v1.2.1 正在切换启用状态的插件 id（按钮禁用防连点） */
   const [togglingPluginId, setTogglingPluginId] = useState<string | null>(null)
 
-  // A1：document 级 Escape——焦点不在弹窗子树内也可靠关闭
-  useEscapeClose(onClose)
-
   const refresh = async () => {
     try {
-      setSkills(await window.cwb.listSkills())
+      setSkills(await window.cwb.listSkills(cid))
       setListError('')
     } catch (err) {
       setListError(errMsg(err))
@@ -68,7 +67,7 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
   /** 搜索（query/过滤变化即查——本地文件读取，毫秒级，无需防抖） */
   const searchMarket = async (query: string, filter: string): Promise<void> => {
     try {
-      const list = await window.cwb.searchSkillMarket(query, filter === '' ? undefined : filter, 100)
+      const list = await window.cwb.searchSkillMarket(query, filter === '' ? undefined : filter, 100, cid)
       setEntries(list)
       setMarketError('')
     } catch (err) {
@@ -79,7 +78,7 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
 
   const loadMarketplaces = async (): Promise<void> => {
     try {
-      setMarketplaces(await window.cwb.listSkillMarketplaces())
+      setMarketplaces(await window.cwb.listSkillMarketplaces(cid))
     } catch {
       setMarketplaces([]) // 过滤器缺失不阻塞搜索（全量仍可查）
     }
@@ -89,7 +88,8 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
     void refresh()
     void loadMarketplaces()
     // 首查由下方 [marketQuery, marketFilter] effect 负责（只发一次 IPC）
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 作用域（cid）切换重拉
+  }, [cid])
 
   useEffect(() => {
     void searchMarket(marketQuery, marketFilter)
@@ -114,8 +114,9 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
 
   const importFolder = async () => {
     // TS 无法跨 scope 相关条件收窄——先落 target 再走统一校验
+    // v1.7.0：远程作用域（cid）仅用户级——上传 VM ~/.claude/skills
     let target: { scope: 'user' } | { scope: 'project'; projectId: string }
-    if (scope === 'project') {
+    if (scope === 'project' && cid === undefined) {
       if (selectedProjectId === null) {
         setImportError(t('skills.noProject'))
         return
@@ -135,7 +136,7 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
     setImporting(true)
     setImportError('')
     try {
-      await window.cwb.importSkillFolder(dir, target)
+      await window.cwb.importSkillFolder(dir, target, cid)
       await refresh()
       setToast(true)
     } catch (err) {
@@ -162,7 +163,7 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
     setInstallingId(entry.installId)
     setMarketError('')
     try {
-      const r = await window.cwb.installMarketSkill(entry.installId)
+      const r = await window.cwb.installMarketSkill(entry.installId, cid)
       if (!r.ok) {
         setMarketError(t('skills.marketInstallFailed', { error: r.error ?? '' }))
         return
@@ -180,7 +181,7 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
     setRefreshing(true)
     setMarketError('')
     try {
-      const r = await window.cwb.refreshSkillMarket()
+      const r = await window.cwb.refreshSkillMarket(cid)
       if (!r.ok) {
         setMarketError(t('skills.marketInstallFailed', { error: r.error ?? '' }))
         return
@@ -196,7 +197,7 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
   const removeSkill = async (skill: SkillInfo) => {
     if (!window.confirm(t('skills.removeConfirm', { name: skill.name }))) return
     try {
-      await window.cwb.removeSkill(skill)
+      await window.cwb.removeSkill(skill, cid)
       await refresh()
     } catch (err) {
       setListError(errMsg(err)) // realpath 归属校验失败等行内提示
@@ -212,7 +213,7 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
     setTogglingPluginId(skill.pluginId)
     setListError('')
     try {
-      const r = await window.cwb.setSkillPluginEnabled(skill.pluginId, enabled)
+      const r = await window.cwb.setSkillPluginEnabled(skill.pluginId, enabled, cid)
       if (!r.ok) {
         setListError(r.error ?? t('skills.marketInstallFailed', { error: '' }))
         return
@@ -255,26 +256,7 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
   ]
 
   return (
-    <div
-      className="dialog-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
-      }}
-    >
-      <div className="dialog skills-dialog" role="dialog" aria-label={t('skills.aria')}>
-        <div className="dialog-head">
-          <p className="dialog-title">{t('skills.title')}</p>
-          <button
-            type="button"
-            className="btn-icon dialog-close"
-            aria-label={t('common.close')}
-            title={t('common.close')}
-            onClick={onClose}
-          >
-            ×
-          </button>
-        </div>
-
+    <div className="dialog-section skills-section" data-testid="skills-section">
         <div className="seg-tabs" role="tablist" aria-label={t('skills.tabsAria')}>
           {tabs.map((item) => (
             <button
@@ -476,18 +458,20 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
                   />
                   {t('skills.userScope')}
                 </label>
-                <label title={selectedProject ? undefined : t('skills.selectProjectFirst')}>
-                  <input
-                    type="radio"
-                    name="skill-scope"
-                    checked={scope === 'project'}
-                    disabled={selectedProject === null}
-                    onChange={() => setScope('project')}
-                  />
-                  {selectedProject
-                    ? t('skills.projectScope', { name: selectedProject.name })
-                    : t('skills.projectScopeNone')}
-                </label>
+                {cid === undefined && (
+                  <label title={selectedProject ? undefined : t('skills.selectProjectFirst')}>
+                    <input
+                      type="radio"
+                      name="skill-scope"
+                      checked={scope === 'project'}
+                      disabled={selectedProject === null}
+                      onChange={() => setScope('project')}
+                    />
+                    {selectedProject
+                      ? t('skills.projectScope', { name: selectedProject.name })
+                      : t('skills.projectScopeNone')}
+                  </label>
+                )}
               </div>
               <div className="dialog-actions">
                 <button
@@ -544,7 +528,6 @@ export function SkillsDialog({ onClose }: { onClose: () => void }) {
           </div>
         )}
       </div>
-    </div>
   )
 }
 

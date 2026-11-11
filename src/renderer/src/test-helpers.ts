@@ -358,6 +358,20 @@ export function installCwbMock(
       running: false,
       stats: { total: 0, active: 0, direct: 0, viaProxy: 0 }
     })),
+    copyProvider: vi.fn(
+      async (
+        _source: { kind: 'local' } | { kind: 'remote'; id: string },
+        _target: { kind: 'local' } | { kind: 'remote'; id: string },
+        _providerId: string
+      ): Promise<ProviderConfig> => ({
+        id: 'copied-1',
+        name: 'copied',
+        format: 'anthropic',
+        baseUrl: 'https://api.example.com',
+        apiKey: 'sk-x',
+        models: []
+      })
+    ),
     reportSmoke: vi.fn()
   }
 

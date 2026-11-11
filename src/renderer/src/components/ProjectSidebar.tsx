@@ -42,7 +42,6 @@ export function ProjectSidebar() {
   const openProjectFlow = useAppStore((s) => s.openProjectFlow)
   const selectProject = useAppStore((s) => s.selectProject)
   const openTaskAutoResume = useAppStore((s) => s.openTaskAutoResume)
-  const openSkills = useAppStore((s) => s.openSkills)
   // 3.10=A 整栏折叠态持久化（消费 settings.sidebarCollapsedPersist；A17 推翻）
   const railCollapsed = useAppStore((s) => s.uiSettings.sidebarCollapsedPersist === true)
   const setSidebarCollapsed = useAppStore((s) => s.setSidebarCollapsed)
@@ -241,7 +240,7 @@ export function ProjectSidebar() {
             className="rail-btn"
             title={t('sidebar.skills')}
             data-icon="skills"
-            onClick={openSkills}
+            onClick={() => openSettings('skills')}
           >
             <IconSkills />
           </button>
@@ -298,7 +297,7 @@ export function ProjectSidebar() {
                   title={t('sidebar.skills')}
                   aria-label={t('sidebar.skillsLabel')}
                   data-icon="skills"
-                  onClick={openSkills}
+                  onClick={() => openSettings('skills')}
                 >
                   <IconSkills />
                 </button>

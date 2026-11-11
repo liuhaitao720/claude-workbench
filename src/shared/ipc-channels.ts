@@ -78,7 +78,8 @@ const HANDLE = {
   RemoteProxyConfigGet: 'cwb:remote-proxy:config-get', // S4：VM 侧代理配置读
   RemoteProxyConfigSet: 'cwb:remote-proxy:config-set', // S4：VM 侧代理配置写（A5 回环）
   RemoteProxyStart: 'cwb:remote-proxy:start', // v1.6.1：VM 侧代理启动（server 帧 proxy.start——S6 遗留缺口补齐）
-  RemoteProxyStop: 'cwb:remote-proxy:stop' // v1.6.1：VM 侧代理停止（server 帧 proxy.stop）
+  RemoteProxyStop: 'cwb:remote-proxy:stop', // v1.6.1：VM 侧代理停止（server 帧 proxy.stop）
+  ProvidersCopy: 'cwb:providers:copy' // v1.7.0：provider 跨作用域复制（本机↔VM / VM↔VM）
 } as const
 
 const SEND = {

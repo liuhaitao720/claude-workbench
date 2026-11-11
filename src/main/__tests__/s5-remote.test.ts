@@ -573,7 +573,7 @@ describe('S5 L2：skills/市场远端读 + 远程上下文路由（6.1=a）', ()
   })
 
   it('SkillsList 远程上下文：VM 侧用户级+插件级清单（dir=VM 绝对路径、启用态标注）', async () => {
-    const skills = await invoke<SkillInfo[]>(IpcChannels.SkillsList)
+    const skills = await invoke<SkillInfo[]>(IpcChannels.SkillsList, savedId) // v1.7.0 显式 cid
     const sentinel = skills.find((s) => s.name === 'sentinel-skill')
     expect(sentinel).toMatchObject({
       source: 'user',
@@ -590,18 +590,16 @@ describe('S5 L2：skills/市场远端读 + 远程上下文路由（6.1=a）', ()
     })
   })
 
-  it('SkillsImport/SkillsRemove 远程上下文拒绝（错侧落盘防护）', async () => {
+  it('SkillsImport 远程上下文：project 范围拒绝（VM 侧项目目录不归客户端管）', async () => {
     await expect(
-      invoke(IpcChannels.SkillsImport, '/tmp/src', { scope: 'user' })
-    ).rejects.toThrow(/远程上下文暂不支持导入\/移除/)
-    await expect(
-      invoke(IpcChannels.SkillsRemove, { name: 'x', description: '', source: 'user', dir: '/tmp/x' })
-    ).rejects.toThrow(/远程上下文暂不支持导入\/移除/)
+      invoke(IpcChannels.SkillsImport, savedId, '/tmp/src', { scope: 'project', projectId: 'p1' })
+    ).rejects.toThrow(/远程上下文暂不支持/)
   })
 
   it('SkillMarketInstall 远程上下文：runPluginRemote 分派（bash -ic claude plugin install）', async () => {
     const r = await invoke<{ ok: boolean; commandId?: string; error?: string }>(
       IpcChannels.SkillMarketInstall,
+      savedId,
       'pdf-tools@claude-plugins-official'
     )
     expect(r.ok).toBe(true)
@@ -614,6 +612,7 @@ describe('S5 L2：skills/市场远端读 + 远程上下文路由（6.1=a）', ()
   it('SkillPluginSetEnabled 远程上下文：白名单取 VM 侧安装记录（demo@official 可启用）', async () => {
     const r = await invoke<{ ok: boolean; error?: string }>(
       IpcChannels.SkillPluginSetEnabled,
+      savedId,
       'demo@official',
       false
     )
@@ -622,6 +621,7 @@ describe('S5 L2：skills/市场远端读 + 远程上下文路由（6.1=a）', ()
     // 未安装的 id → VM 侧白名单拒绝（不 exec）
     const r2 = await invoke<{ ok: boolean; error?: string }>(
       IpcChannels.SkillPluginSetEnabled,
+      savedId,
       'ghost@official',
       true
     )
@@ -631,9 +631,9 @@ describe('S5 L2：skills/市场远端读 + 远程上下文路由（6.1=a）', ()
   })
 
   it('VersionGet/UpdateCheck 远程上下文：远端探测 + 来源标注（path=ssh:<id>）', async () => {
-    const v = await invoke<{ version: string; path: string }>(IpcChannels.VersionGet)
+    const v = await invoke<{ version: string; path: string }>(IpcChannels.VersionGet, savedId)
     expect(v).toEqual({ version: '2.1.321', path: `ssh:${savedId}` }) // path 标注来源连接
-    const u = await invoke<{ current: string; latest: string; upToDate: boolean }>(IpcChannels.UpdateCheck)
+    const u = await invoke<{ current: string; latest: string; upToDate: boolean }>(IpcChannels.UpdateCheck, savedId)
     expect(u).toEqual({ current: '2.1.321', latest: '2.2.0', upToDate: false })
   })
 })

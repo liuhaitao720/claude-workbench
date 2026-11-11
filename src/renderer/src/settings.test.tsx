@@ -205,7 +205,7 @@ describe('通知设置（v0.5④N，迁自 About）', () => {
       channel: 'wecom'
     })
     const s = await openSettings()
-    gotoSection(s, '通用')
+    gotoSection(s, 'Webhook 通知')
     const urlInput = (await s.findByLabelText('webhook URL')) as HTMLInputElement
     expect(urlInput.value).toBe('https://qyapi.weixin.qq.com/hook')
     expect((s.getByRole('checkbox', { name: '启用' }) as HTMLInputElement).checked).toBe(false)
@@ -214,7 +214,7 @@ describe('通知设置（v0.5④N，迁自 About）', () => {
     fireEvent.click(s.getByRole('checkbox', { name: '启用' }))
     fireEvent.click(s.getByRole('button', { name: '保存' }))
     await waitFor(() =>
-      expect(api.setNotifyWebhook).toHaveBeenCalledWith('https://qyapi.weixin.qq.com/hook2', true)
+      expect(api.setNotifyWebhook).toHaveBeenCalledWith('https://qyapi.weixin.qq.com/hook2', true, undefined) // v1.7.0 第三参=cid（本机=undefined）
     )
     expect(await s.findByText('已保存')).toBeDefined()
   })
@@ -222,7 +222,7 @@ describe('通知设置（v0.5④N，迁自 About）', () => {
   it('测试推送：成功/失败结果行内显示；URL 为空时禁用', async () => {
     const api = await renderApp()
     const s = await openSettings()
-    gotoSection(s, '通用')
+    gotoSection(s, 'Webhook 通知')
     const urlInput = (await s.findByLabelText('webhook URL')) as HTMLInputElement
     expect(
       (s.getByRole('button', { name: '测试推送' }) as HTMLButtonElement).disabled
@@ -341,7 +341,9 @@ describe('模型服务（v1.4 providers）', () => {
     fireEvent.click(
       within(s.getByText('公司网关').closest('li') as HTMLElement).getByRole('button', { name: '设为默认' })
     )
-    await waitFor(() => expect(api.setDefaultProvider).toHaveBeenCalledWith('p-gw'))
+    await waitFor(() =>
+      expect(api.setDefaultProvider).toHaveBeenCalledWith('p-gw', undefined) // v1.7.0 cid
+    )
 
     // 删除：confirm 取消 → 不调；确认 → 调
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
@@ -353,7 +355,7 @@ describe('模型服务（v1.4 providers）', () => {
     fireEvent.click(
       within(s.getByText('GLM').closest('li') as HTMLElement).getByRole('button', { name: '移除' })
     )
-    await waitFor(() => expect(api.removeProvider).toHaveBeenCalledWith('p-glm'))
+    await waitFor(() => expect(api.removeProvider).toHaveBeenCalledWith('p-glm', undefined))
     confirmSpy.mockRestore()
 
     // 保存失败（main 校验拒绝）→ inline-error
@@ -610,7 +612,9 @@ describe('claude CLI（迁自 About）', () => {
     confirmSpy.mockReturnValue(true)
     fireEvent.click(s.getByRole('radio', { name: /npm 安装/ }))
     fireEvent.click(s.getByRole('button', { name: '下载安装' }))
-    await waitFor(() => expect(api.installClaudeCli).toHaveBeenCalledWith('npm'))
+    await waitFor(() =>
+        expect(api.installClaudeCli).toHaveBeenCalledWith('npm', undefined) // v1.7.0 cid
+      )
     // spec R5：确认框完整展示命令
     expect(confirmSpy.mock.calls[0][0]).toContain('npm install -g @anthropic-ai/claude-code')
 
@@ -619,7 +623,7 @@ describe('claude CLI（迁自 About）', () => {
     vi.mocked(api.installClaudeCli).mockClear()
     fireEvent.click(s.getByRole('radio', { name: /原生安装器/ }))
     fireEvent.click(s.getByRole('button', { name: '下载安装' }))
-    await waitFor(() => expect(api.installClaudeCli).toHaveBeenCalledWith('native'))
+    await waitFor(() => expect(api.installClaudeCli).toHaveBeenCalledWith('native', undefined))
     expect(confirmSpy.mock.calls[0][0]).toContain('irm https://claude.ai/install.ps1')
   })
 
@@ -822,7 +826,8 @@ describe('设置双栏导航（S14；v1.4 终端并入外观）', () => {
     const s = await openSettings()
     expect(s.getByRole('radio', { name: '深色' })).toBeDefined() // 外观组
     expect(s.getByLabelText('终端字号')).toBeDefined() // 终端组
-    expect(s.getByLabelText('webhook URL')).toBeDefined() // 通知组
+    // v1.7.0：通知迁独立分类（「Webhook 通知」），通用页不再含 webhook 表单
+    expect(s.queryByLabelText('webhook URL')).toBeNull()
     expect(s.getByRole('radio', { name: '退出应用' })).toBeDefined() // 启动组
     expect(s.queryByRole('button', { name: '外观' })).toBeNull() // 旧分类已删
     expect(s.getByRole('button', { name: '通用' }).getAttribute('aria-current')).toBe('true')
@@ -866,7 +871,7 @@ describe('设置双栏导航（S14；v1.4 终端并入外观）', () => {
       stats: { total: 12, active: 2, direct: 9, viaProxy: 3 }
     })
     const s = await openSettings()
-    gotoSection(s, '模型服务')
+    gotoSection(s, '代理') // v1.7.0：本地代理自「模型服务」迁独立「代理」分类
     expect(await s.findByText('本地代理')).toBeDefined()
     expect(s.getByText(/127\.0\.0\.1:12700/)).toBeDefined()
     expect(s.getByText(/请求 12/)).toBeDefined()

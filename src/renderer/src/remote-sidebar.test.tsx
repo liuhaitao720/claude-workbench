@@ -42,7 +42,9 @@ beforeEach(() => {
     uiSettings: {},
     pendingServerInstall: null,
     settingsOpenSection: 'general',
-    settingsEditConnectionId: null
+    settingsEditConnectionId: null,
+    // v1.7.0：作用域状态隔离（前测遗留 scope 会改变设置弹窗 rail 结构）
+    settingsScope: 'local'
   })
 })
 afterEach(() => {
@@ -188,8 +190,8 @@ describe('服务器节点菜单（3.9=a：⋯ + 右键双入口）', () => {
     fireEvent.click(within(serverNode('c1') as HTMLElement).getByRole('button', { name: '服务器操作' }))
     fireEvent.click(await screen.findByRole('menuitem', { name: '编辑连接…' }))
     const dialog = await screen.findByRole('dialog', { name: '设置' })
-    // 直达远程连接分类（nav aria-current）且表单预载既有档案名
-    const navItem = within(dialog).getByRole('button', { name: '远程连接' })
+    // v1.7.0：直达=切到该连接作用域 + 落「连接与自检」+ 预载档案名
+    const navItem = within(dialog).getByRole('button', { name: '连接与自检' })
     expect(navItem.getAttribute('aria-current')).toBe('true')
     await waitFor(() =>
       expect((within(dialog).getByLabelText('名称') as HTMLInputElement).value).toBe('UBUNTU-VM')
@@ -505,8 +507,10 @@ describe('设置中心「远程连接」分类', () => {
   async function openConnectionsSection(): Promise<{ api: CwbApiMock; section: HTMLElement }> {
     const api = await renderApp()
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
-    const dialog = await screen.findByRole('dialog', { name: '设置' })
-    fireEvent.click(within(dialog).getByRole('button', { name: '远程连接' }))
+    await screen.findByRole('dialog', { name: '设置' })
+    // v1.7.0：作用域化——「远程连接」rail 分类已随作用域重设计移除；切到 c1 作用域
+    // （重置效应落「连接与自检」，等价旧导航终点）
+    fireEvent.click(screen.getByTestId('scope-tab-c1'))
     const section = (await screen.findByText('新增连接')).closest('.dialog-section') as HTMLElement
     return { api, section }
   }
@@ -568,7 +572,7 @@ describe('设置中心「远程连接」分类', () => {
     })
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
     const dialog = await screen.findByRole('dialog', { name: '设置' })
-    fireEvent.click(within(dialog).getByRole('button', { name: '远程连接' }))
+    fireEvent.click(screen.getByTestId('scope-tab-c1')) // v1.7.0 作用域化导航
     // 编辑既有档案 c1 → 测试按钮可用
     fireEvent.click(await within(dialog).findByRole('button', { name: '编辑' }))
     fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
@@ -597,7 +601,7 @@ describe('设置中心「远程连接」分类', () => {
     })
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
     const dialog = await screen.findByRole('dialog', { name: '设置' })
-    fireEvent.click(within(dialog).getByRole('button', { name: '远程连接' }))
+    fireEvent.click(screen.getByTestId('scope-tab-c1')) // v1.7.0 作用域化导航
     fireEvent.click(await within(dialog).findByRole('button', { name: '编辑' }))
     fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
     const result = await screen.findByTestId('conn-test-result')
@@ -621,7 +625,7 @@ describe('设置中心「远程连接」分类', () => {
       // 确认锁定后的重测走默认（全通过清单）
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
     const dialog = await screen.findByRole('dialog', { name: '设置' })
-    fireEvent.click(within(dialog).getByRole('button', { name: '远程连接' }))
+    fireEvent.click(screen.getByTestId('scope-tab-c1')) // v1.7.0 作用域化导航
     fireEvent.click(await within(dialog).findByRole('button', { name: '编辑' }))
     fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
     const result = await screen.findByTestId('conn-test-result')
@@ -648,7 +652,7 @@ describe('设置中心「远程连接」分类', () => {
     })
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
     const dialog = await screen.findByRole('dialog', { name: '设置' })
-    fireEvent.click(within(dialog).getByRole('button', { name: '远程连接' }))
+    fireEvent.click(screen.getByTestId('scope-tab-c1')) // v1.7.0 作用域化导航
     fireEvent.click(await within(dialog).findByRole('button', { name: '编辑' }))
     fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
     const result = await screen.findByTestId('conn-test-result')
@@ -664,7 +668,7 @@ describe('设置中心「远程连接」分类', () => {
     const api = await renderApp()
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
     const dialog = await screen.findByRole('dialog', { name: '设置' })
-    fireEvent.click(within(dialog).getByRole('button', { name: '远程连接' }))
+    fireEvent.click(screen.getByTestId('scope-tab-c1')) // v1.7.0 作用域化导航
     fireEvent.click(await within(dialog).findByRole('button', { name: '编辑' }))
     const form = screen.getByRole('form', { name: '远程连接' })
     fireEvent.change(within(form).getByLabelText('私钥路径'), {
@@ -696,7 +700,11 @@ describe('设置中心「远程连接」分类', () => {
     })
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
     const dialog = await screen.findByRole('dialog', { name: '设置' })
-    fireEvent.click(within(dialog).getByRole('button', { name: '远程连接' }))
+    fireEvent.click(screen.getByTestId('scope-tab-c1')) // v1.7.0 作用域化导航
+    act(() => {
+      useAppStore.setState({ connectionStates: { c1: { state: 'connected' } } })
+    })
+    fireEvent.click(screen.getByRole('button', { name: '代理' })) // v1.7.0：代理面板迁独立「代理」分类
     const panel = await screen.findByTestId('remote-proxy-panel')
     await waitFor(() => expect(api.getRemoteProxyStatus).toHaveBeenCalledWith('c1'))
     await waitFor(() => expect(within(panel).getByText(/18080/)).toBeDefined())
@@ -716,7 +724,11 @@ describe('设置中心「远程连接」分类', () => {
     )
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
     const dialog = await screen.findByRole('dialog', { name: '设置' })
-    fireEvent.click(within(dialog).getByRole('button', { name: '远程连接' }))
+    fireEvent.click(screen.getByTestId('scope-tab-c1')) // v1.7.0 作用域化导航
+    act(() => {
+      useAppStore.setState({ connectionStates: { c1: { state: 'connected' } } })
+    })
+    fireEvent.click(screen.getByRole('button', { name: '代理' })) // v1.7.0：代理面板迁独立「代理」分类
     const panel = await screen.findByTestId('remote-proxy-panel')
     await waitFor(() =>
       expect(useAppStore.getState().pendingServerInstall).toEqual({ connectionId: 'c1' })
@@ -749,7 +761,11 @@ describe('设置中心「远程连接」分类', () => {
     }))
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
     const dialog = await screen.findByRole('dialog', { name: '设置' })
-    fireEvent.click(within(dialog).getByRole('button', { name: '远程连接' }))
+    fireEvent.click(screen.getByTestId('scope-tab-c1')) // v1.7.0 作用域化导航
+    act(() => {
+      useAppStore.setState({ connectionStates: { c1: { state: 'connected' } } })
+    })
+    fireEvent.click(screen.getByRole('button', { name: '代理' })) // v1.7.0：代理面板迁独立「代理」分类
     const panel = await screen.findByTestId('remote-proxy-panel')
     const urlInput = within(panel).getByLabelText('网络代理（HTTP_PROXY）') as HTMLInputElement
     await waitFor(() => expect(urlInput.value).toBe('')) // 初始无配置
@@ -776,7 +792,11 @@ describe('设置中心「远程连接」分类', () => {
     })
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
     const dialog = await screen.findByRole('dialog', { name: '设置' })
-    fireEvent.click(within(dialog).getByRole('button', { name: '远程连接' }))
+    fireEvent.click(screen.getByTestId('scope-tab-c1')) // v1.7.0 作用域化导航
+    act(() => {
+      useAppStore.setState({ connectionStates: { c1: { state: 'connected' } } })
+    })
+    fireEvent.click(screen.getByRole('button', { name: '代理' })) // v1.7.0：代理面板迁独立「代理」分类
     const panel = await screen.findByTestId('remote-proxy-panel')
     // 停止态：唯一按钮=启动
     const startBtn = await within(panel).findByRole('button', { name: '启动' })
@@ -802,15 +822,20 @@ describe('设置中心「远程连接」分类', () => {
   })
 
   // v1.6.2：远程上下文版本来源标注（实测反馈——VM 版本被误读为本机已装）
-  it('claude CLI 版本来自远程（path=ssh:*）→ 显示远程来源标注，不显示本机路径', async () => {
-    const api = await renderApp()
+  it('claude CLI 版本来自远程（远程作用域·已连接）→ 显示远程来源标注，不显示本机路径', async () => {
+    const api = await renderApp({ connections: [conn] })
     vi.mocked(api.getClaudeVersionInfo).mockResolvedValue({ version: '1.0.72', path: 'ssh:c1' })
+    // v1.7.0：远程版本在远程作用域 CLI 页展示（离线锁定 → 置已连接态）
+    act(() => {
+      useAppStore.setState({ connectionStates: { c1: { state: 'connected' } } })
+    })
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
-    const dialog = await screen.findByRole('dialog', { name: '设置' })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'claude CLI' }))
-    const source = await within(dialog).findByTestId('cli-remote-source')
+    await screen.findByRole('dialog', { name: '设置' })
+    fireEvent.click(screen.getByTestId('scope-tab-c1'))
+    fireEvent.click(screen.getByRole('button', { name: 'claude CLI' }))
+    const source = await screen.findByTestId('cli-remote-source')
     expect(source.textContent).toContain('VM')
     expect(source.textContent).toContain(conn.name)
-    expect(within(dialog).queryByText(/路径：/)).toBeNull()
+    expect(screen.queryByText(/路径：/)).toBeNull()
   })
 })

@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>设置中心 · 作用域隔离重设计 v2 — SSH Workbench 原型</title>
+<style>
+  /* —— 应用真实令牌（styles.css 暗色主题）—— */
+  :root{
+    --bg-app:#1e1f24; --bg-panel:#191a1f; --bg-dialog:#23242b; --bg-input:#14151a;
+    --bg-hover:#23242b; --bg-sel:#2b2d36; --bg-sel-hover:#34363f; --bg-active-row:#272a35;
+    --text-max:#fff; --text-1:#ececf1; --text-2:#d7d7db; --text-3:#9a9ca6; --text-4:#9496a0;
+    --border-1:#33353d; --border-2:#26272e; --border-3:#3a3c45; --border-soft:#2b2d36;
+    --accent:#3d76b3; --accent-bg:#2f5f8f; --ok:#6ad08c; --ok-bg:#1f3d2b; --ok-border:#2c5a3d;
+    --ok-dot:#3fb950; --warn-text:#e3c66b; --warn-bg:#3a2f16; --warn-border:#5d4b1e;
+    --danger-text:#f0b0b0; --danger-bg:#4a2222; --btn-danger-bg:#6e2b2b; --btn-danger-border:#8f3a3a;
+    --dot-gray:#6b6d76; --shadow-lg:0 12px 40px rgba(0,0,0,.5);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg-app);font:13px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--text-1);display:flex;flex-direction:column;align-items:center;padding:24px 14px;gap:14px;min-height:100vh}
+  .note{color:var(--text-3);font-size:12px;max-width:1120px}
+  .note b{color:var(--text-2)}
+
+  /* —— 对话框骨架（v2：默认尺寸加大 1120×760，显示更多内容）—— */
+  .dialog{width:1120px;max-width:100%;height:760px;background:var(--bg-dialog);border:1px solid var(--border-1);border-radius:10px;box-shadow:var(--shadow-lg);display:flex;flex-direction:column;overflow:hidden}
+  .dialog-title{display:flex;align-items:center;font-size:14px;font-weight:600;color:var(--text-max);padding:12px 18px 8px}
+  .dialog-title .x{margin-left:auto;color:var(--text-3);cursor:pointer;padding:0 6px}
+
+  /* —— 作用域条 —— */
+  .scope-bar{display:flex;align-items:center;gap:8px;padding:2px 18px 10px;border-bottom:1px solid var(--border-2)}
+  .scope-tab{display:inline-flex;align-items:center;gap:7px;padding:5px 14px;border-radius:6px;border:1px solid var(--border-3);background:var(--bg-panel);color:var(--text-2);cursor:pointer;font-size:13px;user-select:none}
+  .scope-tab:hover{background:var(--bg-hover)}
+  .scope-tab.active{background:var(--bg-sel);border-color:var(--accent);color:var(--text-max);font-weight:600}
+  .scope-tab .dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .scope-tab .dot.on{background:var(--ok-dot);box-shadow:0 0 4px var(--ok-dot)}
+  .scope-tab .dot.off{background:var(--dot-gray)}
+  .scope-tab .sub{font-size:10px;color:var(--text-4)}
+  .scope-add{border:1px dashed var(--border-3);border-radius:6px;color:var(--text-3);background:none;padding:5px 12px;cursor:pointer;font-size:13px}
+  .scope-add:hover{color:var(--accent);border-color:var(--accent)}
+  .scope-src{margin-left:auto;font-size:11px;color:var(--text-4)}
+
+  .body{flex:1;display:flex;min-height:0}
+  .rail{width:150px;flex:none;border-right:1px solid var(--border-2);padding:8px 0;overflow-y:auto}
+  .rail .group{font-size:10px;letter-spacing:.12em;color:var(--text-4);padding:4px 16px}
+  .rail button{all:unset;display:block;width:100%;padding:6px 16px;font-size:13px;color:var(--text-2);cursor:pointer;border-left:2px solid transparent}
+  .rail button:hover{background:var(--bg-hover)}
+  .rail button.active{background:var(--bg-sel);color:var(--text-max);border-left-color:var(--accent)}
+  .rail button .mini{font-size:10px;color:var(--text-4);margin-left:4px}
+  .content{flex:1;overflow-y:auto;padding:14px 22px}
+
+  .section-title{font-size:13px;font-weight:600;color:var(--text-max);margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .muted{color:var(--text-3);font-size:12px}
+  .kv{display:flex;gap:10px;padding:3px 0;font-size:12.5px;align-items:center}
+  .kv b{color:var(--text-2);font-weight:500;min-width:76px}
+  .kv .mono{font-family:ui-monospace,Consolas,monospace;color:var(--text-1);background:var(--bg-input);border:1px solid var(--border-2);border-radius:4px;padding:0 6px}
+
+  .btn{border:1px solid var(--border-3);background:var(--bg-panel);color:var(--text-2);border-radius:5px;padding:4px 12px;font-size:12.5px;cursor:pointer}
+  .btn:hover{background:var(--bg-hover)}
+  .btn.primary{background:var(--accent-bg);border-color:var(--accent);color:#fff}
+  .btn.danger{background:var(--btn-danger-bg);border-color:var(--btn-danger-border);color:var(--danger-text-strong)}
+  .btn.small{padding:2px 8px;font-size:11.5px}
+
+  .card{background:var(--bg-panel);border:1px solid var(--border-2);border-radius:8px;padding:11px 14px;margin-bottom:11px}
+  .card .head{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+  .card .head b{font-size:13px}
+  .pill{font-size:11px;padding:1px 9px;border-radius:10px;border:1px solid var(--ok-border);background:var(--ok-bg);color:var(--ok)}
+  .pill.off{border-color:var(--border-3);background:var(--bg-sel);color:var(--text-4)}
+
+  .row{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--border-2);border-radius:7px;background:var(--bg-panel);margin-bottom:7px}
+  .row .name{font-weight:600;font-size:13px}
+  .row .meta{color:var(--text-3);font-size:11.5px;font-family:ui-monospace,Consolas,monospace}
+  .row .acts{margin-left:auto;display:flex;gap:6px;align-items:center}
+  .row .default-badge{font-size:10px;color:var(--accent);border:1px solid var(--accent);border-radius:3px;padding:0 5px}
+  .src-badge{font-size:10px;color:var(--text-4);border:1px solid var(--border-3);border-radius:3px;padding:0 5px}
+
+  .checks{list-style:none;margin-top:6px}
+  .checks li{display:flex;gap:8px;align-items:center;padding:2px 0;font-size:12.5px;color:var(--text-2)}
+  .checks .m{width:16px;text-align:center;font-weight:700;color:var(--ok)}
+
+  .lock{border:1px dashed var(--border-3);border-radius:8px;padding:30px 20px;text-align:center;color:var(--text-3);margin-top:20px}
+  .lock svg{opacity:.5;margin-bottom:8px}
+
+  .form-row{display:flex;align-items:center;gap:10px;margin:7px 0}
+  .form-row label{width:110px;text-align:right;color:var(--text-3);font-size:12.5px;flex:none}
+  .input{flex:1;background:var(--bg-input);border:1px solid var(--border-2);border-radius:5px;color:var(--text-1);padding:5px 10px;font:12.5px ui-monospace,Consolas,monospace}
+  .logbox{background:var(--bg-input);border:1px solid var(--border-2);border-radius:6px;padding:8px 12px;font:11.5px ui-monospace,Consolas,monospace;color:var(--text-3);max-height:110px;overflow:auto}
+  .logbox .lv-err{color:var(--danger-text)} .logbox .lv-ok{color:var(--ok)}
+
+  .share-menu{position:relative}
+  .share-pop{position:absolute;right:0;top:calc(100% + 4px);background:var(--bg-dialog);border:1px solid var(--border-3);border-radius:7px;box-shadow:var(--shadow-lg);min-width:180px;z-index:30;padding:4px;display:none}
+  .share-pop.open{display:block}
+  .share-pop button{all:unset;display:block;width:100%;padding:6px 12px;font-size:12.5px;color:var(--text-2);cursor:pointer;border-radius:5px}
+  .share-pop button:hover{background:var(--bg-hover);color:var(--text-1)}
+  .share-pop .cap{font-size:10px;color:var(--text-4);padding:4px 12px 2px}
+
+  .danger-zone{margin-top:18px;border-top:1px solid var(--border-2);padding-top:12px;display:flex;align-items:center;gap:12px}
+  .danger-zone .muted{flex:1}
+
+  footer{color:var(--text-4);font-size:11px;max-width:1120px}
+</style>
+</head>
+<body>
+<p class="note">原型 v2 · <b>顶部作用域切换</b>——补齐：本机侧<b>本地代理 / Webhook 通知·本机 / Skills·本机</b>；远程侧<b>Webhook 通知·VM / Skills·VM</b>；默认画布加大（1120×760）。tab/分类可点击；VM-2 演示离线锁定态。</p>
+
+<div class="dialog" role="dialog" aria-label="设置">
+  <div class="dialog-title">设置<span class="x">✕</span></div>
+
+  <div class="scope-bar" id="scopeBar">
+    <div class="scope-tab active" data-scope="local" onclick="switchScope('local')">⚙ 本机</div>
+    <div class="scope-tab" data-scope="vmdev" onclick="switchScope('vmdev')">
+      <span class="dot on"></span>VM-Dev <span class="sub">192.168.142.128</span>
+    </div>
+    <div class="scope-tab" data-scope="vm2" onclick="switchScope('vm2')">
+      <span class="dot off"></span>VM-2 <span class="sub">10.0.0.8</span>
+    </div>
+    <button class="scope-add" onclick="alert('→ 新建连接：创建作用域并直接进入「连接与自检」完成配置')">＋ 新建连接</button>
+    <span class="scope-src" id="scopeHint">数据源：本机 userData</span>
+  </div>
+
+  <div class="body">
+    <nav class="rail" id="rail"></nav>
+    <main class="content" id="content"></main>
+  </div>
+</div>
+
+<footer>开发面：数据层零改动；Providers/CLI 版本/通知/Skills IPC 显式 connectionId 参数化；远程通知配置存 VM ~/.cwb/notify.json（远程任务事件触发）；Skills 管理从独立弹窗移植为设置分类（本机/远程两侧，远程走既有远端读）；对话框默认尺寸加大。</footer>
+
+<script>
+const SECTIONS = {
+  local: [
+    ['general','通用'], ['providers-local','模型服务<span class="mini">本机</span>'],
+    ['cli-local','claude CLI<span class="mini">本机</span>'], ['proxy-local','本地代理'],
+    ['notify-local','Webhook 通知<span class="mini">本机</span>'],
+    ['skills-local','Skills<span class="mini">本机</span>'], ['about','关于']
+  ],
+  remote: [
+    ['conn','连接与自检'], ['cli-vm','claude CLI<span class="mini">VM</span>'],
+    ['server','cwb-server'], ['proxy-vm','远程代理'],
+    ['providers-vm','模型服务<span class="mini">VM</span>'],
+    ['notify-vm','Webhook 通知<span class="mini">VM</span>'],
+    ['skills-vm','Skills<span class="mini">VM</span>']
+  ]
+}
+const PAGES = {
+  'general': () => `<p class="section-title">通用</p><div class="card"><div class="kv"><b>外观</b><span>深色（跟随系统）</span></div><div class="kv"><b>终端字体</b><span class="mono">DejaVu Sans Mono · 14</span></div><div class="kv"><b>语言</b><span>简体中文</span></div><div class="kv"><b>启动</b><span>开机启动 · 关闭驻留托盘</span></div></div><p class="muted">（原「通用」原样保留——作用域化不影响）</p>`,
+  'about': () => `<p class="section-title">关于</p><div class="card"><div class="kv"><b>SSH Workbench</b><span>v1.7.0</span></div><div class="kv"><b>许可</b><span>MIT</span></div></div>`,
+
+  'providers-local': () => `
+    <p class="section-title">模型服务 <span class="muted" style="font-weight:400">· 本机（userData/providers.json）</span></p>
+    <p class="muted" style="margin-bottom:10px">本机任务的 ANTHROPIC_* 注入源。可复制到任意远程作用域（写入 VM ~/.cwb/providers.json）。</p>
+    ${providerRow('deepseek-自建','https://api.deepseek.com','sk-••••7f2a',true,['复制到 VM-Dev','复制到 VM-2'])}
+    ${providerRow('kimi','https://api.moonshot.cn','sk-••••b31c',false,['复制到 VM-Dev','复制到 VM-2'])}
+    <button class="btn">＋ 添加模型服务</button>`,
+
+  'cli-local': () => `
+    <p class="section-title">claude CLI <span class="muted" style="font-weight:400">· 本机</span></p>
+    <div class="card">
+      <div class="kv"><b>版本</b><span>2.1.301</span> <button class="btn small" style="margin-left:8px">检查更新</button></div>
+      <div class="kv"><b>路径</b><span class="mono">C:\\Users\\you\\.local\\bin\\claude.exe</span></div>
+    </div>
+    <p class="muted" style="margin:6px 0">安装仅手动：选方式 → 二次确认后执行（应用从不自动安装）。</p>
+    <div class="form-row"><label>安装方式</label>
+      <label style="color:var(--text-2)"><input type="radio" name="im" checked> 官方安装器</label>
+      <label style="color:var(--text-2)"><input type="radio" name="im"> npm</label>
+    </div>
+    <button class="btn primary">安装 claude CLI</button>`,
+
+  'proxy-local': () => `
+    <p class="section-title">本地代理 <span class="muted" style="font-weight:400">· 本机</span></p>
+    <div class="card">
+      <div class="head"><b>本机代理</b><span class="pill">● 运行中 · 12700</span><span class="muted">请求 96 · 活跃 1 · 直连 88 / 经上游 8</span>
+        <span class="acts" style="margin-left:auto;display:flex;gap:6px"><button class="btn small">停止</button></span></div>
+      <p class="muted">本机任务的网络出口：运行中统一指向 127.0.0.1:12700（路由按 provider 端点 host 决定直连/上游）；未运行时回退直注 provider 代理配置。</p>
+    </div>
+    <p class="muted">端口占用自动 +1（12700–12719）；上游地址跟随各 provider 的代理配置。</p>`,
+
+  'notify-local': () => notifyPage('本机','本机任务的完成 / 等待输入事件推送到 webhook（企业微信 / 钉钉 / 通用 JSON，按 URL 自动识别）。配置存 userData/notify.json。','https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=••••7f2a'),
+  'notify-vm': (c) => !c?LOCKED():notifyPage('VM-Dev','远程任务的完成 / 等待输入事件推送到该 webhook。配置存 VM ~/.cwb/notify.json（远程数据留在远程）；事件经客户端触发。','https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=••••9d40'),
+
+  'skills-local': () => skillsPage('本机','~/.claude/skills 与项目级 .claude/skills'),
+  'skills-vm': (c) => !c?LOCKED():skillsPage('VM-Dev','VM ~/.claude/skills（远端读 + 安装/移除在 VM 侧执行）'),
+
+  'conn': (connected) => `
+    <p class="section-title">连接与自检 ${connected?'<span class="pill">● 已连接</span>':'<span class="pill off">○ 离线</span>'}</p>
+    <div class="card">
+      <div class="kv"><b>主机</b><span class="mono">${connected?'192.168.142.128:22':'10.0.0.8:22'}</span></div>
+      <div class="kv"><b>用户</b><span class="mono">${connected?'dev':'root'}</span></div>
+      <div class="kv"><b>认证</b><span>密码（系统凭据保护加密存储）</span></div>
+      <div class="kv"><b>主机指纹</b><span class="mono">SHA256:0EjpD78c…（已锁定）</span></div>
+    </div>
+    ${connected?`
+    <ul class="checks" style="margin-bottom:10px">
+      <li><span class="m">✓</span>sshd<span class="src-badge" style="margin-left:auto">OpenSSH_9.6</span></li>
+      <li><span class="m">✓</span>claude<span class="src-badge" style="margin-left:auto">1.0.72 (Claude Code)</span></li>
+      <li><span class="m">✓</span>node<span class="src-badge" style="margin-left:auto">v26.13.0</span></li>
+      <li><span class="m">✓</span>cwb-server<span class="src-badge" style="margin-left:auto">0.1.0</span></li>
+    </ul>`:''}
+    <div style="display:flex;gap:8px">
+      <button class="btn">${connected?'断开':'连接'}</button>
+      <button class="btn">测试连接</button>
+      <button class="btn">编辑档案</button>
+    </div>
+    <div class="danger-zone"><span class="muted">删除连接 = 删除本作用域（客户端档案与展示，不触碰 VM 内任何文件）</span><button class="btn danger">删除连接</button></div>`,
+
+  'cli-vm': (connected) => !connected?LOCKED():`
+    <p class="section-title">claude CLI <span class="muted" style="font-weight:400">· VM-Dev</span></p>
+    <div class="card">
+      <div class="kv"><b>版本</b><span>1.0.72 (Claude Code)</span> <button class="btn small" style="margin-left:8px">检查更新</button></div>
+      <div class="kv"><b>路径</b><span class="mono">/home/dev/.nvm/versions/node/v26.13.0/bin/claude</span></div>
+    </div>
+    <p class="muted">远程任务的 CLI 使用 VM 内实例——版本检测与更新均作用于远端。</p>`,
+
+  'server': (connected) => !connected?LOCKED():`
+    <p class="section-title">cwb-server <span class="muted" style="font-weight:400">· VM-Dev</span></p>
+    <div class="card">
+      <div class="head"><b>运行中</b><span class="pill">● 17717</span><span class="muted">已运行 128 分钟 · v0.1.0 · node v26.13.0 (ABI 147)</span>
+        <span style="margin-left:auto;display:flex;gap:6px"><button class="btn small">诊断</button><button class="btn small">重装/升级</button></span></div>
+      <div class="logbox">
+<span class="lv-ok">[ok]</span> health {ok:true, version:"0.1.0"}
+<span class="lv-ok">[ok]</span> task spawned (t-3f2a, pid 75355)
+<span>[info]</span> proxy started on port 12701
+      </div>
+    </div>
+    <p class="muted">升级走 SFTP 推送 + sha256 校验 + 健康探测，保留最近 2 版本可回退。</p>`,
+
+  'proxy-vm': (connected) => !connected?LOCKED():`
+    <p class="section-title">远程代理 <span class="muted" style="font-weight:400">· VM-Dev</span></p>
+    <div class="card">
+      <div class="head"><b>VM 内置代理</b><span class="pill">● 12701</span><span class="muted">请求 214 · 活跃 2 · 直连 181 / 经上游 33</span>
+        <span style="margin-left:auto;display:flex;gap:6px"><button class="btn small">停止</button></span></div>
+      <div class="form-row"><label>上游代理</label><input class="input" value="http://192.168.142.1:7890"><button class="btn small">保存</button></div>
+      <p class="muted">空 = 直连。VM 内进程以 http://127.0.0.1:12701 为 HTTP 代理；远程任务的 provider 代理配置优先生效。</p>
+    </div>`,
+
+  'providers-vm': (connected) => !connected?LOCKED():`
+    <p class="section-title">模型服务 <span class="muted" style="font-weight:400">· VM-Dev（~/.cwb/providers.json）</span></p>
+    <p class="muted" style="margin-bottom:10px">远程任务的注入源（创建/恢复任务时随 --settings 注入）。可从本机或其他 VM 复制。</p>
+    ${providerRow('deepseek-自建','https://api.deepseek.com','sk-••••7f2a',true,['复制到本机','复制到 VM-2'])}
+    <button class="btn">＋ 添加模型服务</button>`
+}
+function notifyPage(scope, hint, url){
+  return `
+    <p class="section-title">Webhook 通知 <span class="muted" style="font-weight:400">· ${scope}</span></p>
+    <p class="muted" style="margin-bottom:10px">${hint}</p>
+    <div class="card">
+      <div class="form-row"><label>Webhook URL</label><input class="input" value="${url}"></div>
+      <div class="form-row"><label>启用</label><label style="color:var(--text-2)"><input type="checkbox" checked> 任务完成 / 等待输入时推送</label></div>
+      <div class="form-row"><label></label>
+        <button class="btn primary">保存</button> <button class="btn">发送测试消息</button>
+        <span class="muted" style="margin-left:10px">渠道：企业微信（按 URL 自动识别）</span>
+      </div>
+    </div>`
+}
+function skillsPage(scope, hint){
+  return `
+    <p class="section-title">Skills <span class="muted" style="font-weight:400">· ${scope}</span></p>
+    <p class="muted" style="margin-bottom:10px">${hint}。安装源：内置市场 + 手动导入。</p>
+    <div class="row"><span class="name">ui-ux-pro-max</span><span class="src-badge">用户级</span><span class="meta">v2.15.0 · MIT</span>
+      <span class="acts"><button class="btn small">查看</button><button class="btn small danger">移除</button></span></div>
+    <div class="row"><span class="name">a2a-coder</span><span class="src-badge">用户级</span><span class="meta">v3.4 · MIT</span>
+      <span class="acts"><button class="btn small">查看</button><button class="btn small danger">移除</button></span></div>
+    <div class="row"><span class="name">req-confirm-gate</span><span class="src-badge">项目级</span><span class="meta">v1.2</span>
+      <span class="acts"><button class="btn small">查看</button><button class="btn small danger">移除</button></span></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn primary">从市场安装…</button><button class="btn">导入本地目录…</button>
+    </div>`
+}
+function providerRow(name,url,key,isDefault,targets){
+  const menu = targets.map(t=>`<button>${t}</button>`).join('')
+  return `<div class="row">
+    <span class="name">${name}</span>${isDefault?'<span class="default-badge">默认</span>':''}
+    <span class="meta">${url} · ${key}</span>
+    <span class="acts">
+      <span class="share-menu">
+        <button class="btn small" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('open')">复制到 ▾</button>
+        <span class="share-pop"><span class="cap">写入目标（id 重分配，需确认）</span>${menu}</span>
+      </span>
+      <button class="btn small">编辑</button><button class="btn small danger">删除</button>
+    </span></div>`
+}
+const LOCKED = () => `
+  <p class="section-title">远程配置</p>
+  <div class="lock">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/></svg>
+    <div>连接后可配置与查看（版本 / server / 代理 / 模型服务 / 通知 / Skills）</div>
+    <button class="btn primary" onclick="alert('→ 发起连接；成功后本页解锁并自动拉取')">连接 VM-2</button>
+  </div>`
+
+const HINTS = {local:'数据源：本机 userData', vmdev:'数据源：VM ~/.cwb + ~/.claude（经 SSH）', vm2:'数据源：VM 侧（连接后可用）'}
+let scope='local', section='general'
+function switchScope(s){scope=s;section=(s==='local'?'general':'conn');render()}
+function pick(sec){section=sec;render()}
+function render(){
+  document.querySelectorAll('.scope-tab').forEach(t=>t.classList.toggle('active',t.dataset.scope===scope))
+  document.getElementById('scopeHint').textContent=HINTS[scope]
+  const connected = scope==='vmdev'
+  const secs = scope==='local'?SECTIONS.local:SECTIONS.remote
+  document.getElementById('rail').innerHTML =
+    `<div class="group">${scope==='local'?'本机':'远程作用域'}</div>` +
+    secs.map(([id,label])=>`<button class="${id===section?'active':''}" onclick="pick('${id}')">${label}</button>`).join('')
+  const fn = PAGES[section]; document.getElementById('content').innerHTML = fn(connected)
+}
+document.addEventListener('click',()=>document.querySelectorAll('.share-pop.open').forEach(p=>p.classList.remove('open')))
+render()
+</script>
+</body>
+</html>

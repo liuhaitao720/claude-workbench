@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '../store'
 import type { SettingsSectionId } from '../store'
 import type { Theme } from '../theme'
 import { useEscapeClose } from '../hooks/useEscapeClose'
 import { CliOutputView } from './CliOutputView'
-import { ConnectionsSection } from './ConnectionsSettings'
+import { ConnectionsSection, RemoteProxyPanel } from './ConnectionsSettings'
+import { SettingsScopeBar, NEW_SCOPE } from './SettingsScopeBar'
+import { SkillsSection } from './SkillsSection'
+import { ServerSection } from './ServerSection'
 import { changeFontFamily, changeFontSize } from './TerminalPanel'
 import { FONT_FAMILY_WHITELIST, loadFontFamily } from '../font-family'
 import { FONT_SIZE_MAX, FONT_SIZE_MIN, clampFontSize, loadFontSize } from '../font-size'
@@ -166,12 +169,29 @@ const CLAUDE_DOCS_URL = 'https://claude.ai/docs/setup'
 /** 设置中心导航（id 稳定作 activeSection 锚点；label 经 i18n）。
  *  v1.4：通用（外观/终端/通知/启动）→ 模型服务（provider + 本地代理）→ claude CLI → 关于。
  *  S6：模型服务后插「远程连接」（label 复用 conn.dialog.title；摘要=档案数）。 */
-const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; labelKey: MessageKey }> = [
+/**
+ * v1.7.0 作用域化导航（用户确认原型：两侧分类不同构）：
+ * - 本机：通用 / 模型服务 / claude CLI / 本地代理 / Webhook 通知 / Skills / 关于
+ * - 远程（含 __new__ 新建态）：连接与自检 / claude CLI / cwb-server / 远程代理 /
+ *   模型服务 / Webhook 通知 / Skills（离线时除「连接与自检」外锁定空态）
+ */
+const LOCAL_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; labelKey: MessageKey }> = [
   { id: 'general', labelKey: 'settings.sectionGeneral' },
   { id: 'providers', labelKey: 'settings.sectionProviders' },
-  { id: 'connections', labelKey: 'conn.dialog.title' },
   { id: 'cli', labelKey: 'settings.sectionCli' },
+  { id: 'proxy', labelKey: 'settings.sectionProxy' },
+  { id: 'notify', labelKey: 'settings.sectionNotify' },
+  { id: 'skills', labelKey: 'settings.sectionSkills' },
   { id: 'about', labelKey: 'settings.sectionAbout' }
+]
+const REMOTE_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; labelKey: MessageKey }> = [
+  { id: 'connections', labelKey: 'settings.sectionConn' },
+  { id: 'cli', labelKey: 'settings.sectionCli' },
+  { id: 'server', labelKey: 'settings.sectionServer' },
+  { id: 'proxy', labelKey: 'settings.sectionProxy' },
+  { id: 'providers', labelKey: 'settings.sectionProviders' },
+  { id: 'notify', labelKey: 'settings.sectionNotify' },
+  { id: 'skills', labelKey: 'settings.sectionSkills' }
 ]
 
 function errMsg(err: unknown): string {
@@ -228,8 +248,52 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [notifyEnabled, setNotifyEnabled] = useState(false)
   const [notifyMsg, setNotifyMsg] = useState('')
   const [notifyTest, setNotifyTest] = useState<{ ok: boolean; error?: string } | null>(null)
+  // v1.7.0 作用域化：顶部作用域条（本机 | 各连接 | ＋新建）；远程作用域的配置
+  // 读写全部显式经 cid（IPC 已参数化——弃 activeConnectionId 隐式路由）
+  const scope = useAppStore((s) => s.settingsScope)
+  const scopeCid = scope !== 'local' && scope !== NEW_SCOPE ? scope : undefined
+  const isLocalScope = scope === 'local'
+  const connectionStates = useAppStore((s) => s.connectionStates)
+  const scopeConnected = scopeCid !== undefined && connectionStates[scopeCid]?.state === 'connected'
+  /** 远程作用域离线锁定（「连接与自检」除外——档案编辑/发起连接必须可用） */
+  const sectionLocked = scopeCid !== undefined && !scopeConnected
   // v1.4 模型服务：档案列表 + 表单态（null=列表态）+ 操作反馈
   const [providerState, setProviderState] = useState<ProviderRegistryState>({ providers: [] })
+  // v1.7.0 provider 跨作用域复制：当前展开「复制到」菜单的 provider id + 目标清单
+  const [copyMenuFor, setCopyMenuFor] = useState<string | null>(null)
+  const connectionsList = useAppStore((s) => s.connections)
+  /** 复制目标 = 本机 + 除当前作用域外的所有连接（动态——连接增删即目标增删） */
+  const copyTargets = useMemo(() => {
+    const cur = scopeCid
+    return [
+      ...(cur === undefined ? [] : [{ key: 'local', label: t('settings.scopeLocal'), scope: { kind: 'local' as const } }])
+      , ...connectionsList
+        .filter((c) => c.id !== cur)
+        .map((c) => ({ key: c.id, label: c.name, scope: { kind: 'remote' as const, id: c.id } }))
+    ]
+  }, [connectionsList, scopeCid, t])
+  const copyProviderTo = async (
+    provider: ProviderConfig,
+    target: { key: string; label: string; scope: { kind: 'local' } | { kind: 'remote'; id: string } }
+  ): Promise<void> => {
+    setCopyMenuFor(null)
+    if (
+      !window.confirm(
+        t('settings.providerCopyConfirm', { provider: provider.name, target: target.label })
+      )
+    )
+      return
+    try {
+      await window.cwb.copyProvider(
+        scopeCid === undefined ? { kind: 'local' } : { kind: 'remote', id: scopeCid },
+        target.scope,
+        provider.id
+      )
+      setProviderMsg(t('settings.providerCopyOk', { name: target.label }))
+    } catch (err) {
+      setProviderError(errMsg(err))
+    }
+  }
   const [providerForm, setProviderForm] = useState<ProviderFormState | null>(null)
   const [providerError, setProviderError] = useState('')
   const [providerMsg, setProviderMsg] = useState('')
@@ -257,6 +321,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(
     () => useAppStore.getState().settingsOpenSection
   )
+  /** 作用域切换时分类重置到该作用域首项（跨作用域分类不保留——防悬空渲染） */
+  useEffect(() => {
+    setActiveSection((prev) => {
+      const ids = isLocalScope ? LOCAL_SECTIONS : REMOTE_SECTIONS
+      return ids.some((sec) => sec.id === prev) ? prev : (ids[0].id as SettingsSectionId)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅作用域切换时重置
+  }, [scope])
   /** S6：openSettings 携带的连接档案编辑目标（一次消费：仅初值传入子组件） */
   const initialEditConnectionId = useRef(useAppStore.getState().settingsEditConnectionId)
 
@@ -310,9 +382,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   // node 检测后接入真实条件（concern 已记报告）——迁自 AboutDialog
   const npmInstallDisabled = false
 
-  const refreshCliInfo = async () => {
+  const refreshCliInfo = async (): Promise<void> => {
     try {
-      setCliInfo(await window.cwb.getClaudeVersionInfo())
+      // v1.7.0：远程作用域=VM 侧 CLI 版本（path=ssh:<cid> 标注来源）
+      setCliInfo(await window.cwb.getClaudeVersionInfo(scopeCid))
       setCliError('')
     } catch (err) {
       setCliInfo(null)
@@ -321,14 +394,17 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   }
 
   // 打开即实测版本信息 + 读通知配置 + 读应用设置 + 扫描本机字体（读取失败保持默认值，不阻塞弹窗）
+  // v1.7.0：CLI 版本与通知配置随作用域重拉（两侧数据源不同）；字体/应用设置仅本机
   useEffect(() => {
     void refreshCliInfo()
+    if (isLocalScope) {
+      window.cwb
+        .getInstalledMonoFonts()
+        .then((list) => setInstalledFonts(list))
+        .catch(() => {})
+    }
     window.cwb
-      .getInstalledMonoFonts()
-      .then((list) => setInstalledFonts(list))
-      .catch(() => {})
-    window.cwb
-      .getNotifyConfig()
+      .getNotifyConfig(scopeCid)
       .then((c) => {
         setNotifyUrl(c.url)
         setNotifyEnabled(c.enabled)
@@ -353,7 +429,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         setProxyAutoStart(s.proxyAutoStart === true)
       })
       .catch(() => {})
-  }, [])
+  }, [
+    scope,
+    isLocalScope,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshCliInfo 闭包随 scope 变化重拉
+  ])
 
   /** v1.4 模型服务页激活时轮询代理状态（时长/统计刷新；离开即停） */
   useEffect(() => {
@@ -367,7 +447,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     refresh()
     const timer = window.setInterval(refresh, 5_000)
     return () => window.clearInterval(timer)
-  }, [activeSection])
+  }, [activeSection, scope,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 作用域切换重拉（cid 变化）
+  ])
 
   /** v1.4 本地代理启停（结果直接落状态卡；失败行内提示） */
   const toggleProxy = async (): Promise<void> => {
@@ -423,6 +505,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   // S6「远程连接」摘要=已配置档案数（未配置同 provider 惯例）
   const connections = useAppStore((s) => s.connections)
   const sectionSummaries: Record<SettingsSectionId, string> = {
+    proxy: '',
+    notify: '',
+    skills: '',
+    server: '',
     general: `${themeChoices.find((c) => c.value === theme)?.label ?? ''} · ${
       fontSizeInput === '' ? String(loadFontSize()) : fontSizeInput
     }px`,
@@ -453,7 +539,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     setUpdateError('')
     setCliNotes(null)
     try {
-      const info = await window.cwb.checkClaudeUpdate()
+      const info = await window.cwb.checkClaudeUpdate(scopeCid)
       setUpdateInfo(info)
       // v1.1.0：版本对比成功后拉更新说明（已是最新也展示当前版本段，和「应用更新」一致）
       if (info.current !== '' && info.latest !== '' && info.degraded !== true) {
@@ -489,7 +575,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     setInstallError('')
     setStarting(true)
     try {
-      const r = await window.cwb.installClaudeCli(installMethod)
+      const r = await window.cwb.installClaudeCli(installMethod, scopeCid)
       setCommandId(r.commandId)
     } catch (err) {
       setInstallError(errMsg(err))
@@ -500,7 +586,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   const saveNotify = async () => {
     try {
-      await window.cwb.setNotifyWebhook(notifyUrl.trim(), notifyEnabled)
+      await window.cwb.setNotifyWebhook(notifyUrl.trim(), notifyEnabled, scopeCid)
       setNotifyMsg(t('settings.notifySaved'))
     } catch (err) {
       setNotifyMsg(t('settings.notifySaveFailed', { error: errMsg(err) }))
@@ -509,7 +595,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   const sendTest = async () => {
     try {
-      setNotifyTest(await window.cwb.sendTestNotify())
+      setNotifyTest(await window.cwb.sendTestNotify(scopeCid))
     } catch (err) {
       setNotifyTest({ ok: false, error: errMsg(err) })
     }
@@ -518,7 +604,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   // ── v1.4 模型服务 provider 动作 ────────────────────────────────────────
   const reloadProviders = async (): Promise<void> => {
     try {
-      setProviderState(await window.cwb.listProviders())
+      setProviderState(await window.cwb.listProviders(scopeCid))
     } catch {
       // 读取失败保持现值（列表 UI 不被网络/IPC 抖动清空）
     }
@@ -549,7 +635,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       config = providerFormToConfig(providerForm)
     }
     try {
-      await window.cwb.saveProvider(config)
+      await window.cwb.saveProvider(config, scopeCid)
       setProviderForm(null)
       setProviderFormMode('form')
       setProviderMsg(t('settings.providerSaved'))
@@ -614,7 +700,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     setProviderError('')
     setProviderMsg('')
     try {
-      const r = await window.cwb.probeProviderModels(providerForm.id)
+      const r = await window.cwb.probeProviderModels(providerForm.id, scopeCid)
       if (!r.ok) {
         setProviderError(t('settings.providerProbeFailed', { error: r.error ?? '' }))
         return
@@ -670,7 +756,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     setProviderError('')
     setProviderMsg('')
     try {
-      await window.cwb.setDefaultProvider(id)
+      await window.cwb.setDefaultProvider(id, scopeCid)
       setProviderMsg(t('settings.providerSaved'))
       await reloadProviders()
     } catch (err) {
@@ -683,7 +769,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     setProviderError('')
     setProviderMsg('')
     try {
-      await window.cwb.removeProvider(p.id)
+      await window.cwb.removeProvider(p.id, scopeCid)
       await reloadProviders()
     } catch (err) {
       setProviderError(errMsg(err))
@@ -707,9 +793,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     >
       <div className="dialog settings-dialog" role="dialog" aria-label={t('settings.aria')}>
         <p className="dialog-title">{t('settings.title')}</p>
+        {/* v1.7.0 作用域条：本机 | 各连接（动态） | ＋新建；右侧数据源提示 */}
+        <SettingsScopeBar />
         <div className="settings-layout">
           <nav className="settings-nav" aria-label={t('settings.navAria')}>
-            {SETTINGS_SECTIONS.map((sec) => {
+            {(isLocalScope ? LOCAL_SECTIONS : REMOTE_SECTIONS).map((sec) => {
               const id = sec.id as SettingsSectionId
               const label = t(sec.labelKey)
               return (
@@ -722,7 +810,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   onClick={() => setActiveSection(id)}
                 >
                   <span className="settings-nav-label">{label}</span>
-                  <span className="settings-nav-summary">{sectionSummaries[id]}</span>
+                  <span className="settings-nav-summary">{sectionSummaries[id] ?? ''}</span>
                 </button>
               )
             })}
@@ -730,7 +818,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           <div className="settings-body">
             {/* 外观：主题三选（迁自 About）+ 终端跟随开关（默认关——ANSI 彩色浅底不可读）
                 + 界面语言（v1.2.0 中英切换，即时生效并同步 main 侧托盘/退出文案） */}
-                        {activeSection === 'general' && (
+                        {activeSection === 'general' && isLocalScope && (
               <div className="dialog-section">
                 {/* v1.4「通用」= 外观+终端+通知+启动 合并（左栏收敛 4 分类）；单一 110px 行栅格 */}
                 <p className="form-subtitle">{t('settings.sectionAppearance')}</p>
@@ -832,64 +920,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   </div>
                 </div>
 
-                <p className="form-subtitle">{t('settings.notifyTitle')}</p>
-                {/* 通知区：现有代码原样搬入（用户确认——交互/label/测试锚点不动） */}
-                <div className="notify-legacy">
-                <div className="notify-row">
-                  <input
-                    className="notify-url"
-                    type="text"
-                    placeholder={t('settings.notifyPlaceholder')}
-                    aria-label="webhook URL"
-                    value={notifyUrl}
-                    onChange={(e) => {
-                      setNotifyUrl(e.target.value)
-                      setNotifyMsg('')
-                    }}
-                  />
-                  <label className="dialog-check">
-                    <input
-                      type="checkbox"
-                      checked={notifyEnabled}
-                      onChange={(e) => {
-                        setNotifyEnabled(e.target.checked)
-                        setNotifyMsg('')
-                      }}
-                    />
-                    {t('common.enable')}
-                  </label>
-                </div>
-                <div className="dialog-actions">
-                  <button type="button" className="btn" onClick={() => void saveNotify()}>
-                    {t('common.save')}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={notifyUrl.trim() === ''}
-                    title={notifyUrl.trim() === '' ? t('settings.notifyNeedUrl') : undefined}
-                    onClick={() => void sendTest()}
-                  >
-                    {t('settings.notifyTest')}
-                  </button>
-                </div>
-                {notifyMsg !== '' && (
-                  <p className="muted" role="status">
-                    {notifyMsg}
-                  </p>
-                )}
-                {notifyTest !== null && (
-                  <p className={notifyTest.ok ? 'muted ok' : 'inline-error'} role="status">
-                    {notifyTest.ok
-                      ? t('settings.notifyTestOk')
-                      : t('settings.notifyTestFailed', {
-                          error: notifyTest.error ?? t('settings.notifyUnknownError')
-                        })}
-                  </p>
-                )}
-                <p className="hint-small">{t('settings.notifyHint')}</p>
-              
-                </div>
 
                 <p className="form-subtitle">{t('settings.startupTitle')}</p>
                 <div className="settings-form">
@@ -941,62 +971,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               </div>
             )}
 
-            {/* v1.4 模型服务：provider 档案列表 + 新增/编辑表单 + 默认切换（参考 cc-switch） */}
-            {activeSection === 'providers' && (
+            {/* v1.4 模型服务：provider 档案列表 + 新增/编辑表单 + 默认切换（参考 cc-switch）。
+                v1.7.0 作用域化：远程作用域读写 VM ~/.cwb/providers.json（providersCid 穿参） */}
+            {activeSection === 'providers' && (sectionLocked ? <LockedGate /> : (
               <div className="dialog-section">
                 <p className="section-title">{t('settings.providerTitle')}</p>
-
-                {/* v1.4 本地代理状态卡（参考 cc-switch 形态；纯隧道——协议由 CLI/网关承担） */}
-                <div className={proxyStatus?.running === true ? 'proxy-card' : 'proxy-card off'}>
-                  <span className="proxy-dot" />
-                  <div className="proxy-info">
-                    <b>{t('settings.proxyName')}</b>
-                    <span className="proxy-meta">
-                      {proxyStatus === null
-                        ? t('common.detecting')
-                        : proxyStatus.running
-                          ? `127.0.0.1:${proxyStatus.port ?? ''} · ${proxyRunFor()}`
-                          : t('settings.proxyStopped')}
-                    </span>
-                    <span className="proxy-meta soft">{t('settings.proxyRouteHint')}</span>
-                  </div>
-                  {proxyStatus?.running === true && (
-                    <span className="proxy-stats">
-                      {t('settings.proxyRequests', { n: proxyStatus.stats.total })}
-                      {' · '}
-                      {t('settings.proxyActive', { n: proxyStatus.stats.active })}
-                      <br />
-                      {t('settings.proxySplit', {
-                        d: proxyStatus.stats.direct,
-                        v: proxyStatus.stats.viaProxy
-                      })}
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    className={proxyStatus?.running === true ? 'btn' : 'btn primary'}
-                    onClick={() => void toggleProxy()}
-                  >
-                    {proxyStatus?.running === true
-                      ? t('settings.proxyStopBtn')
-                      : t('settings.proxyStartBtn')}
-                  </button>
-                </div>
-                <div className="settings-form" style={{ marginBottom: 14 }}>
-                  <div className="form-row">
-                    <span className="form-label">{t('settings.proxyAutoStartLabel')}</span>
-                    <div className="form-control">
-                      <input
-                        type="checkbox"
-                        aria-label={t('settings.proxyAutoStartLabel')}
-                        checked={proxyAutoStart}
-                        onChange={(e) => toggleProxyAutoStart(e.target.checked)}
-                      />
-                      <span className="hint-inline">{t('settings.proxyAutoStartHint')}</span>
-                    </div>
-                  </div>
-                </div>
-                {proxyError !== '' && <p className="inline-error">{proxyError}</p>}
 
                 <p className="hint-small">{t('settings.providerHint')}</p>
 
@@ -1028,6 +1007,25 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                           {p.baseUrl}
                         </span>
                         <span className="provider-actions">
+                          <span className="provider-copy-menu">
+                            <button
+                              type="button"
+                              className="btn small"
+                              onClick={() => setCopyMenuFor(copyMenuFor === p.id ? null : p.id)}
+                            >
+                              {t('settings.providerCopyBtn')}
+                            </button>
+                            {copyMenuFor === p.id && (
+                              <span className="provider-copy-pop">
+                                <span className="cap">{t('settings.scopeBarLabel')}</span>
+                                {copyTargets.map((tg) => (
+                                  <button key={tg.key} onClick={() => void copyProviderTo(p, tg)}>
+                                    {tg.label}
+                                  </button>
+                                ))}
+                              </span>
+                            )}
+                          </span>
                           {p.id !== providerState.defaultProviderId && (
                             <button
                               type="button"
@@ -1517,16 +1515,156 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 )}
                 <p className="hint-small">{t('settings.providerSecretHint')}</p>
               </div>
+            ))}
+
+            {/* v1.7.0 Webhook 通知（独立分类；本机=userData/notify.json，远程=VM
+                ~/.cwb/notify.json——saveNotify/sendTest 已按作用域 cid 穿参） */}
+            {activeSection === 'notify' && (sectionLocked ? <LockedGate /> : (
+              <div className="dialog-section">
+                <p className="section-title">{t('settings.notifyTitle')}<span className="scope-suffix">{isLocalScope ? t('settings.scopeSuffixLocal') : t('settings.scopeSuffixRemote')}</span></p>
+                <p className="form-subtitle">{t('settings.notifyTitle')}</p>
+                {/* 通知区：现有代码原样搬入（用户确认——交互/label/测试锚点不动） */}
+                <div className="notify-legacy">
+                <div className="notify-row">
+                  <input
+                    className="notify-url"
+                    type="text"
+                    placeholder={t('settings.notifyPlaceholder')}
+                    aria-label="webhook URL"
+                    value={notifyUrl}
+                    onChange={(e) => {
+                      setNotifyUrl(e.target.value)
+                      setNotifyMsg('')
+                    }}
+                  />
+                  <label className="dialog-check">
+                    <input
+                      type="checkbox"
+                      checked={notifyEnabled}
+                      onChange={(e) => {
+                        setNotifyEnabled(e.target.checked)
+                        setNotifyMsg('')
+                      }}
+                    />
+                    {t('common.enable')}
+                  </label>
+                </div>
+                <div className="dialog-actions">
+                  <button type="button" className="btn" onClick={() => void saveNotify()}>
+                    {t('common.save')}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={notifyUrl.trim() === ''}
+                    title={notifyUrl.trim() === '' ? t('settings.notifyNeedUrl') : undefined}
+                    onClick={() => void sendTest()}
+                  >
+                    {t('settings.notifyTest')}
+                  </button>
+                </div>
+                {notifyMsg !== '' && (
+                  <p className="muted" role="status">
+                    {notifyMsg}
+                  </p>
+                )}
+                {notifyTest !== null && (
+                  <p className={notifyTest.ok ? 'muted ok' : 'inline-error'} role="status">
+                    {notifyTest.ok
+                      ? t('settings.notifyTestOk')
+                      : t('settings.notifyTestFailed', {
+                          error: notifyTest.error ?? t('settings.notifyUnknownError')
+                        })}
+                  </p>
+                )}
+                <p className="hint-small">{t('settings.notifyHint')}</p>
+              
+                </div>
+              </div>
+            ))}
+
+            {/* v1.7.0 代理分类：本机=本地代理状态卡+自启（自 providers 迁出）；远程=VM 内置代理 */}
+            {activeSection === 'proxy' && (sectionLocked ? <LockedGate /> : (isLocalScope ? (
+              <div className="dialog-section">
+                <p className="section-title">{t('settings.sectionProxy')}<span className="scope-suffix">{t('settings.scopeSuffixLocal')}</span></p>
+                {/* v1.4 本地代理状态卡（参考 cc-switch 形态；纯隧道——协议由 CLI/网关承担） */}
+                <div className={proxyStatus?.running === true ? 'proxy-card' : 'proxy-card off'}>
+                  <span className="proxy-dot" />
+                  <div className="proxy-info">
+                    <b>{t('settings.proxyName')}</b>
+                    <span className="proxy-meta">
+                      {proxyStatus === null
+                        ? t('common.detecting')
+                        : proxyStatus.running
+                          ? `127.0.0.1:${proxyStatus.port ?? ''} · ${proxyRunFor()}`
+                          : t('settings.proxyStopped')}
+                    </span>
+                    <span className="proxy-meta soft">{t('settings.proxyRouteHint')}</span>
+                  </div>
+                  {proxyStatus?.running === true && (
+                    <span className="proxy-stats">
+                      {t('settings.proxyRequests', { n: proxyStatus.stats.total })}
+                      {' · '}
+                      {t('settings.proxyActive', { n: proxyStatus.stats.active })}
+                      <br />
+                      {t('settings.proxySplit', {
+                        d: proxyStatus.stats.direct,
+                        v: proxyStatus.stats.viaProxy
+                      })}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className={proxyStatus?.running === true ? 'btn' : 'btn primary'}
+                    onClick={() => void toggleProxy()}
+                  >
+                    {proxyStatus?.running === true
+                      ? t('settings.proxyStopBtn')
+                      : t('settings.proxyStartBtn')}
+                  </button>
+                </div>
+                <div className="settings-form" style={{ marginBottom: 14 }}>
+                  <div className="form-row">
+                    <span className="form-label">{t('settings.proxyAutoStartLabel')}</span>
+                    <div className="form-control">
+                      <input
+                        type="checkbox"
+                        aria-label={t('settings.proxyAutoStartLabel')}
+                        checked={proxyAutoStart}
+                        onChange={(e) => toggleProxyAutoStart(e.target.checked)}
+                      />
+                      <span className="hint-inline">{t('settings.proxyAutoStartHint')}</span>
+                    </div>
+                  </div>
+                </div>
+                {proxyError !== '' && <p className="inline-error">{proxyError}</p>}
+
+
+              </div>
+            ) : (
+              <div className="dialog-section">
+                <p className="section-title">{t('settings.sectionProxy')}<span className="scope-suffix">{t('settings.scopeSuffixRemote')}</span></p>
+                <RemoteProxyPanel />
+              </div>
+            )))}
+
+            {/* v1.7.0 Skills（自侧栏独立弹窗移植；本机/远程同构组件，cid 穿参） */}
+            {activeSection === 'skills' && (sectionLocked ? <LockedGate /> : (
+              <SkillsSection cid={scopeCid} />
+            ))}
+
+            {/* v1.7.0 cwb-server（远程专属：状态/日志尾部/重装升级） */}
+            {activeSection === 'server' && (sectionLocked ? <LockedGate /> : (
+              <ServerSection cid={scopeCid!} />
+            ))}
+
+            {/* v1.7.0 连接与自检（远程作用域首项；__new__ 伪作用域直接展开新建表单） */}
+            {activeSection === 'connections' && !isLocalScope && (
+              <ConnectionsSection initialEditId={initialEditConnectionId.current} startInAdd={scope === NEW_SCOPE} />
             )}
 
-            {/* S6 远程连接：连接档案 CRUD + 测试自检 + 远程代理面板（结构与交互见
-                ConnectionsSettings；服务器菜单「编辑连接…」直达本分类） */}
-            {activeSection === 'connections' && (
-              <ConnectionsSection initialEditId={initialEditConnectionId.current} />
-            )}
-
-            {/* claude CLI：版本/路径/更新/安装（迁自 About） */}
-            {activeSection === 'cli' && (
+                        {/* claude CLI：版本/路径/更新/安装（迁自 About） */}
+            {activeSection === 'cli' && (sectionLocked ? <LockedGate /> : (
               <div className="dialog-section">
                 <p className="section-title">{t('settings.sectionCli')}</p>
                 {/* S6 远程上下文占位说明（6.3/6.5）：远程任务的 CLI 版本检测与更新
@@ -1663,11 +1801,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   }}
                 />
               </div>
-            )}
+            ))}
 
             {/* 关于（v1.2.1 并入设置；v1.2.2 再把「应用更新」并进来）：应用身份在上
                 （纯静态只读），更新检测/升级链路在下——同属"这个应用本身"的信息与操作 */}
-            {activeSection === 'about' && (
+            {activeSection === 'about' && isLocalScope && (
               <div className="dialog-section">
                 <p className="section-title">{t('settings.sectionAbout')}</p>
                 <div className="kv about-app-name">SSH Workbench</div>
@@ -1792,6 +1930,32 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+
+/**
+ * v1.7.0 远程作用域离线锁定空态（原型确认：除「连接与自检」外，远程配置页连接后才可
+ * 配置与查看——锁定页给连接 CTA 而非隐藏，保证入口可预期）。
+ */
+function LockedGate() {
+  const t = useI18n()
+  const scope = useAppStore((s) => s.settingsScope)
+  const connections = useAppStore((s) => s.connections)
+  const connectFlow = useAppStore((s) => s.connectFlow)
+  const cid = scope !== 'local' && scope !== NEW_SCOPE ? scope : undefined
+  const name = connections.find((c) => c.id === cid)?.name ?? ''
+  return (
+    <div className="scope-locked" data-testid="scope-locked">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+        <rect x="5" y="11" width="14" height="9" rx="2" />
+        <path d="M8 11V7a4 4 0 1 1 8 0v4" />
+      </svg>
+      <p className="muted">{t('settings.scopeLockedHint')}</p>
+      <button type="button" className="btn primary" onClick={() => cid !== undefined && void connectFlow(cid)}>
+        {t('settings.scopeLockedCta', { name })}
+      </button>
     </div>
   )
 }

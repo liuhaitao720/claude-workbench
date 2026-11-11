@@ -77,8 +77,18 @@ export interface SidebarPrefs {
   serverNodesCollapsed?: Record<string, boolean>
 }
 
-/** 设置中心分类 id（v1.4 四分类 + S6「远程连接」）——store 侧定义供 openSettings 直达 */
-export type SettingsSectionId = 'general' | 'connections' | 'providers' | 'cli' | 'about'
+/** 设置中心分类 id（v1.7.0 作用域化：本机 7 项 / 远程 7 项——见 SETTINGS_SECTIONS_OF）。
+ *  'connections'=远程作用域的「连接与自检」（本机作用域不出现该分类）。 */
+export type SettingsSectionId =
+  | 'general'
+  | 'connections'
+  | 'providers'
+  | 'cli'
+  | 'proxy'
+  | 'notify'
+  | 'skills'
+  | 'server'
+  | 'about'
 
 /** 侧栏宽度拖拽区间（3.7=A：240–480px） */
 export const SIDEBAR_WIDTH_MIN = 240
@@ -289,6 +299,10 @@ interface AppState {
   closeSettings: () => void
   /** 设置中心打开时展示的分类（openSettings 直达用；关闭后保留无副作用） */
   settingsOpenSection: SettingsSectionId
+  /** v1.7.0 设置作用域：'local'=本机 | 连接 id（远程）——顶部作用域条切换 */
+  settingsScope: 'local' | string
+  /** 切换设置作用域（远程作用域切入时分类重置为「连接与自检」由弹窗处理） */
+  setSettingsScope: (scope: 'local' | string) => void
   /** openSettings 携带的连接档案编辑目标（SettingsDialog 消费一次后自行管理） */
   settingsEditConnectionId: string | null
   /** v1.0.8 面板内搜索浮层（作用于当前活跃终端；切换 tab 自动关） */
@@ -727,6 +741,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   connectionSaveError: '',
   connectError: null,
   settingsOpenSection: 'general',
+  settingsScope: 'local',
   settingsEditConnectionId: null,
 
   reloadProviders: async () => {
@@ -774,8 +789,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   openSkills: () => set({ skillsOpen: true }),
   closeSkills: () => set({ skillsOpen: false }),
+  setSettingsScope: (scope) => set({ settingsScope: scope }),
+
   openSettings: (section, editConnectionId) =>
     set({
+      // v1.7.0：携带连接编辑目标直达「连接与自检」时同步切到该连接作用域
+      // （connections 仅存在于远程作用域 rail——不切作用域会被重置效应弹回 general）
+      ...(editConnectionId !== undefined && editConnectionId !== null
+        ? { settingsScope: editConnectionId }
+        : {}),
       settingsOpen: true,
       settingsOpenSection: section ?? 'general',
       settingsEditConnectionId: editConnectionId ?? null

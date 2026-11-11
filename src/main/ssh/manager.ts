@@ -592,6 +592,22 @@ export class RealSftpSession implements SftpSession {
     })
   }
 
+  /** v1.7.0 建远端目录（远程 skills 导入递归上传）；已存在视为成功（幂等） */
+  async mkdir(dir: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      this.sftp.mkdir(dir, (err) => {
+        // ssh2 对已存在目录回调 err(FAILURE)——幂等语义：重新 stat 验证确为目录则成功
+        if (err == null) {
+          resolve()
+          return
+        }
+        this.statFile(dir)
+          .then((st) => (st.isDirectory() ? resolve() : reject(new Error(sanitize(err.message)))))
+          .catch(() => reject(err))
+      })
+    })
+  }
+
   async readFile(path: string): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
       this.sftp.readFile(path, (err, buf) => {

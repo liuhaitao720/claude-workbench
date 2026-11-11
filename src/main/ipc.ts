@@ -8,6 +8,7 @@ import type {
   CliOutputEvent,
   ConnectionStateChangedEvent,
   CreateTaskOptions,
+  NotifyConfig,
   ProjectRecord,
   ProviderConfig,
   ProviderRegistryState,
@@ -17,6 +18,7 @@ import type {
   RemoteServerLogEvent,
   RemoveTaskOptions,
   SkillInfo,
+  TaskActivityEvent,
   TaskRecord
 } from '../shared/types'
 import { checkClaudeUpdate, fetchClaudeChangelog, getClaudeVersionInfo, installClaudeCli } from './claude-version'
@@ -42,6 +44,8 @@ import {
   saveRemoteProvider,
   setRemoteDefault
 } from './remote-providers'
+import { readRemoteNotify, writeRemoteNotify } from './remote-notify'
+import { importRemoteSkillFolder, removeRemoteSkill } from './remote-skills'
 import { createModelsProbe, type ModelsProbeResult } from './provider-models'
 import { createLocalProxy, type LocalProxyHandle } from './local-proxy'
 import { mainLanguage, setMainLanguage } from './language'
@@ -100,6 +104,9 @@ export function broadcastConnectionState(e: ConnectionStateChangedEvent): void {
 }
 
 /** 远程 server 日志 → cwb:event:remote-server-log【S4 桥接（S2 连接层同路）/ S6 消费】 */
+/** v1.7.0 远程通知配置缓存（模块级：createAppContext 触发分流与 registerIpcHandlers 写穿失效共用） */
+const remoteNotifyCache = new Map<string, NotifyConfig | null>()
+
 export function broadcastRemoteServerLog(e: RemoteServerLogEvent): void {
   broadcastEvent(IpcChannels.RemoteServerLog, e)
 }
@@ -519,8 +526,9 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     onActivity: (e) => {
       broadcast(IpcChannels.TaskActivity, e)
       // v0.5④N 触发锚点：activity==='awaiting' 时防抖推送（终版评审高1——勿挂 markStatus，
-      // 它只承载 stopped/exited 终态；推送内部吞错不阻塞状态机）
-      notify.onActivityEvent(e)
+      // 它只承载 stopped/exited 终态；推送内部吞错不阻塞状态机）。
+      // v1.7.0：routeNotifyActivity 按任务归属分流本地/远程（VM ~/.cwb/notify.json）配置
+      routeNotifyActivity(e)
     }
   })
   // R8 启动孤儿清扫：settings 目录下不在 tasks.json 的文件删除（崩溃残留/spawn 失败遗留）
@@ -564,6 +572,31 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     if (task === undefined) return undefined
     const cid = projects.get(task.projectId)?.connectionId
     return cid !== undefined && cid !== '' ? cid : undefined
+  }
+
+  // v1.7.0 远程通知分流（用户指令：本地和远程都要 webhook 通知）：远程任务的
+  // awaiting 事件取 VM 侧 ~/.cwb/notify.json 触发（缓存+写穿失效；远端无配置=
+  // 不推送，绝不回落本地配置——两侧配置语义隔离）；本地任务走本地配置（不变）。
+  function routeNotifyActivity(e: TaskActivityEvent): void {
+    if (e.activity !== 'awaiting') return
+    const cid = connectionIdOfTask(e.taskId)
+    if (cid === undefined) {
+      notify.onActivityEvent(e)
+      return
+    }
+    const cached = remoteNotifyCache.get(cid)
+    if (cached !== undefined) {
+      notify.onActivityEvent(e, cached ?? { url: '', enabled: false, channel: 'generic' })
+      return
+    }
+    void readRemoteNotify(connection, cid)
+      .then((cfg) => {
+        remoteNotifyCache.set(cid, cfg)
+        notify.onActivityEvent(e, cfg)
+      })
+      .catch(() => {
+        remoteNotifyCache.set(cid, null)
+      })
   }
   // ctx.pty = 路由后端（本地/远程按 connectionId 分派；spawn 前的显式远程分支
   // 直接用 remotePty.managerFor——记录未落盘时路由查不到归属）
@@ -1191,13 +1224,6 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
    * 任务书授权 main 侧取第一个已连接）。返回的 SkillInfo/市场条目携带 VM 绝对
    * 路径——来源由路径形态标注（契约 SkillInfo 无连接字段，禁碰）。
    */
-  const activeConnectionId = (): string | undefined => {
-    for (const rec of connectionsStore.list()) {
-      if (ctx.connection.getState(rec.id) === 'connected') return rec.id
-    }
-    return undefined
-  }
-
   // handle（renderer invoke，带返回值）
   ipcMain.handle(IpcChannels.ProjectsList, () => projects.list())
   ipcMain.handle(IpcChannels.ProjectsAdd, (_e, dir: string, connectionId?: string) =>
@@ -1227,11 +1253,11 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   // v0.5③ skills（SkillInfo 归 renderer 弹窗消费；removeSkill 的归属校验在 main）。
   // S5 6.1=a：远程上下文（活跃连接）展示 VM 侧 ~/.claude/skills+插件清单
   // （listRemote；读失败返回空——不回落本机数据防跨机混淆）。
-  ipcMain.handle(IpcChannels.SkillsList, async () => {
-    const cid = activeConnectionId()
-    if (cid !== undefined) {
+  ipcMain.handle(IpcChannels.SkillsList, async (_e, cid: unknown) => {
+    const c = asCid(cid)
+    if (c !== undefined) {
       try {
-        return await ctx.skills.listRemote(ctx.connection, cid)
+        return await ctx.skills.listRemote(ctx.connection, c)
       } catch {
         return [] // 连接中途掉线等——空清单（连接态另由侧栏呈现）
       }
@@ -1240,17 +1266,38 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   })
   ipcMain.handle(
     IpcChannels.SkillsImport,
-    async (_e, fromDir: string, target: { scope: 'user' | 'project'; projectId?: string }) => {
-      // S5：远程上下文拒绝本地导入（复制目标在本机 ~/.claude——错侧落盘）；VM 侧操作后续迭代
-      if (activeConnectionId() !== undefined) {
-        throw new Error(translate(mainLanguage(), 'skills.errRemoteWrite'))
+    async (
+      _e,
+      cid: unknown,
+      fromDir: string,
+      target: { scope: 'user' | 'project'; projectId?: string }
+    ) => {
+      // v1.7.0 作用域化：cid 显式参数——远程=本机目录递归 SFTP 上传到 VM
+      // ~/.claude/skills/<basename>（project 范围远程不支持——VM 侧项目目录不归
+      // 客户端管理，与本地语义对齐拒绝）；本机=原逻辑。
+      const c = asCid(cid)
+      if (c !== undefined) {
+        if (target.scope !== 'user') {
+          throw new Error(translate(mainLanguage(), 'skills.errRemoteWrite'))
+        }
+        const dest = await importRemoteSkillFolder(ctx.connection, c, fromDir)
+        return {
+          name: dest.split('/').pop() ?? '',
+          description: '',
+          source: 'user',
+          dir: dest
+        } as SkillInfo
       }
       return ctx.skills.importSkillFolder(fromDir, target)
     }
   )
-  ipcMain.handle(IpcChannels.SkillsRemove, async (_e, skill: SkillInfo) => {
-    if (activeConnectionId() !== undefined) {
-      throw new Error(translate(mainLanguage(), 'skills.errRemoteWrite'))
+  ipcMain.handle(IpcChannels.SkillsRemove, async (_e, cid: unknown, skill: SkillInfo) => {
+    // v1.7.0 作用域化：远程=VM 侧 mv 到 ~/.claude/.skills-trash（客户端回收站
+    // 不适用 VM 路径——错侧）；本机=原回收站逻辑
+    const c = asCid(cid)
+    if (c !== undefined) {
+      await removeRemoteSkill(ctx.connection, c, skill.dir)
+      return
     }
     return ctx.skills.removeSkill(skill)
   })
@@ -1258,14 +1305,14 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   // S5 6.1/6.5：远程上下文读 VM 侧 marketplace 目录；安装/刷新经 SSH 远端执行。
   ipcMain.handle(
     IpcChannels.SkillSearch,
-    async (_e, query: unknown, marketplace: unknown, limit: unknown) => {
+    async (_e, cid: unknown, query: unknown, marketplace: unknown, limit: unknown) => {
       const q = typeof query === 'string' ? query : ''
       const m = typeof marketplace === 'string' && marketplace !== '' ? marketplace : undefined
       const l = typeof limit === 'number' && Number.isFinite(limit) ? limit : 50
-      const cid = activeConnectionId()
-      if (cid !== undefined) {
+      const c = asCid(cid)
+      if (c !== undefined) {
         try {
-          const reader = await openRemoteClaudeHome(ctx.connection, cid)
+          const reader = await openRemoteClaudeHome(ctx.connection, c)
           return await ctx.skillMarket.searchRemote(reader, q, m, l)
         } catch {
           return []
@@ -1274,11 +1321,11 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       return ctx.skillMarket.search(q, m, l)
     }
   )
-  ipcMain.handle(IpcChannels.SkillMarketplaces, async () => {
-    const cid = activeConnectionId()
-    if (cid !== undefined) {
+  ipcMain.handle(IpcChannels.SkillMarketplaces, async (_e, cid: unknown) => {
+    const c = asCid(cid)
+    if (c !== undefined) {
       try {
-        const reader = await openRemoteClaudeHome(ctx.connection, cid)
+        const reader = await openRemoteClaudeHome(ctx.connection, c)
         return await ctx.skillMarket.listMarketplacesRemote(reader)
       } catch {
         return []
@@ -1286,7 +1333,9 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     }
     return ctx.skillMarket.listMarketplaces()
   })
-  ipcMain.handle(IpcChannels.SkillMarketInstall, async (_e, installId: unknown) => {
+  ipcMain.handle(
+    IpcChannels.SkillMarketInstall,
+    async (_e, cid: unknown, installId: unknown) => {
     const lang = mainLanguage()
     if (typeof installId !== 'string') {
       return { ok: false, error: translate(lang, 'skill.errParam') }
@@ -1294,23 +1343,23 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     const invalid = validateInstallTarget(installId, lang)
     if (invalid !== null) return { ok: false, error: invalid }
     try {
-      // S5：远程上下文经 SSH 在 VM 内执行（6.5=B 全部远端化）
-      const cid = activeConnectionId()
+      // S5：远程上下文经 SSH 在 VM 内执行（6.5=B 全部远端化）；v1.7.0 显式 cid
+      const c = asCid(cid)
       const { commandId } =
-        cid !== undefined
-          ? await ctx.cli.runPluginRemote(ctx.connection, cid, ['plugin', 'install', installId, '-y'])
+        c !== undefined
+          ? await ctx.cli.runPluginRemote(ctx.connection, c, ['plugin', 'install', installId, '-y'])
           : await ctx.cli.runPlugin(['plugin', 'install', installId, '-y'])
       return { ok: true, commandId }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
-  ipcMain.handle(IpcChannels.SkillMarketRefresh, async () => {
+  ipcMain.handle(IpcChannels.SkillMarketRefresh, async (_e, cid: unknown) => {
     try {
-      const cid = activeConnectionId()
+      const c = asCid(cid)
       const { commandId } =
-        cid !== undefined
-          ? await ctx.cli.runPluginRemote(ctx.connection, cid, ['plugin', 'marketplace', 'update'])
+        c !== undefined
+          ? await ctx.cli.runPluginRemote(ctx.connection, c, ['plugin', 'marketplace', 'update'])
           : await ctx.cli.runPlugin(['plugin', 'marketplace', 'update'])
       return { ok: true, commandId }
     } catch (err) {
@@ -1321,7 +1370,7 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   // id 必须来自真实安装记录（白名单）——不接受任意字符串进命令行
   ipcMain.handle(
     IpcChannels.SkillPluginSetEnabled,
-    async (_e, pluginId: unknown, enabled: unknown) => {
+    async (_e, cid: unknown, pluginId: unknown, enabled: unknown) => {
       const lang = mainLanguage()
       if (typeof pluginId !== 'string' || !isValidPluginId(pluginId)) {
         return { ok: false, error: translate(lang, 'skill.errIdFormat') }
@@ -1329,12 +1378,12 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       if (typeof enabled !== 'boolean') {
         return { ok: false, error: translate(lang, 'skill.errParam') }
       }
-      // S5：远程上下文白名单取 VM 侧安装记录（installedIdsRemote）
-      const cid = activeConnectionId()
+      // S5：远程上下文白名单取 VM 侧安装记录（installedIdsRemote）；v1.7.0 显式 cid
+      const c = asCid(cid)
       const installed =
-        cid !== undefined
+        c !== undefined
           ? await ctx.pluginSkills
-              .installedIdsRemote(await openRemoteClaudeHome(ctx.connection, cid))
+              .installedIdsRemote(await openRemoteClaudeHome(ctx.connection, c))
               .catch(() => [] as string[])
           : ctx.pluginSkills.installedIds()
       if (!installed.includes(pluginId)) {
@@ -1342,8 +1391,8 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       }
       try {
         const { commandId } =
-          cid !== undefined
-            ? await ctx.cli.runPluginRemote(ctx.connection, cid, [
+          c !== undefined
+            ? await ctx.cli.runPluginRemote(ctx.connection, c, [
                 'plugin',
                 enabled ? 'enable' : 'disable',
                 pluginId,
@@ -1374,31 +1423,32 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   })
   // v0.5⑤ 版本/更新/安装（安装为固定模板，完成钩子失效 claudePathCache）。
   // S5 6.3/6.6：远程上下文（活跃连接）→ VM 内探测/更新/安装；本机模式不变。
-  ipcMain.handle(IpcChannels.VersionGet, async () => {
-    const cid = activeConnectionId()
-    if (cid !== undefined) {
-      const version = await remoteClaudeVersion(ctx.connection, cid).catch(() => '')
-      return { version, path: `ssh:${cid}` } // 远端无本机路径概念——path 标注来源连接
+  // v1.7.0：cid 显式参数（undefined=本机）——设置中心作用域化，弃 activeConnectionId 隐式路由
+  ipcMain.handle(IpcChannels.VersionGet, async (_e, cid: unknown) => {
+    const c = asCid(cid)
+    if (c !== undefined) {
+      const version = await remoteClaudeVersion(ctx.connection, c).catch(() => '')
+      return { version, path: `ssh:${c}` } // 远端无本机路径概念——path 标注来源连接
     }
     return getClaudeVersionInfo()
   })
-  ipcMain.handle(IpcChannels.UpdateCheck, async () => {
-    const cid = activeConnectionId()
-    if (cid !== undefined) return checkClaudeUpdateRemote(ctx.connection, cid)
+  ipcMain.handle(IpcChannels.UpdateCheck, async (_e, cid: unknown) => {
+    const c = asCid(cid)
+    if (c !== undefined) return checkClaudeUpdateRemote(ctx.connection, c)
     return checkClaudeUpdate()
   })
-  ipcMain.handle(IpcChannels.InstallCli, (_e, method: 'native' | 'npm') => {
-    const cid = activeConnectionId()
-    if (cid !== undefined) {
+  ipcMain.handle(IpcChannels.InstallCli, async (_e, cid: unknown, method: 'native' | 'npm') => {
+    const c = asCid(cid)
+    if (c !== undefined) {
       // 6.6=B：npm 全局形态 sudo -S 复用连接密码（密码经 revealSecret 解出、只走
       // SFTP 临时文件+stdin 重定向，不进命令串/argv/日志——见 cli-runner 实现注）
-      const record = connectionsStore.get(cid)
+      const record = connectionsStore.get(c)
       let password: string | undefined
       if (record !== undefined && record.authMethod !== 'key') {
         const secret = connectionsStore.revealSecret(record)
         password = secret.password
       }
-      return installClaudeCliRemote(ctx.cli, ctx.connection, cid, method, {
+      return installClaudeCliRemote(ctx.cli, ctx.connection, c, method, {
         password,
         language: mainLanguage
       })
@@ -1439,68 +1489,134 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   })
   ipcMain.handle(IpcChannels.SettingsGet, () => ctx.appSettings.get())
   ipcMain.handle(IpcChannels.SettingsSet, (_e, patch: Partial<AppSettings>) => ctx.appSettings.set(patch))
-  ipcMain.handle(IpcChannels.NotifyGet, () => ctx.notify.getConfig())
-  ipcMain.handle(IpcChannels.NotifySet, (_e, url: string, enabled: boolean) =>
-    ctx.notify.setWebhook(url, enabled)
-  )
-  ipcMain.handle(IpcChannels.NotifyTest, () => ctx.notify.sendTest())
-  // v1.4 模型服务 provider：档案 CRUD + 默认切换（入参校验拒绝即 invoke reject，renderer 展示错误）
-  // v1.6.0（用户指令）：远程连接活跃时模型配置的存储/读取/修改源全在远程——
-  // VM `~/.cwb/providers.json`（remote-providers 经 SSH exec+SFTP read-modify-write，
-  // 校验/变更语义与本地零分叉）。本地项目活跃（无已连接远程）走本地 userData。
-  const remoteProvidersCid = (): string | undefined => activeConnectionId()
-  ipcMain.handle(IpcChannels.ProvidersList, async () => {
-    const cid = remoteProvidersCid()
-    return cid !== undefined ? readRemoteProviders(ctx.connection, cid) : ctx.providers.state()
+  // v0.5④N webhook 通知（v1.7.0 作用域化：cid 显式参数——undefined=本机
+  // userData/notify.json；有值=VM ~/.cwb/notify.json 经 SSH read-modify-write，
+  // 与本地同校验同容错；写穿失效远程缓存——触发分流见 routeNotifyActivity）
+  ipcMain.handle(IpcChannels.NotifyGet, async (_e, cid: unknown) => {
+    const c = asCid(cid)
+    return c !== undefined ? readRemoteNotify(ctx.connection, c) : ctx.notify.getConfig()
   })
-  ipcMain.handle(IpcChannels.ProvidersSave, async (_e, raw: unknown) => {
+  ipcMain.handle(
+    IpcChannels.NotifySet,
+    async (_e, cid: unknown, url: unknown, enabled: unknown) => {
+      const u = typeof url === 'string' ? url : ''
+      const c = asCid(cid)
+      if (c !== undefined) {
+        const cfg = await writeRemoteNotify(ctx.connection, c, u, enabled === true, mainLanguage())
+        remoteNotifyCache.delete(c)
+        return cfg
+      }
+      return ctx.notify.setWebhook(u, enabled === true)
+    }
+  )
+  ipcMain.handle(IpcChannels.NotifyTest, async (_e, cid: unknown) => {
+    const c = asCid(cid)
+    if (c !== undefined) {
+      const cfg = await readRemoteNotify(ctx.connection, c)
+      return ctx.notify.sendTestWith(cfg)
+    }
+    return ctx.notify.sendTest()
+  })
+  // v1.4 模型服务 provider：档案 CRUD + 默认切换（入参校验拒绝即 invoke reject，renderer 展示错误）
+  // v1.7.0（用户指令：本地/远程配置隔离）：模型服务的存储/读取/修改源由 renderer
+  // 传显式 connectionId 指定（undefined=本机）——设置中心作用域化后不再依赖
+  // activeConnectionId 隐式路由（"不知道在编辑哪侧"的结构性根源）。
+  const asCid = (v: unknown): string | undefined =>
+    typeof v === 'string' && v !== '' ? v : undefined
+  ipcMain.handle(IpcChannels.ProvidersList, async (_e, cid: unknown) => {
+    const c = asCid(cid)
+    return c !== undefined ? readRemoteProviders(ctx.connection, c) : ctx.providers.state()
+  })
+  ipcMain.handle(IpcChannels.ProvidersSave, async (_e, cid: unknown, raw: unknown) => {
     const input = validateProviderInput(mainLanguage(), raw)
-    const cid = remoteProvidersCid()
-    if (cid !== undefined) return saveRemoteProvider(ctx.connection, cid, input)
+    const c = asCid(cid)
+    if (c !== undefined) return saveRemoteProvider(ctx.connection, c, input)
     return ctx.providers.save(input)
   })
-  ipcMain.handle(IpcChannels.ProvidersRemove, async (_e, id: unknown) => {
+  ipcMain.handle(IpcChannels.ProvidersRemove, async (_e, cid: unknown, id: unknown) => {
     if (typeof id !== 'string' || id === '') {
       throw new Error(translate(mainLanguage(), 'provider.errShape'))
     }
-    const cid = remoteProvidersCid()
-    if (cid !== undefined) {
-      await removeRemoteProvider(ctx.connection, cid, id)
+    const c = asCid(cid)
+    if (c !== undefined) {
+      await removeRemoteProvider(ctx.connection, c, id)
       return
     }
     if (!ctx.providers.remove(id)) {
       throw new Error(translate(mainLanguage(), 'provider.errNotFound', { id }))
     }
   })
-  ipcMain.handle(IpcChannels.ProvidersSetDefault, async (_e, id: unknown) => {
+  ipcMain.handle(IpcChannels.ProvidersSetDefault, async (_e, cid: unknown, id: unknown) => {
     if (typeof id !== 'string') {
       throw new Error(translate(mainLanguage(), 'provider.errShape'))
     }
-    const cid = remoteProvidersCid()
-    if (cid !== undefined) {
-      await setRemoteDefault(ctx.connection, cid, id)
+    const c = asCid(cid)
+    if (c !== undefined) {
+      await setRemoteDefault(ctx.connection, c, id)
       return
     }
     if (!ctx.providers.setDefault(id)) {
       throw new Error(translate(mainLanguage(), 'provider.errNotFound', { id }))
     }
   })
-  ipcMain.handle(IpcChannels.ProvidersProbeModels, async (_e, id: unknown) => {
+  ipcMain.handle(IpcChannels.ProvidersProbeModels, async (_e, cid: unknown, id: unknown) => {
     if (typeof id !== 'string' || id === '') {
       throw new Error(translate(mainLanguage(), 'provider.errShape'))
     }
-    const cid = remoteProvidersCid()
-    if (cid !== undefined) {
+    const c = asCid(cid)
+    if (c !== undefined) {
       // VM 侧探测（curl 经 exec）：消费端点的正是 VM 的 claude——VM 视角可达性为真相
-      const state = await readRemoteProviders(ctx.connection, cid)
+      const state = await readRemoteProviders(ctx.connection, c)
       const provider = state.providers.find((p) => p.id === id)
       if (provider === undefined) {
         throw new Error(translate(mainLanguage(), 'provider.errNotFound', { id }))
       }
-      return probeRemoteModels(ctx.connection, cid, provider)
+      return probeRemoteModels(ctx.connection, c, provider)
     }
     return ctx.probeProviderModels(id)
   })
+  // v1.7.0 provider 跨作用域复制（用户指令：远程 provider 支持本地和远程共享）：
+  // 读源注册表 → 剥 id（目标侧重分配防冲突）→ 写目标。source/target 的 kind：
+  // 'local' | 'remote'（remote 时 id=connectionId）。
+  ipcMain.handle(
+    IpcChannels.ProvidersCopy,
+    async (
+      _e,
+      source: unknown,
+      target: unknown,
+      providerId: unknown
+    ): Promise<ProviderConfig> => {
+      const parseScope = (v: unknown): { kind: 'local' | 'remote'; id?: string } | null => {
+        if (typeof v !== 'object' || v === null) return null
+        const o = v as Record<string, unknown>
+        if (o['kind'] === 'local') return { kind: 'local' }
+        if (o['kind'] === 'remote' && typeof o['id'] === 'string' && o['id'] !== '')
+          return { kind: 'remote', id: o['id'] }
+        return null
+      }
+      const src = parseScope(source)
+      const dst = parseScope(target)
+      if (src === null || dst === null || typeof providerId !== 'string' || providerId === '') {
+        throw new Error(translate(mainLanguage(), 'provider.errShape'))
+      }
+      if (src.kind === dst.kind && src.id === dst.id) {
+        throw new Error(translate(mainLanguage(), 'provider.copySameScope'))
+      }
+      const readState = async (): Promise<ProviderRegistryState> =>
+        src.kind === 'local'
+          ? ctx.providers.state()
+          : await readRemoteProviders(ctx.connection, src.id!)
+      const state = await readState()
+      const origin = state.providers.find((p) => p.id === providerId)
+      if (origin === undefined) {
+        throw new Error(translate(mainLanguage(), 'provider.errNotFound', { id: providerId }))
+      }
+      const stripped: ProviderConfig = { ...origin, id: '' }
+      return dst.kind === 'local'
+        ? ctx.providers.save(stripped)
+        : await saveRemoteProvider(ctx.connection, dst.id!, stripped)
+    }
+  )
   ipcMain.handle(
     IpcChannels.TasksSetProvider,
     (_e, taskId: string, opts: { providerId?: string; model?: string; modelMode?: 'auto' | '' }) =>

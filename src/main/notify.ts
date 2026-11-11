@@ -112,10 +112,12 @@ export class NotifyService {
   /**
    * activity 事件入口（组合根接 onActivity——每事件调用，非 awaiting 直接忽略）。
    * 防抖命中/未启用静默跳过；推送本身 fire-and-forget 且吞错（不抛、不 reject）。
+   * v1.7.0：configOverride 供远程任务分流（组合根按任务 connectionId 解析 VM 侧
+   * ~/.cwb/notify.json 传入；未传=本地配置——行为不变）。
    */
-  onActivityEvent(event: TaskActivityEvent): void {
+  onActivityEvent(event: TaskActivityEvent, configOverride?: NotifyConfig): void {
     if (event.activity !== 'awaiting') return
-    const config = this.load()
+    const config = configOverride ?? this.load()
     if (!config.enabled || config.url.length === 0) return
     const at = this.now()
     const last = this.lastPushAt.get(event.taskId)
@@ -127,6 +129,17 @@ export class NotifyService {
     })
     const text = this.t('notify.awaiting', { name, when })
     void this.push(config, text)
+  }
+
+  /** 以指定配置立即推送（远程「测试推送」用——本地测试走 sendTest） */
+  async sendTestWith(config: NotifyConfig): Promise<{ ok: boolean; error?: string }> {
+    if (config.url.length === 0) return { ok: false, error: this.t('notify.needUrl') }
+    try {
+      await this.postJson(config, this.t('notify.test'))
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
   }
 
   /** 立即推送固定测试文案（设置面板「测试推送」）；错误显式返回不静默 */
