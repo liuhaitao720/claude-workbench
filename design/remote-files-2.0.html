@@ -174,6 +174,36 @@ footer{color:var(--text-4);font-size:11px;max-width:1180px}
       </div>
     </div>
 
+
+    <!-- 下载目录设置（本机作用域→通用→文件传输块） -->
+    <div class="overlay" id="dlOv">
+      <div class="dialog" style="width:560px">
+        <h4>设置 · 通用 · 文件传输 <span style="color:var(--text-4);font-size:11px">（本机作用域）</span></h4>
+        <div class="file-line" style="display:block;background:none;border:none;padding:4px 0">
+          <div style="display:grid;grid-template-columns:96px 1fr;gap:12px;align-items:center;margin:10px 0">
+            <span style="color:var(--text-2);font-size:12.5px">下载目录</span>
+            <span style="display:flex;gap:8px">
+              <input style="flex:1;background:var(--bg-input);border:1px solid var(--border-2);border-radius:5px;color:var(--text-1);padding:5px 10px;font:12px ui-monospace,Consolas,monospace" value="D:\Downloads\SSH Workbench">
+              <button class="btn small">浏览…</button>
+            </span>
+          </div>
+          <div style="display:grid;grid-template-columns:96px 1fr;gap:12px;align-items:center;margin:10px 0">
+            <span style="color:var(--text-2);font-size:12.5px">下载方式</span>
+            <span style="display:flex;gap:16px;color:var(--text-2);font-size:12.5px">
+              <label><input type="radio" name="dlm" checked> 直接存入（同名自动重命名）</label>
+              <label><input type="radio" name="dlm"> 每次弹窗选择位置</label>
+            </span>
+          </div>
+          <div style="display:grid;grid-template-columns:96px 1fr;gap:12px;align-items:center;margin:10px 0">
+            <span></span>
+            <label style="color:var(--text-2);font-size:12.5px"><input type="checkbox" checked> 按连接分子目录（如 <code style="font-size:11px">…\SSH Workbench\VM-Dev\</code>）</label>
+          </div>
+          <p class="hint" style="margin:4px 0 0">默认取系统「下载」目录下的 SSH Workbench 子目录；传输条完成项的「打开」即定位到该目录中的文件。</p>
+        </div>
+        <div class="dactions"><button class="btn primary" onclick="closeOv('dlOv')">保存</button></div>
+      </div>
+    </div>
+
     <!-- 传输条 -->
     <div class="xfer open" id="xfer">
       <div class="xfer-bar" onclick="document.getElementById('xfer').classList.toggle('open')">
@@ -197,9 +227,10 @@ footer{color:var(--text-4);font-size:11px;max-width:1180px}
   <button class="btn" onclick="showConflict()">② 演示同名冲突弹窗</button>
   <button class="btn" onclick="showCtx()">③ 演示文件行右键菜单</button>
   <button class="btn" onclick="navInto()">④ 双击目录进入（面包屑联动）</button>
+  <button class="btn" onclick="document.getElementById('dlOv').classList.add('open')">⑤ 本机下载目录设置</button>
 </p>
 
-<footer>开发面：SftpSession 扩展（全量列表含 size/mtime、分块读写、mkdir/rename/unlink/remove、stat）；SFTP 传输走独立 read/write offset 流（不占 exec 通道）；并行 2 + 断点续传（分块 offset 续传）；删除移 ~/.cwb/.trash（VM 侧回收站，可找回）；入口=侧栏服务器菜单「远程文件」+ 侧栏工具按钮 + 面板记忆 per-connection 目录；本地侧保存对话框（下载）/拖拽事件（上传）。</footer>
+<footer>开发面：SftpSession 扩展（全量列表含 size/mtime、分块读写、mkdir/rename/unlink/remove、stat）；SFTP 传输走独立 read/write offset 流（不占 exec 通道）；并行 2 + 断点续传（分块 offset 续传）；删除移 ~/.cwb/.trash（VM 侧回收站，可找回）；入口=侧栏服务器菜单「远程文件」+ 侧栏工具按钮 + 面板记忆 per-connection 目录；本地侧：拖拽事件（上传）；下载目录设置存本机 appSettings（downloadDir 默认=系统下载\SSH Workbench、downloadMode=direct|ask、按连接分子目录默认开）——本机作用域→通用→「文件传输」块（见演示⑤）。</footer>
 
 <script>
 const FILES = [
