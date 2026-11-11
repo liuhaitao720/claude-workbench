@@ -307,7 +307,7 @@ describe('模型服务（v1.4 providers）', () => {
     expect(saveBtn.disabled).toBe(true) // 空名/空 URL 禁用
 
     fireEvent.change(s.getByLabelText('名称'), { target: { value: 'Kimi' } })
-    fireEvent.change(s.getByLabelText('API 端点（Anthropic 协议入口）'), {
+    fireEvent.change(s.getByLabelText('API 端点'), {
       target: { value: 'https://api.moonshot.cn/anthropic' }
     })
     fireEvent.change(s.getByLabelText('API Key'), { target: { value: 'sk-kimi' } })
@@ -362,7 +362,7 @@ describe('模型服务（v1.4 providers）', () => {
     vi.mocked(api.saveProvider).mockRejectedValue(new Error('API 端点必须是 http(s) URL'))
     fireEvent.click(s.getByRole('button', { name: '新增 provider' }))
     fireEvent.change(s.getByLabelText('名称'), { target: { value: 'X' } })
-    fireEvent.change(s.getByLabelText('API 端点（Anthropic 协议入口）'), {
+    fireEvent.change(s.getByLabelText('API 端点'), {
       target: { value: 'https://x' }
     })
     fireEvent.click(s.getByRole('button', { name: '保存' }))
@@ -434,7 +434,7 @@ describe('模型服务（v1.4 providers）', () => {
     fireEvent.click(
       within(s.getByTitle('https://open.bigmodel.cn/api/anthropic').closest('li') as HTMLElement).getByRole('button', { name: '编辑' })
     )
-    const proxyInput = (await s.findByLabelText('网络代理（HTTP_PROXY）')) as HTMLInputElement
+    const proxyInput = (await s.findByLabelText('网络代理')) as HTMLInputElement
     fireEvent.change(proxyInput, { target: { value: 'http://127.0.0.1:7890' } })
     fireEvent.click(s.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(api.saveProvider).toHaveBeenCalledTimes(1))
@@ -446,9 +446,9 @@ describe('模型服务（v1.4 providers）', () => {
     // 切 openai 格式 → 代理/档位组常驻置灰（零跳动；配置保留）
     fireEvent.click(s.getByRole('button', { name: '新增 provider' }))
     fireEvent.change(s.getByLabelText('名称'), { target: { value: 'G' } })
-    fireEvent.change(s.getByLabelText('API 端点（Anthropic 协议入口）'), { target: { value: 'https://g' } })
+    fireEvent.change(s.getByLabelText('API 端点'), { target: { value: 'https://g' } })
     fireEvent.change(s.getByLabelText('端点格式'), { target: { value: 'openai' } })
-    const proxyInOpenai = s.getByLabelText('网络代理（HTTP_PROXY）')
+    const proxyInOpenai = s.getByLabelText('网络代理')
     expect(proxyInOpenai.closest('.fmt-block')?.getAttribute('aria-disabled')).toBe('true')
     expect(s.getByText(/OpenAI 兼容格式：协议转换由网关承担/)).toBeDefined()
   })
@@ -492,9 +492,9 @@ describe('模型服务（v1.4 providers）', () => {
     fireEvent.click(s.getAllByLabelText('1M 上下文')[nameInputs.length - 1])
     expect(s.getAllByText('glm-5[1m]（1M）').length).toBeGreaterThan(0)
 
-    fireEvent.change(await s.findByLabelText('Sonnet 档位模型'), { target: { value: 'glm-4.6' } })
-    fireEvent.change(s.getByLabelText('Opus 档位模型'), { target: { value: 'glm-4.5-air' } })
-    fireEvent.change(s.getByLabelText('Fable 档位模型'), { target: { value: 'glm-5[1m]' } })
+    fireEvent.change(await s.findByLabelText('Sonnet'), { target: { value: 'glm-4.6' } })
+    fireEvent.change(s.getByLabelText('Opus'), { target: { value: 'glm-4.5-air' } })
+    fireEvent.change(s.getByLabelText('Fable'), { target: { value: 'glm-5[1m]' } })
     fireEvent.click(s.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(api.saveProvider).toHaveBeenCalledTimes(1))
     expect(vi.mocked(api.saveProvider).mock.calls[0][0]).toMatchObject({
@@ -507,9 +507,9 @@ describe('模型服务（v1.4 providers）', () => {
     // openai 格式 → 档位组常驻置灰（配置保留不丢）
     fireEvent.click(s.getByRole('button', { name: '新增 provider' }))
     fireEvent.change(s.getByLabelText('名称'), { target: { value: 'G' } })
-    fireEvent.change(s.getByLabelText('API 端点（Anthropic 协议入口）'), { target: { value: 'https://g' } })
+    fireEvent.change(s.getByLabelText('API 端点'), { target: { value: 'https://g' } })
     fireEvent.change(s.getByLabelText('端点格式'), { target: { value: 'openai' } })
-    const slotInOpenai = s.getByLabelText('Sonnet 档位模型')
+    const slotInOpenai = s.getByLabelText('Sonnet')
     expect(slotInOpenai.closest('.fmt-block')?.getAttribute('aria-disabled')).toBe('true')
   })
 })

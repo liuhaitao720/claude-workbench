@@ -1535,7 +1535,9 @@ button {
 
 .form-row {
   display: grid;
-  grid-template-columns: 110px minmax(0, 1fr);
+  /* v1.7.4（用户实测反馈）：标签精简后列宽收窄 110→96，标签左对齐——所有输入框
+    左缘严格对齐（此前右对齐标签 + 长标签折行导致行高不齐、视觉零乱） */
+  grid-template-columns: 96px minmax(0, 1fr);
   align-items: center;
   gap: 12px;
 }
@@ -1543,7 +1545,8 @@ button {
 .form-label {
   color: var(--text-2);
   font-size: 13px;
-  text-align: right;
+  text-align: left;
+  white-space: nowrap;
 }
 
 .form-control {

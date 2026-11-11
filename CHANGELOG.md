@@ -2,6 +2,11 @@
 
 SSH Workbench 版本更新说明（新版本在前；应用内「设置 → 应用更新」读取本文件展示）。v1.5.0 前产品名为 Claude Workbench。
 
+## 1.7.4
+
+- **模型服务表单布局整治**（用户实测反馈：页面乱）：表单标签全部精简到一行显示完整（「API 端点（Anthropic 协议入口）」→「API 端点」、档位标签去后缀等，细节保留在 placeholder/提示行）；标签列 110→96px 并改**左对齐**——所有输入框左缘严格对齐，长标签不再折行错位
+- （配套运维）VM 侧 `~/.cwb/providers.json` 已迁移 Legrand 档案（自 cc-switch 数据库直迁，密钥全程不落 transcript；端点探测通过：deepseek-v4.1-flash-1017 / glm-5.3）——远程任务注入真实端点，**与 cc-switch 解耦**（cc-switch 可关闭）
+
 ## 1.7.3
 
 - **npm 安装模板追加 `--allow-scripts=@anthropic-ai/claude-code`**（用户实测验证）：npm ≥12 的 install-scripts 安全策略默认拦截包内 postinstall（`node install.cjs` 被拦 → 安装残缺/升级失败）——本机与远程（Linux）两条 npm 安装模板统一加包级白名单；安装确认弹窗展示的完整命令同步

@@ -726,7 +726,7 @@ describe('设置中心「远程连接」分类', () => {
     await waitFor(() => expect(api.getRemoteProxyStatus).toHaveBeenCalledWith('c1'))
     await waitFor(() => expect(within(panel).getByText(/18080/)).toBeDefined())
     // 配置表单回显 config.proxyUrl；保存走 setRemoteProxyConfig
-    const urlInput = within(panel).getByLabelText('网络代理（HTTP_PROXY）') as HTMLInputElement
+    const urlInput = within(panel).getByLabelText('网络代理') as HTMLInputElement
     await waitFor(() => expect(urlInput.value).toBe('http://10.0.0.2:7890'))
     fireEvent.change(urlInput, { target: { value: '' } })
     fireEvent.click(within(panel).getByRole('button', { name: '保存' }))
@@ -784,7 +784,7 @@ describe('设置中心「远程连接」分类', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: '代理' })) // v1.7.0：代理面板迁独立「代理」分类
     const panel = await screen.findByTestId('remote-proxy-panel')
-    const urlInput = within(panel).getByLabelText('网络代理（HTTP_PROXY）') as HTMLInputElement
+    const urlInput = within(panel).getByLabelText('网络代理') as HTMLInputElement
     await waitFor(() => expect(urlInput.value).toBe('')) // 初始无配置
     // set：填值保存
     fireEvent.change(urlInput, { target: { value: 'http://10.0.0.9:7890' } })
