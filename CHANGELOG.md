@@ -2,6 +2,10 @@
 
 SSH Workbench 版本更新说明（新版本在前；应用内「设置 → 应用更新」读取本文件展示）。v1.5.0 前产品名为 Claude Workbench。
 
+## 1.7.3
+
+- **npm 安装模板追加 `--allow-scripts=@anthropic-ai/claude-code`**（用户实测验证）：npm ≥12 的 install-scripts 安全策略默认拦截包内 postinstall（`node install.cjs` 被拦 → 安装残缺/升级失败）——本机与远程（Linux）两条 npm 安装模板统一加包级白名单；安装确认弹窗展示的完整命令同步
+
 ## 1.7.2
 
 - **「连接与自检」页自带连接入口**（用户实测反馈：此前要到 claude CLI 锁定页才有连接按钮）——页顶新增当前作用域状态卡：连接状态胶囊 + 主机摘要 + 「连接/断开」主按钮（离线=连接、已连接=断开）

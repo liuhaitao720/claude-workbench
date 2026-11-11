@@ -160,7 +160,7 @@ const IS_LINUX_UI = (window as unknown as { cwb?: { platform?: string } }).cwb?.
 const NATIVE_INSTALL_CMD = IS_LINUX_UI
   ? 'curl -fsSL https://claude.ai/install.sh | bash'
   : 'powershell.exe -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"'
-const NPM_INSTALL_CMD = 'npm install -g @anthropic-ai/claude-code'
+const NPM_INSTALL_CMD = 'npm install -g @anthropic-ai/claude-code --allow-scripts=@anthropic-ai/claude-code'
 const CLAUDE_DOCS_URL = 'https://claude.ai/docs/setup'
 
 /** 设置中心分类 id（v1.4 重构：外观+终端+通知+启动 合并为「通用」；S6 增「远程连接」

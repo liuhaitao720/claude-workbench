@@ -200,9 +200,17 @@ export function nativeInstallTemplateFor(platform: Platform): { file: string; ar
 }
 
 export function npmInstallTemplateFor(platform: Platform): { file: string; args: readonly string[] } {
-  if (platform !== 'win32') return { file: 'npm', args: ['install', '-g', '@anthropic-ai/claude-code'] }
+  // v1.7.3：npm ≥12 的 install-scripts 安全策略默认拦截包内 postinstall（claude-code
+  // 的 node install.cjs 被拦 → 安装残缺/升级失败）。追加包级白名单 flag（用户实测
+  // 验证）；旧版 npm 对未知 --flag 按未用 config 静默收纳，不报错。
+  const allowScripts = ['--allow-scripts=@anthropic-ai/claude-code']
+  if (platform !== 'win32')
+    return { file: 'npm', args: ['install', '-g', '@anthropic-ai/claude-code', ...allowScripts] }
   // npm 在 Windows 是 npm.cmd，须经 cmd.exe /c 包装（CreateProcess 不能直接解析）
-  return { file: 'cmd.exe', args: ['/c', 'npm', 'install', '-g', '@anthropic-ai/claude-code'] }
+  return {
+    file: 'cmd.exe',
+    args: ['/c', 'npm', 'install', '-g', '@anthropic-ai/claude-code', ...allowScripts]
+  }
 }
 
 /** 官方原生安装器模板（v0.5⑤；win 值与原 claude-version 常量逐字节一致） */

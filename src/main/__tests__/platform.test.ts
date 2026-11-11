@@ -66,7 +66,14 @@ describe('安装/查询/探测模板', () => {
     expect(native.args.join(' ')).not.toContain('ExecutionPolicy')
     const npm = npmInstallTemplateFor('win32')
     expect(npm.file).toBe('cmd.exe')
-    expect(npm.args).toEqual(['/c', 'npm', 'install', '-g', '@anthropic-ai/claude-code'])
+    expect(npm.args).toEqual([
+      '/c',
+      'npm',
+      'install',
+      '-g',
+      '@anthropic-ai/claude-code',
+      '--allow-scripts=@anthropic-ai/claude-code'
+    ])
   })
 
   it('linux：native=bash 登录壳跑官方 install.sh；npm 直呼；无 cmd.exe/powershell', () => {
@@ -75,7 +82,7 @@ describe('安装/查询/探测模板', () => {
     expect(native.args).toEqual(['-l', '-c', 'curl -fsSL https://claude.ai/install.sh | bash'])
     const npm = npmInstallTemplateFor('linux')
     expect(npm.file).toBe('npm')
-    expect(npm.args).toEqual(['install', '-g', '@anthropic-ai/claude-code'])
+    expect(npm.args).toEqual(['install', '-g', '@anthropic-ai/claude-code', '--allow-scripts=@anthropic-ai/claude-code'])
     expect(npm.args.join(' ')).not.toContain('cmd.exe')
   })
 
@@ -84,7 +91,14 @@ describe('安装/查询/探测模板', () => {
     expect(NATIVE_INSTALL_FILE).toBe('powershell.exe')
     expect(NATIVE_INSTALL_ARGS).toEqual(['-NoProfile', '-Command', 'irm https://claude.ai/install.ps1 | iex'])
     expect(NPM_INSTALL_FILE).toBe('cmd.exe')
-    expect(NPM_INSTALL_ARGS).toEqual(['/c', 'npm', 'install', '-g', '@anthropic-ai/claude-code'])
+    expect(NPM_INSTALL_ARGS).toEqual([
+      '/c',
+      'npm',
+      'install',
+      '-g',
+      '@anthropic-ai/claude-code',
+      '--allow-scripts=@anthropic-ai/claude-code'
+    ])
   })
 
   it('npmViewCommand：win 经 cmd.exe /c；linux 直呼 npm', () => {
