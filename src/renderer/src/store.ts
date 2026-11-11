@@ -32,6 +32,15 @@ type TaskDataListener = (data: string) => void
 
 const taskDataListeners = new Map<string, Set<TaskDataListener>>()
 
+/**
+ * v1.7.5 未订阅任务的待放数据（回放竞态修复——用户实测「连接后首开任务无上下文，
+ * 关掉重开才有」）：连接成功瞬间 reconcile 的 task.attach 回放先于 React 挂终端
+ * 订阅到达，此前无监听即丢弃 → 首开空白。现在缓冲之，订阅时先冲放。
+ * 上限对齐 xterm scrollback 量级（超限丢最旧）。
+ */
+const taskDataPending = new Map<string, string[]>()
+const TASK_DATA_PENDING_CAP = 800_000
+
 export function subscribeTaskData(taskId: string, cb: TaskDataListener): () => void {
   let set = taskDataListeners.get(taskId)
   if (!set) {
@@ -39,6 +48,12 @@ export function subscribeTaskData(taskId: string, cb: TaskDataListener): () => v
     taskDataListeners.set(taskId, set)
   }
   set.add(cb)
+  // 先冲放缓冲（订阅前到达的回放/输出）——新终端完整拿到历史上下文
+  const pending = taskDataPending.get(taskId)
+  if (pending !== undefined && pending.length > 0) {
+    taskDataPending.delete(taskId)
+    for (const d of pending) cb(d)
+  }
   return () => {
     const s = taskDataListeners.get(taskId)
     if (!s) return
@@ -47,11 +62,24 @@ export function subscribeTaskData(taskId: string, cb: TaskDataListener): () => v
   }
 }
 
+/** 任务删除时清待放缓冲（防陈旧内存） */
+export function discardTaskData(taskId: string): void {
+  taskDataPending.delete(taskId)
+}
+
 export function emitTaskData(e: PtyDataEvent): void {
   taskLastDataAt.set(e.taskId, Date.now())
   const set = taskDataListeners.get(e.taskId)
-  if (!set) return
-  for (const cb of set) cb(e.data)
+  if (set !== undefined && set.size > 0) {
+    for (const cb of set) cb(e.data)
+    return
+  }
+  // 无监听（tab 未开/终端未挂）——缓冲最近数据而非丢弃（见 taskDataPending 注释）
+  const arr = taskDataPending.get(e.taskId) ?? []
+  arr.push(e.data)
+  let size = arr.reduce((n, s) => n + s.length, 0)
+  while (size > TASK_DATA_PENDING_CAP && arr.length > 1) size -= arr.shift()!.length
+  taskDataPending.set(e.taskId, arr)
 }
 
 /** 各任务最近一次 PTY 输出时间戳（v3.2 activityMap 无条目时的字节启发兜底源） */
@@ -692,6 +720,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   removeTaskFlow: async (taskId, opts) => {
     try {
       await window.cwb.removeTask(taskId, opts)
+      discardTaskData(taskId) // v1.7.5：清待放缓冲（防陈旧内存）
     } catch (err) {
       console.error('[cwb] removeTask failed:', err)
       return

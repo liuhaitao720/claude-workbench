@@ -1,7 +1,7 @@
 import './test-setup'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from '@testing-library/react'
-import { initListeners, useAppStore, clampSidebarWidth } from './store'
+import { initListeners, useAppStore, clampSidebarWidth, emitTaskData, subscribeTaskData, discardTaskData } from './store'
 import { installCwbMock, makeConnection, makeProject, makeTask } from './test-helpers'
 
 /**
@@ -303,5 +303,31 @@ describe('懒连接（2.5=a renderer 半边）', () => {
     expect(window.cwb.connectConnection).toHaveBeenCalledWith('c1')
     // stopped 任务照常走 resume（既有语义不因远程归属改变）
     expect(window.cwb.resumeTask).toHaveBeenCalledWith('tr-stop')
+  })
+})
+
+
+describe('v1.7.5 PTY 待放缓冲（回放竞态——连接后首开任务无上下文修复）', () => {
+  it('无监听时 emitTaskData 缓冲 → subscribe 先冲放历史再收新数据；discard 清空', () => {
+    const events = [
+      { taskId: 't-pend', data: 'ctx-line-1\n' },
+      { taskId: 't-pend', data: 'ctx-line-2\n' }
+    ]
+    for (const e of events) emitTaskData(e) // tab 未开（无监听）——此前直接丢弃
+    const got: string[] = []
+    const off = subscribeTaskData('t-pend', (d) => got.push(d))
+    // 订阅瞬间先冲放缓冲（顺序保持）
+    expect(got).toEqual(['ctx-line-1\n', 'ctx-line-2\n'])
+    // 冲放后进入直通：新数据实时到达且不再缓冲
+    emitTaskData({ taskId: 't-pend', data: 'live\n' })
+    expect(got).toEqual(['ctx-line-1\n', 'ctx-line-2\n', 'live\n'])
+    off()
+    // 退订后再到数据回缓冲；discard 清空（重订阅不重放）
+    emitTaskData({ taskId: 't-pend', data: 'after-close\n' })
+    discardTaskData('t-pend')
+    const got2: string[] = []
+    const off2 = subscribeTaskData('t-pend', (d) => got2.push(d))
+    expect(got2).toEqual([])
+    off2()
   })
 })
