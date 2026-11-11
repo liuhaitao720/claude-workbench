@@ -708,6 +708,28 @@ describe('设置中心「远程连接」分类', () => {
     await waitFor(() => expect(api.setRemoteProxyConfig).toHaveBeenCalledWith('c1', { proxyUrl: '' }))
   })
 
+  // v1.5.3：needInstall 错误不再显示原始串——转安装确认弹窗（requestServerInstall）+ 面板轻提示
+  it('远程代理面板：server 未安装（needInstall）→ 弹安装确认窗 + 面板轻提示（非原始错误）', async () => {
+    const api = await renderApp()
+    vi.mocked(api.getRemoteProxyStatus).mockRejectedValue(
+      new Error('[cwb:need-server-install] cwb-server unreachable over SSH tunnel (socket hang up)')
+    )
+    fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
+    const dialog = await screen.findByRole('dialog', { name: '设置' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '远程连接' }))
+    const panel = await screen.findByTestId('remote-proxy-panel')
+    await waitFor(() =>
+      expect(useAppStore.getState().pendingServerInstall).toEqual({ connectionId: 'c1' })
+    )
+    // 面板轻提示（含手动安装入口），不出现原始 IPC 错误串
+    expect(within(panel).getByTestId('proxy-need-install')).toBeDefined()
+    expect(
+      within(panel).queryByText(/cwb-server unreachable over SSH tunnel/)
+    ).toBeNull()
+    // 安装确认弹窗已弹出（与侧栏连接触发的同等弹窗）
+    expect(await screen.findByRole('dialog', { name: '安装 cwb-server' })).toBeDefined()
+  })
+
   // S8 A5 UI 侧联测补桩：set→get 回环——保存后经状态重读（切换连接触发 refresh）
   // 拿回同一值（mock 升级为有状态：get 返回最近一次 set 的终态，等价 server 持久化）
   it('远程代理面板（A5 联测）：set→get 回环——保存后重读回填同值', async () => {

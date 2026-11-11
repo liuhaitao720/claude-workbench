@@ -526,6 +526,7 @@ export const zh = {
   's6.hostKeyConfirmBody':
     '首次连接该主机。请核对指纹与远端 ssh-keygen -lf 输出一致后确认锁定；不一致切勿继续（疑似中间人）',
   's6.connectFailedToast': '连接失败',
+  's6.serverMissingHint': 'VM 内尚未安装 cwb-server（远程任务/代理不可用）——',
   's6.hostKeyChangedWarn':
     '指纹与已锁定值不一致，连接已阻断——确认是 VM 重装等预期变更后，重新确认锁定新指纹',
   // ── 远程代理面板（6.4=c：配置存 VM 侧，客户端经 SSH/server 协议读写） ──────
@@ -1074,6 +1075,7 @@ export const en: Record<MessageKey, string> = {
   's6.hostKeyConfirmBody':
     'First connection to this host. Verify the fingerprint matches ssh-keygen -lf output on the remote before confirming; do NOT continue if it differs (possible MITM)',
   's6.connectFailedToast': 'Connection failed',
+  's6.serverMissingHint': 'cwb-server is not installed on the VM (remote tasks/proxy unavailable) — ',
   's6.hostKeyChangedWarn':
     'The fingerprint no longer matches the locked value; the connection is blocked — after confirming an expected change (e.g. VM reinstall), confirm and lock the new fingerprint',
   's6.remoteProxy': 'Remote proxy',

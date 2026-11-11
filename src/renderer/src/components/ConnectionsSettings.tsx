@@ -478,9 +478,12 @@ export function ConnectionsSection({ initialEditId }: { initialEditId: string | 
 function RemoteProxyPanel() {
   const t = useI18n()
   const connections = useAppStore((s) => s.connections)
+  const requestServerInstall = useAppStore((s) => s.requestServerInstall)
   const [connId, setConnId] = useState(connections[0]?.id ?? '')
   const [status, setStatus] = useState<RemoteProxyStatus | null>(null)
   const [proxyUrl, setProxyUrl] = useState('')
+  /** v1.5.3：server 未安装（needInstall）不再显示原始错误——转安装确认弹窗 + 轻提示 */
+  const [needInstall, setNeedInstall] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [saveMsg, setSaveMsg] = useState('')
 
@@ -493,6 +496,7 @@ function RemoteProxyPanel() {
   const refresh = (id: string): void => {
     if (id === '') return
     setLoadError('')
+    setNeedInstall(false)
     window.cwb
       .getRemoteProxyStatus(id)
       .then((s) => {
@@ -501,7 +505,15 @@ function RemoteProxyPanel() {
       })
       .catch((err: unknown) => {
         setStatus(null)
-        setLoadError(errMsg(err))
+        const message = errMsg(err)
+        // 与 connectFlow 的 NEED_INSTALL_RE 同语义：server 缺失 → 安装确认弹窗
+        // （面板留轻提示，不展示原始 IPC 错误串）
+        if (/needinstall|cwb-server/i.test(message)) {
+          setNeedInstall(true)
+          requestServerInstall(id)
+          return
+        }
+        setLoadError(message)
       })
   }
 
@@ -595,6 +607,18 @@ function RemoteProxyPanel() {
               </div>
             </div>
           </div>
+          {needInstall && (
+            <p className="muted" data-testid="proxy-need-install">
+              {t('s6.serverMissingHint')}
+              <button
+                type="button"
+                className="btn small"
+                onClick={() => requestServerInstall(connId)}
+              >
+                {t('s6.installTitle')}
+              </button>
+            </p>
+          )}
           {loadError !== '' && <p className="inline-error">{loadError}</p>}
           {saveMsg !== '' && (
             <p className="muted ok" role="status">

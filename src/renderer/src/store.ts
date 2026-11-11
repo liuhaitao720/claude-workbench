@@ -242,6 +242,8 @@ interface AppState {
   removeConnectionFlow: (id: string) => Promise<void>
   /** 手动连接（懒连接 2.5=a 之外的显式入口；状态迁移经 onConnectionState 推送） */
   connectFlow: (id: string) => Promise<void>
+  /** 显式请求安装/升级 cwb-server（代理面板等非 connectFlow 入口——弹 ServerInstallDialog） */
+  requestServerInstall: (connectionId: string) => void
   /** TOFU 确认（HostKeyConfirmDialog）：锁定指纹到档案 → 自动重连 */
   confirmHostKeyFlow: (fingerprint: string) => Promise<void>
   /** 关闭 TOFU 确认弹窗（不确认、不重连） */
@@ -489,6 +491,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   dismissHostKeyConfirm: () => set({ pendingHostKeyConfirm: null }),
 
   dismissConnectError: () => set({ connectError: null }),
+
+  requestServerInstall: (connectionId) => set({ pendingServerInstall: { connectionId } }),
 
   disconnectFlow: async (id) => {
     try {
