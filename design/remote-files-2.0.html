@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>SSH Workbench 2.0 · 远程文件管理 — 设计原型</title>
+<style>
+:root{
+  --bg-app:#1e1f24; --bg-panel:#191a1f; --bg-dialog:#23242b; --bg-input:#14151a;
+  --bg-hover:#23242b; --bg-sel:#2b2d36; --text-max:#fff; --text-1:#ececf1; --text-2:#d7d7db;
+  --text-3:#9a9ca6; --text-4:#9496a0; --border-1:#33353d; --border-2:#26272e; --border-3:#3a3c45;
+  --accent:#3d76b3; --accent-bg:#2f5f8f; --ok:#6ad08c; --ok-bg:#1f3d2b; --ok-border:#2c5a3d;
+  --warn-text:#e3c66b; --warn-bg:#3a2f16; --danger-text:#f0b0b0; --danger-bg:#4a2222;
+  --btn-danger-bg:#6e2b2b; --btn-danger-border:#8f3a3a; --shadow-lg:0 12px 40px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg-app);font:13px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--text-1);display:flex;flex-direction:column;align-items:center;padding:22px 14px;gap:14px;min-height:100vh}
+.note{color:var(--text-3);font-size:12px;max-width:1180px}
+.note b{color:var(--text-2)}
+
+/* ── 主工作区：终端 + 右侧文件面板 ── */
+.stage{width:1180px;max-width:100%;height:720px;background:var(--bg-panel);border:1px solid var(--border-1);border-radius:10px;box-shadow:var(--shadow-lg);display:flex;overflow:hidden}
+.left{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
+.tabbar{display:flex;gap:2px;background:var(--bg-app);border-bottom:1px solid var(--border-2);padding:4px 8px 0;align-items:center}
+.tab{padding:5px 14px;border-radius:6px 6px 0 0;color:var(--text-3);font-size:12px;background:none;border:1px solid transparent;cursor:pointer}
+.tab.active{background:var(--bg-panel);color:var(--text-1);border-color:var(--border-2)}
+.term{flex:1;background:#101014;padding:14px 16px;font:12px/1.7 ui-monospace,Consolas,monospace;color:#cfd3da;overflow:auto;white-space:pre}
+.term .p{color:var(--ok)} .term .dim{color:#6b7080}
+.toggle-bar{position:absolute;right:0;top:44px;display:flex;flex-direction:column;gap:0;z-index:5}
+.rail-toggle{writing-mode:vertical-lr;padding:10px 4px;background:var(--bg-sel);border:1px solid var(--border-3);border-right:none;border-radius:6px 0 0 6px;color:var(--text-2);cursor:pointer;font-size:12px;letter-spacing:.2em}
+.rail-toggle:hover{color:var(--text-1)}
+
+/* ── 远程文件面板 ── */
+.files{width:340px;min-width:340px;border-left:1px solid var(--border-1);display:flex;flex-direction:column;background:var(--bg-panel)}
+.files-head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border-2)}
+.files-head b{font-size:13px}
+.pill{font-size:10.5px;padding:1px 8px;border-radius:10px;border:1px solid var(--ok-border);background:var(--ok-bg);color:var(--ok)}
+.crumb{display:flex;align-items:center;gap:4px;padding:7px 12px;border-bottom:1px solid var(--border-2);font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--text-2);flex-wrap:wrap}
+.crumb button{all:unset;cursor:pointer;color:var(--accent);padding:1px 3px;border-radius:3px}
+.crumb button:hover{background:var(--bg-sel)}
+.crumb .sep{color:var(--text-4)}
+.crumb .home{color:var(--text-3)}
+.toolbar{display:flex;gap:6px;padding:7px 12px;border-bottom:1px solid var(--border-2);align-items:center}
+.btn{border:1px solid var(--border-3);background:var(--bg-panel);color:var(--text-2);border-radius:5px;padding:3px 10px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+.btn:hover{background:var(--bg-hover)}
+.btn.primary{background:var(--accent-bg);border-color:var(--accent);color:#fff}
+.btn.danger{background:var(--btn-danger-bg);border-color:var(--btn-danger-border);color:var(--danger-text)}
+.btn.small{padding:1px 7px;font-size:11px}
+.btn svg{opacity:.85}
+.flist{flex:1;overflow-y:auto;padding:4px 0}
+.frow{display:grid;grid-template-columns:20px 1fr 74px 96px 62px;gap:8px;align-items:center;padding:4px 12px;cursor:pointer;font-size:12.5px}
+.frow:hover{background:var(--bg-hover)}
+.frow.sel{background:var(--bg-sel)}
+.frow .ico{font-size:13px;width:20px;text-align:center}
+.frow .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-1)}
+.frow.dir .nm{font-weight:600}
+.frow .sz,.frow .mt{color:var(--text-4);font-size:11px;font-family:ui-monospace,Consolas,monospace;text-align:right}
+.frow .acts{display:flex;gap:4px;justify-content:flex-end;opacity:0;transition:opacity .12s}
+.frow:hover .acts{opacity:1}
+.empty{padding:30px 16px;text-align:center;color:var(--text-4);font-size:12px}
+
+/* 拖放遮罩 */
+.dropzone{position:absolute;inset:0;background:rgba(61,118,179,.14);border:2px dashed var(--accent);border-radius:8px;margin:8px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:6px;z-index:8;color:var(--text-1)}
+.dropzone b{font-size:14px}
+.dropzone .muted{color:var(--text-3);font-size:12px}
+
+/* ── 传输条（底部） ── */
+.xfer{border-top:1px solid var(--border-1);background:var(--bg-app)}
+.xfer-bar{display:flex;align-items:center;gap:10px;padding:7px 12px;cursor:pointer}
+.xfer-bar b{font-size:12px}
+.prog{flex:1;height:5px;border-radius:3px;background:var(--bg-input);overflow:hidden}
+.prog i{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .3s}
+.prog i.ok{background:var(--ok)} .prog i.err{background:#f85149}
+.meta{font-size:11px;color:var(--text-3);font-family:ui-monospace,Consolas,monospace;white-space:nowrap}
+.xfer-list{max-height:168px;overflow-y:auto;border-top:1px solid var(--border-2);display:none}
+.xfer.open .xfer-list{display:block}
+.xrow{display:grid;grid-template-columns:14px 1fr 120px 90px 60px;gap:8px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--border-2);font-size:12px}
+.xrow .dir{font-size:11px;width:14px;text-align:center;color:var(--text-3)}
+.xrow .fn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.xrow .st{color:var(--text-4);font-size:11px;text-align:right;font-family:ui-monospace,Consolas,monospace}
+
+/* 菜单/对话框 */
+.menu{position:absolute;background:var(--bg-dialog);border:1px solid var(--border-3);border-radius:7px;box-shadow:var(--shadow-lg);min-width:170px;z-index:40;padding:4px;display:none}
+.menu.open{display:block}
+.menu button{all:unset;display:flex;width:100%;padding:6px 12px;font-size:12.5px;color:var(--text-2);cursor:pointer;border-radius:5px;gap:8px;align-items:center}
+.menu button:hover{background:var(--bg-hover);color:var(--text-1)}
+.menu button.danger{color:var(--danger-text)}
+.overlay{position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:50;display:none;align-items:center;justify-content:center}
+.overlay.open{display:flex}
+.dialog{width:430px;background:var(--bg-dialog);border:1px solid var(--border-1);border-radius:10px;padding:16px 18px;box-shadow:var(--shadow-lg)}
+.dialog h4{font-size:13.5px;margin-bottom:8px}
+.dialog .file-line{display:flex;gap:8px;align-items:center;background:var(--bg-input);border:1px solid var(--border-2);border-radius:6px;padding:8px 10px;margin:8px 0;font-size:12.5px}
+.dialog .hint{color:var(--text-3);font-size:11.5px;margin:6px 0 10px}
+.dactions{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
+kbd{background:var(--bg-input);border:1px solid var(--border-3);border-radius:4px;padding:0 5px;font-size:11px;font-family:ui-monospace,Consolas,monospace}
+footer{color:var(--text-4);font-size:11px;max-width:1180px}
+.ctx-note{position:absolute;right:352px;top:120px;background:var(--bg-dialog);border:1px solid var(--border-3);border-radius:7px;box-shadow:var(--shadow-lg);min-width:180px;z-index:40;padding:4px;display:none}
+.ctx-note.open{display:block}
+</style>
+</head>
+<body>
+<p class="note">原型 · <b>2.0 远程文件管理</b>（FinalShell 式）——右侧可开合面板挂主工作区；面包屑导航/双击进目录/悬停行操作；上传支持<b>按钮+拖拽双入口</b>；底部传输条（并行 2，进度/速度/取消/重试）；冲突弹窗三选。右侧竖条=面板开合。下方状态切换按钮演示交互。</p>
+
+<div class="stage" id="stage">
+  <div class="left">
+    <div class="tabbar">
+      <div class="tab active">● 跑着 · claude</div>
+      <div class="tab">远程项目 · 文档整理</div>
+      <div style="margin-left:auto"></div>
+    </div>
+    <div class="term"><span class="p">dev@vm</span>:~/work$ claude
+<span class="dim">✻ 正在分析 src/main/ipc.ts …</span>
+> 帮我把上传的部署文档归档到 docs/
+
+<span class="dim">⏺ 已读取 上传/部署手册v3.md（214 行）</span>
+<span class="dim">⏺ 移动至 docs/部署手册v3.md 完成</span>
+
+<span class="p">╭──────────────────────────────────╮</span>
+<span class="p">│</span> > 归档完成，共 1 个文件          <span class="p">│</span>
+<span class="p">╰──────────────────────────────────╯</span></div>
+    <button class="rail-toggle" id="toggleBtn" onclick="togglePanel()">远程文件 ›</button>
+  </div>
+
+  <!-- ── 远程文件面板 ── -->
+  <div class="files" id="filesPanel">
+    <div class="files-head">
+      <b>远程文件</b><span class="pill">● VM-Dev</span>
+      <span style="margin-left:auto" title="关闭面板"><button class="btn small" onclick="togglePanel()">✕</button></span>
+    </div>
+    <div class="crumb">
+      <button class="home" title="home">⌂</button><span class="sep">/</span><button>home</button><span class="sep">/</span><button>dev</button><span class="sep">/</span><button>work</button><span class="sep">/</span><button style="color:var(--text-1)">docs</button>
+      <span style="margin-left:auto;cursor:pointer" title="编辑路径">✎</span>
+    </div>
+    <div class="toolbar" style="position:relative">
+      <button class="btn small" title="上级目录 (Alt+↑)">↑</button>
+      <button class="btn small" title="后退">←</button>
+      <button class="btn small" title="刷新 (F5)">⟳</button>
+      <button class="btn small" title="新建文件夹">＋ 目录</button>
+      <span style="flex:1"></span>
+      <button class="btn primary small" id="uploadBtn" onclick="event.stopPropagation();openMenu('uploadMenu')">⬆ 上传 ▾</button>
+      <div class="menu" id="uploadMenu">
+        <button onclick="menuDone('uploadMenu','已选本地文件 2 个 → 开始上传（模拟：见传输条）');xferAdd()">📄 上传文件…</button>
+        <button onclick="menuDone('uploadMenu','已选本地文件夹 assets/ → 递归上传')">📁 上传文件夹…</button>
+      </div>
+    </div>
+    <div class="flist" id="flist"></div>
+
+    <!-- 拖放遮罩 -->
+    <div class="dropzone" id="dropzone" style="display:none">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4m0 0 4 4m-4-4-4 4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+      <b>松开即上传到 /home/dev/work/docs</b>
+      <span class="muted">同名文件将弹窗确认（覆盖 / 跳过 / 保留两者）</span>
+    </div>
+
+    <!-- 行右键菜单 -->
+    <div class="ctx-note" id="ctxMenu">
+      <button onclick="menuDone('ctxMenu','⬇ 下载：系统保存对话框选位置')">⬇ 下载到本机…</button>
+      <button onclick="menuDone('ctxMenu','重命名：行内编辑（F2 同）')">✎ 重命名</button>
+      <button onclick="menuDone('ctxMenu','删除：确认弹窗（移 VM 回收站目录，可找回）')">🗑 删除</button>
+      <button onclick="menuDone('ctxMenu','权限：chmod 八进制编辑（可选高级项）')">🔑 权限…</button>
+      <button onclick="menuDone('ctxMenu','复制路径到剪贴板')">⧉ 复制远程路径</button>
+    </div>
+
+    <!-- 冲突弹窗 -->
+    <div class="overlay" id="conflictOv">
+      <div class="dialog">
+        <h4>同名文件已存在</h4>
+        <div class="file-line">📄 <b>部署手册v3.md</b><span style="margin-left:auto;color:var(--text-4)">214 KB</span></div>
+        <p class="hint">目标 <code>~/work/docs/部署手册v3.md</code> 已存在（186 KB · 今天 14:02）。本次上传 2 个文件中有 1 个冲突——选择仅对冲突项生效。</p>
+        <div class="dactions">
+          <button class="btn" onclick="closeOv('conflictOv')">跳过冲突项</button>
+          <button class="btn" onclick="closeOv('conflictOv')">保留两者（自动重命名）</button>
+          <button class="btn primary" onclick="closeOv('conflictOv')">覆盖</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 传输条 -->
+    <div class="xfer open" id="xfer">
+      <div class="xfer-bar" onclick="document.getElementById('xfer').classList.toggle('open')">
+        <b>传输</b>
+        <div class="prog"><i style="width:64%"></i></div>
+        <span class="meta">2.1 MB/s · 64%（2 进行 · 1 完成）</span>
+        <span class="meta" style="cursor:pointer" title="展开/收起">▾</span>
+      </div>
+      <div class="xfer-list">
+        <div class="xrow"><span class="dir">⬆</span><span class="fn">部署手册v3.md</span><div class="prog"><i style="width:78%"></i></div><span class="st">78% · 1.2 MB/s</span><button class="btn small danger">取消</button></div>
+        <div class="xrow"><span class="dir">⬇</span><span class="fn">dump-1120.sql.gz</span><div class="prog"><i style="width:31%"></i></div><span class="st">31% · 0.9 MB/s</span><button class="btn small danger">取消</button></div>
+        <div class="xrow"><span class="dir">⬆</span><span class="fn">logo.png</span><div class="prog"><i class="ok" style="width:100%"></i></div><span class="st" style="color:var(--ok)">完成 · 88 KB</span><button class="btn small">打开</button></div>
+        <div class="xrow"><span class="dir">⬆</span><span class="fn">大模型权重.bin</span><div class="prog"><i class="err" style="width:12%"></i></div><span class="st" style="color:#f85149">失败 · 磁盘空间不足</span><button class="btn small">重试</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="note" style="display:flex;gap:8px;flex-wrap:wrap">
+  <button class="btn" onclick="showDrop()">① 演示拖拽上传遮罩</button>
+  <button class="btn" onclick="showConflict()">② 演示同名冲突弹窗</button>
+  <button class="btn" onclick="showCtx()">③ 演示文件行右键菜单</button>
+  <button class="btn" onclick="navInto()">④ 双击目录进入（面包屑联动）</button>
+</p>
+
+<footer>开发面：SftpSession 扩展（全量列表含 size/mtime、分块读写、mkdir/rename/unlink/remove、stat）；SFTP 传输走独立 read/write offset 流（不占 exec 通道）；并行 2 + 断点续传（分块 offset 续传）；删除移 ~/.cwb/.trash（VM 侧回收站，可找回）；入口=侧栏服务器菜单「远程文件」+ 侧栏工具按钮 + 面板记忆 per-connection 目录；本地侧保存对话框（下载）/拖拽事件（上传）。</footer>
+
+<script>
+const FILES = [
+  {n:'2024-归档', d:1, s:'—', m:'11-08 09:12'},
+  {n:'assets', d:1, s:'—', m:'11-10 15:44'},
+  {n:'部署手册v3.md', d:0, s:'214 KB', m:'今天 16:02'},
+  {n:'架构评审-远程文件管理.md', d:0, s:'18 KB', m:'今天 15:31'},
+  {n:'dump-1120.sql.gz', d:0, s:'47 MB', m:'昨天 22:10'},
+  {n:'logo.png', d:0, s:'88 KB', m:'11-05 11:20'},
+  {n:'大模型权重.bin', d:0, s:'2.3 GB', m:'11-02 08:00'},
+]
+function render(){
+  document.getElementById('flist').innerHTML = FILES.map((f,i)=>`
+    <div class="frow ${f.d?'dir':''}" ondblclick="${f.d?`navInto('${f.n}')`:''}" onclick="this.classList.add('sel');[...this.parentNode.children].forEach(x=>x!==this&&x.classList.remove('sel'))" oncontextmenu="event.preventDefault();showCtxAt()">
+      <span class="ico">${f.d?'📁':(f.n.endsWith('.md')?'📄':f.n.endsWith('.gz')?'🗄':'🗂')}</span>
+      <span class="nm" title="${f.n}">${f.n}</span>
+      <span class="sz">${f.s}</span><span class="mt">${f.m}</span>
+      <span class="acts">
+        ${f.d?'':`<button class="btn small" title="下载到本机">⬇</button>`}
+        <button class="btn small" title="更多（右键）" onclick="event.stopPropagation();showCtxAt()">⋯</button>
+      </span>
+    </div>`).join('')
+}
+function togglePanel(){const p=document.getElementById('filesPanel');p.style.display=p.style.display==='none'?'flex':'none'}
+function openMenu(id){document.querySelectorAll('.menu').forEach(m=>m.classList.remove('open'));document.getElementById(id).classList.add('open')}
+function menuDone(id,msg){document.getElementById(id).classList.remove('open');alert('→ '+msg)}
+function showDrop(){const d=document.getElementById('dropzone');d.style.display='flex';setTimeout(()=>d.style.display='none',2200)}
+function showConflict(){document.getElementById('conflictOv').classList.add('open')}
+function closeOv(id){document.getElementById(id).classList.remove('open')}
+function showCtx(){showCtxAt()}
+function showCtxAt(){const m=document.getElementById('ctxMenu');m.classList.add('open');setTimeout(()=>m.classList.remove('open'),3500)}
+function navInto(name){alert(`→ 进入 ${name??'assets'}/（面包屑追加一级，列表刷新——双击文件=下载到本机）`)}
+function xferAdd(){document.getElementById('xfer').classList.add('open')}
+document.addEventListener('click',e=>{if(!e.target.closest('.menu'))document.querySelectorAll('.menu').forEach(m=>m.classList.remove('open'))});
+render()
+</script>
+</body>
+</html>
