@@ -332,6 +332,20 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   /** S6：openSettings 携带的连接档案编辑目标（一次消费：仅初值传入子组件） */
   const initialEditConnectionId = useRef(useAppStore.getState().settingsEditConnectionId)
 
+  // v1.7.6 通知配置加载：仅作用域身份（scope/isLocalScope）变化时重拉——不随连接
+  // 状态抖动重跑（此前在组合 effect 内随 scopeConnected 重载，连接抖动会把用户
+  // 未保存的「启用」勾选重置回远端旧值，保存即落 enabled=false——用户实测根因）
+  useEffect(() => {
+    window.cwb
+      .getNotifyConfig(scopeCid)
+      .then((c) => {
+        setNotifyUrl(c.url)
+        setNotifyEnabled(c.enabled)
+      })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅作用域切换加载（cid 身份）
+  }, [scope, isLocalScope])
+
   // v1.1.0 下载进度订阅（main 经 cwb:event:app-update-progress 推送；v1.2.1 增加
   // available=自动检查结果 / waiting-tasks=等任务结束）
   useEffect(() => {
@@ -403,13 +417,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         .then((list) => setInstalledFonts(list))
         .catch(() => {})
     }
-    window.cwb
-      .getNotifyConfig(scopeCid)
-      .then((c) => {
-        setNotifyUrl(c.url)
-        setNotifyEnabled(c.enabled)
-      })
-      .catch(() => {})
     // v1.4 模型服务档案（读取失败保持空列表，不阻塞弹窗；v1.7.2 穿 cid——
     // 此前漏穿导致远程作用域短暂显示本机清单）
     window.cwb

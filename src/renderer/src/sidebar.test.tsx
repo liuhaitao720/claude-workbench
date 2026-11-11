@@ -371,7 +371,7 @@ describe('设置入口（v1.2.2：Skills / 设置两个 SVG 图标按钮）', ()
   it('展开态：版本号后依次 skills/settings 两个图标按钮（无关于入口）；点 ⚙ 开设置弹窗', async () => {
     await renderApp([pg], [runner])
     const header = document.querySelector('.sidebar-header') as HTMLElement
-    expect(header.querySelector('.version-text')?.textContent).toContain('v1.7.5')
+    expect(header.querySelector('.version-text')?.textContent).toContain('v1.7.6')
     // 图标组紧跟版本号（DOM 顺序即视觉顺序）；data-icon=svg 图形锚点
     const group = header.querySelector('.sidebar-icon-group') as HTMLElement
     expect(group).not.toBeNull()
