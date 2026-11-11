@@ -536,6 +536,8 @@ export const zh = {
   // ── claude CLI 分类远程上下文占位说明（版本/更新面向远端，S5 接管） ─────────
   's6.cliRemoteNote':
     '远程任务使用 VM 内的 claude CLI——其版本检测与更新面向远端，由「远程连接」分类接管（本页仅管理本机 CLI）。',
+  's6.cliRemoteSource':
+    '↑ 以上版本来自远程 VM「{name}」——本机未安装 claude CLI（应用从不自动安装；需要本机使用时请在下方手动安装）',
   // ── 远程项目注册对话框（3.1=C：手输 VM 绝对路径 + SFTP 目录浏览器） ─────────
   's6.remotePathLabel': 'VM 内绝对路径',
   's6.browse': '浏览…',
@@ -1083,6 +1085,8 @@ export const en: Record<MessageKey, string> = {
     'The proxy is built into the remote server and its config is stored inside the VM; it is read/written here over SSH / the server protocol (empty = direct)',
   's6.cliRemoteNote':
     'Remote tasks use the claude CLI inside the VM — its version checks and updates target the remote side and are handled under “Remote connections”; this page manages the local CLI only.',
+  's6.cliRemoteSource':
+    '↑ The version above comes from the remote VM “{name}” — the local machine has no claude CLI installed (the app never auto-installs; use the manual installer below if you need it locally)',
   's6.remotePathLabel': 'Absolute path inside the VM',
   's6.browse': 'Browse…',
   's6.register': 'Register',

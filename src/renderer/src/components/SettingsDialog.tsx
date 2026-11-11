@@ -1537,9 +1537,21 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 {installed && (
                   <>
                     <div className="kv">{t('settings.cliVersion', { version: cliInfo.version })}</div>
-                    <div className="kv path" title={cliInfo.path}>
-                      {t('settings.cliPath', { path: cliInfo.path })}
-                    </div>
+                    {/* v1.6.2：远程上下文版本来源标注——远程连接活跃时版本检测走 VM，
+                        未标注时用户会误读本机已装（实测反馈）；本机从未自动安装 */}
+                    {cliInfo.path.startsWith('ssh:') && (
+                      <div className="kv path" data-testid="cli-remote-source">
+                        {t('s6.cliRemoteSource', {
+                          name:
+                            connections.find((c) => cliInfo.path === `ssh:${c.id}`)?.name ?? ''
+                        })}
+                      </div>
+                    )}
+                    {!cliInfo.path.startsWith('ssh:') && (
+                      <div className="kv path" title={cliInfo.path}>
+                        {t('settings.cliPath', { path: cliInfo.path })}
+                      </div>
+                    )}
                   </>
                 )}
                 {cliInfo !== null && !installed && (

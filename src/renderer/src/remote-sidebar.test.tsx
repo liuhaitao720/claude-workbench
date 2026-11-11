@@ -800,4 +800,17 @@ describe('设置中心「远程连接」分类', () => {
       await within(dialog).findByText(/远程任务使用 VM 内的 claude CLI/)
     ).toBeDefined()
   })
+
+  // v1.6.2：远程上下文版本来源标注（实测反馈——VM 版本被误读为本机已装）
+  it('claude CLI 版本来自远程（path=ssh:*）→ 显示远程来源标注，不显示本机路径', async () => {
+    const api = await renderApp()
+    vi.mocked(api.getClaudeVersionInfo).mockResolvedValue({ version: '1.0.72', path: 'ssh:c1' })
+    fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
+    const dialog = await screen.findByRole('dialog', { name: '设置' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'claude CLI' }))
+    const source = await within(dialog).findByTestId('cli-remote-source')
+    expect(source.textContent).toContain('VM')
+    expect(source.textContent).toContain(conn.name)
+    expect(within(dialog).queryByText(/路径：/)).toBeNull()
+  })
 })
