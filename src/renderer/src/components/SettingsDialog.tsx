@@ -410,9 +410,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         setNotifyEnabled(c.enabled)
       })
       .catch(() => {})
-    // v1.4 模型服务档案（读取失败保持空列表，不阻塞弹窗）
+    // v1.4 模型服务档案（读取失败保持空列表，不阻塞弹窗；v1.7.2 穿 cid——
+    // 此前漏穿导致远程作用域短暂显示本机清单）
     window.cwb
-      .listProviders()
+      .listProviders(scopeCid)
       .then(setProviderState)
       .catch(() => {})
     // v1.4 本地代理状态
@@ -432,7 +433,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   }, [
     scope,
     isLocalScope,
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshCliInfo 闭包随 scope 变化重拉
+    scopeConnected,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshCliInfo 闭包随 scope/连接态变化重拉
   ])
 
   /** v1.4 模型服务页激活时轮询代理状态（时长/统计刷新；离开即停） */

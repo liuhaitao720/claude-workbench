@@ -540,6 +540,23 @@ describe('设置中心「远程连接」分类', () => {
     expect(saved.keyPath).toBe('C:\\Users\\me\\.ssh\\id_ed25519')
   })
 
+  // v1.7.2：连接与自检页自带连接入口（用户实测——此前要到 CLI 锁定页才有连接按钮）
+  it('连接与自检页：当前作用域状态卡常驻——离线显「连接」点击调 connectConnection；已连接显「断开」', async () => {
+    const api = await renderApp()
+    fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
+    await screen.findByRole('dialog', { name: '设置' })
+    fireEvent.click(screen.getByTestId('scope-tab-c1'))
+    const card = await screen.findByTestId('conn-scope-card')
+    const connectBtn = within(card).getByRole('button', { name: '连接' })
+    fireEvent.click(connectBtn)
+    await waitFor(() => expect(api.connectConnection).toHaveBeenCalledWith('c1'))
+    // 已连接态 → 按钮翻转为断开
+    act(() => {
+      useAppStore.setState({ connectionStates: { c1: { state: 'connected' } } })
+    })
+    expect(await within(screen.getByTestId('conn-scope-card')).findByRole('button', { name: '断开' })).toBeDefined()
+  })
+
   // 回归（password 契约 bug）：明文密码必须走一次性 password 字段——
   // 历史实现误放 passwordEncrypted，main 侧视为既有密文透传而在 save 合并时丢弃
   // → 新建密码认证连接保存必失败（「密码认证必须提供密码」→ 通用「保存失败」）

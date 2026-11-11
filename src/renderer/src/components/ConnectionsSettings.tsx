@@ -93,6 +93,8 @@ export function ConnectionsSection({
   const saveConnectionFlow = useAppStore((s) => s.saveConnectionFlow)
   const removeConnectionFlow = useAppStore((s) => s.removeConnectionFlow)
   const setSettingsScope = useAppStore((s) => s.setSettingsScope)
+  const connectFlow = useAppStore((s) => s.connectFlow)
+  const disconnectFlow = useAppStore((s) => s.disconnectFlow)
   const [form, setForm] = useState<ConnFormState | null>(() => {
     if (startInAdd) return emptyConnForm()
     if (initialEditId === null) return null
@@ -205,6 +207,35 @@ export function ConnectionsSection({
   return (
     <div className="dialog-section">
       <p className="section-title">{t('conn.dialog.title')}</p>
+      {/* v1.7.2（用户实测反馈）：当前作用域连接状态卡——「连接与自检」页必须自带
+          连接/断开入口（此前仅锁定页 CTA 与侧栏菜单可达）；__new__/本机作用域不渲染 */}
+      {(() => {
+        const scope = useAppStore.getState().settingsScope
+        const cur = connections.find((c) => c.id === scope)
+        if (cur === undefined) return null
+        const st = connectionStates[cur.id]?.state ?? 'offline'
+        return (
+          <div className="conn-scope-card" data-testid="conn-scope-card">
+            <span className="conn-pill" data-state={st} title={connStateText(t, st)}>
+              {connStateText(t, st)}
+            </span>
+            <span className="provider-url" title={`${cur.user}@${cur.host}:${cur.port}`}>
+              {cur.user}@{cur.host}:{cur.port}
+            </span>
+            <span className="conn-scope-acts">
+              {st === 'connected' ? (
+                <button type="button" className="btn" onClick={() => void disconnectFlow(cur.id)}>
+                  {t('conn.menu.disconnect')}
+                </button>
+              ) : (
+                <button type="button" className="btn primary" onClick={() => void connectFlow(cur.id)}>
+                  {t('conn.menu.connect')}
+                </button>
+              )}
+            </span>
+          </div>
+        )
+      })()}
       {form === null ? (
         <>
           {connections.length === 0 && <p className="muted">{t('s6.connEmpty')}</p>}

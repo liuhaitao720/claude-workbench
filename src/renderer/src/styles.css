@@ -2686,3 +2686,21 @@ button {
 }
 .provider-copy-pop button:hover { background: var(--bg-hover); color: var(--text-1); }
 .provider-copy-pop .cap { font-size: 10px; color: var(--text-4); padding: 4px 12px 2px; }
+
+/* v1.7.2 连接与自检页顶部的当前作用域状态卡（连接/断开入口常驻） */
+.conn-scope-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+}
+
+.conn-scope-card .conn-scope-acts {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}

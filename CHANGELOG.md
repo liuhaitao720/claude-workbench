@@ -2,6 +2,12 @@
 
 SSH Workbench 版本更新说明（新版本在前；应用内「设置 → 应用更新」读取本文件展示）。v1.5.0 前产品名为 Claude Workbench。
 
+## 1.7.2
+
+- **「连接与自检」页自带连接入口**（用户实测反馈：此前要到 claude CLI 锁定页才有连接按钮）——页顶新增当前作用域状态卡：连接状态胶囊 + 主机摘要 + 「连接/断开」主按钮（离线=连接、已连接=断开）
+- **修复：远程连接成功后 claude CLI 版本不刷新**——版本拉取 effect 未依赖连接状态，离线时拉过一次失败后（显示"未安装"）连接成功不会重拉；现连上即重拉版本/更新信息
+- 修复：作用域切换时模型服务档案短暂显示本机清单（mount effect 的 listProviders 漏穿 cid）
+
 ## 1.7.1
 
 - **修复：远程作用域「更新 claude CLI」跑错侧**（Windows 实测）——更新按钮漏传作用域 cid，`claude update` 在 Windows 本机执行而非 VM；现远程作用域经 cid 走 runRemote（Linux bash -ic 包装，VM 内执行）。Skills 分类的 CLI 命令输入同链路修复
