@@ -132,6 +132,16 @@ async function addProjectWithConnection(dir: string, connectionId: string): Prom
  */
 const NEED_INSTALL_RE = /needinstall|cwb-server/i
 
+/**
+ * connectFlow 失败 → 判定「TOFU 首连待确认」的错误信号：main 侧 ConnectionsConnect
+ * 对 hostKeyConfirm 类错误按 NEED_INSTALL_RE 先例在 message 前缀 [cwb:host-key-confirm]
+ * （IPC 错误只保 message，ConnectionError 自定义字段不穿越序列化）。
+ */
+const HOST_KEY_CONFIRM_RE = /host-key-confirm/i
+
+/** 错误文案中内嵌指纹的提取（SHA256:base64(32B)=43 字符无填充，与 ssh-keygen -lf 同源） */
+const FINGERPRINT_RE = /(SHA256:[A-Za-z0-9+/]{43})/
+
 /** server 日志环形缓冲上限（8.1=A：仅脱敏元数据，弹窗进度展示够用即可） */
 const SERVER_LOG_CAP = 100
 
@@ -209,11 +219,21 @@ interface AppState {
   uiSettings: SidebarPrefs
   /** server 安装/升级确认弹窗目标（connectFlow 的 needInstall 信号触发，6.7=A） */
   pendingServerInstall: { connectionId: string } | null
+  /**
+   * TOFU 首连待确认（connectFlow 的 hostKeyConfirm 信号触发——main 侧 ConnectionsConnect
+   * 以 [cwb:host-key-confirm] token 前缀标记；设置页「测试连接」路径已有同等确认 UI，
+   * 此处补齐侧栏/终端等直连入口：确认后写档案锁定指纹并自动重连）
+   */
+  pendingHostKeyConfirm: { connectionId: string; fingerprint: string } | null
+  /** 保存连接档案的具体错误文案（saveConnectionFlow 失败落值；设置表单在通用文案旁展示） */
+  connectionSaveError: string
+  /** 连接失败的具体错误（connectFlow 非 needInstall/hostKeyConfirm 失败；轻提示浮层消费） */
+  connectError: { connectionId: string; message: string } | null
 
   loadConnectionsFlow: () => Promise<void>
   /** 侧栏持久化键拉取（getAppSettings → uiSettings；loadAll 独立调用） */
   loadSidebarPrefs: () => Promise<void>
-  /** 新增/编辑连接档案；失败返回 null（错误已 console.error，调用方可另示反馈） */
+  /** 新增/编辑连接档案；失败返回 null（具体错误文案落 connectionSaveError） */
   saveConnectionFlow: (input: ConnectionRecord) => Promise<ConnectionRecord | null>
   /**
    * 删除连接档案（3.9=A 级联语义：仅删客户端记录与档案，不删 VM 内任何文件）。
@@ -222,6 +242,12 @@ interface AppState {
   removeConnectionFlow: (id: string) => Promise<void>
   /** 手动连接（懒连接 2.5=a 之外的显式入口；状态迁移经 onConnectionState 推送） */
   connectFlow: (id: string) => Promise<void>
+  /** TOFU 确认（HostKeyConfirmDialog）：锁定指纹到档案 → 自动重连 */
+  confirmHostKeyFlow: (fingerprint: string) => Promise<void>
+  /** 关闭 TOFU 确认弹窗（不确认、不重连） */
+  dismissHostKeyConfirm: () => void
+  /** 关闭连接失败提示 */
+  dismissConnectError: () => void
   /** 断开（5.9=b：断开不杀远端会话，server 保活） */
   disconnectFlow: (id: string) => Promise<void>
   /**
@@ -363,10 +389,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
   saveConnectionFlow: async (input) => {
     try {
       const saved = await window.cwb.saveConnection(input)
+      set({ connectionSaveError: '' })
       await get().loadConnectionsFlow()
       return saved
     } catch (err) {
       console.error('[cwb] saveConnection failed:', err)
+      // 具体错误文案透传 UI（「详见运行日志」在打包态对用户不可达——DevTools 不开）
+      set({ connectionSaveError: err instanceof Error ? err.message : String(err) })
       return null
     }
   },
@@ -420,17 +449,46 @@ export const useAppStore = create<AppState>()((set, get) => ({
   connectFlow: async (id) => {
     try {
       await window.cwb.connectConnection(id)
+      set({ connectError: null })
       // 状态迁移不在此落地——A2 权属：ConnectionStateChanged 由 S2 唯一产生（经订阅回填）
     } catch (err) {
-      if (err instanceof Error && NEED_INSTALL_RE.test(err.message)) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (NEED_INSTALL_RE.test(message)) {
         // 6.7=A 首连推送：server 组件缺失/需升级 → 确认弹窗（installRemoteServer
         // 的 promise 形态由弹窗消费）
         set({ pendingServerInstall: { connectionId: id } })
         return
       }
+      // TOFU 首连（main 侧 [cwb:host-key-confirm] token；指纹内嵌于错误文案）→
+      // 确认弹窗（设置页测试连接路径的同等语义——侧栏/终端直连入口补齐）
+      if (HOST_KEY_CONFIRM_RE.test(message)) {
+        const fingerprint = FINGERPRINT_RE.exec(message)?.[1]
+        if (fingerprint !== undefined) {
+          set({ pendingHostKeyConfirm: { connectionId: id, fingerprint } })
+          return
+        }
+      }
       console.error('[cwb] connectConnection failed:', err)
+      // 其余失败（refused/timeout/auth/自检阻断…）：具体文案浮出（此前仅
+      // console.error——用户侧表现为「点了没反应」）
+      set({ connectError: { connectionId: id, message } })
     }
   },
+
+  confirmHostKeyFlow: async (fingerprint) => {
+    const pending = get().pendingHostKeyConfirm
+    if (pending === null) return
+    set({ pendingHostKeyConfirm: null })
+    const existing = get().connections.find((c) => c.id === pending.connectionId)
+    if (existing === undefined) return
+    // 照设置页 confirmHostKey 先例：指纹写入档案锁定 → 自动重连
+    const saved = await get().saveConnectionFlow({ ...existing, lastHostKeyFingerprint: fingerprint })
+    if (saved !== null) void get().connectFlow(pending.connectionId)
+  },
+
+  dismissHostKeyConfirm: () => set({ pendingHostKeyConfirm: null }),
+
+  dismissConnectError: () => set({ connectError: null }),
 
   disconnectFlow: async (id) => {
     try {
@@ -661,6 +719,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   serverLogs: [],
   uiSettings: {},
   pendingServerInstall: null,
+  pendingHostKeyConfirm: null,
+  connectionSaveError: '',
+  connectError: null,
   settingsOpenSection: 'general',
   settingsEditConnectionId: null,
 

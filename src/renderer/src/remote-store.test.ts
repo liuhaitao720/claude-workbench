@@ -33,6 +33,9 @@ beforeEach(() => {
     serverLogs: [],
     uiSettings: {},
     pendingServerInstall: null,
+    pendingHostKeyConfirm: null,
+    connectionSaveError: '',
+    connectError: null,
     settingsOpenSection: 'general',
     settingsEditConnectionId: null
   })
@@ -169,6 +172,94 @@ describe('connectFlow needInstall 信号（6.7=A 弹窗触发）', () => {
       api.connectionStateCallbacks.forEach((cb) => cb({ connectionId: 'c1', state: 'connected' }))
     })
     expect(useAppStore.getState().pendingServerInstall).toBeNull()
+  })
+})
+
+describe('connectFlow hostKeyConfirm 信号（TOFU 首连——侧栏/终端直连入口补齐）', () => {
+  // 指纹为 base64(sha256) 无填充=43 字符（FINGERPRINT_RE 提取口径；测试数据须同长）
+  const FP = 'SHA256:AbCdEf1234567890AbCdEf1234567890AbCdEf12345'
+
+  it('[cwb:host-key-confirm] token + 内嵌指纹 → pendingHostKeyConfirm；确认 → 写档案锁定 + 自动重连', async () => {
+    installCwbMock()
+    useAppStore.setState({ connections: [conn] })
+    const cwb = window.cwb
+    vi.mocked(cwb.connectConnection).mockRejectedValueOnce(
+      new Error(`[cwb:host-key-confirm] 首次连接：请确认主机指纹后重试（${FP}）`)
+    )
+    await act(async () => {
+      await useAppStore.getState().connectFlow('c1')
+    })
+    expect(useAppStore.getState().pendingHostKeyConfirm).toEqual({
+      connectionId: 'c1',
+      fingerprint: FP
+    })
+
+    await act(async () => {
+      await useAppStore.getState().confirmHostKeyFlow(FP)
+    })
+    expect(cwb.saveConnection).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', lastHostKeyFingerprint: FP })
+    )
+    expect(cwb.connectConnection).toHaveBeenCalledWith('c1')
+    expect(useAppStore.getState().pendingHostKeyConfirm).toBeNull()
+  })
+
+  it('hostKeyConfirm 指纹缺失（token 在但无 SHA256 段）→ 回退 connectError 浮出', async () => {
+    installCwbMock()
+    useAppStore.setState({ connections: [conn] })
+    vi.mocked(window.cwb.connectConnection).mockRejectedValueOnce(
+      new Error('[cwb:host-key-confirm] 首次连接：请确认主机指纹后重试')
+    )
+    await act(async () => {
+      await useAppStore.getState().connectFlow('c1')
+    })
+    expect(useAppStore.getState().pendingHostKeyConfirm).toBeNull()
+    expect(useAppStore.getState().connectError?.connectionId).toBe('c1')
+  })
+
+  it('其余错误 → connectError 具体文案浮出（此前仅 console.error——用户侧静默）', async () => {
+    installCwbMock()
+    useAppStore.setState({ connections: [conn] })
+    vi.mocked(window.cwb.connectConnection).mockRejectedValue(
+      new Error('连接超时：VM 未启动或 NAT 未转发')
+    )
+    await act(async () => {
+      await useAppStore.getState().connectFlow('c1')
+    })
+    expect(useAppStore.getState().connectError).toEqual({
+      connectionId: 'c1',
+      message: '连接超时：VM 未启动或 NAT 未转发'
+    })
+    // 成功连接后清提示
+    vi.mocked(window.cwb.connectConnection).mockResolvedValue(undefined)
+    await act(async () => {
+      await useAppStore.getState().connectFlow('c1')
+    })
+    expect(useAppStore.getState().connectError).toBeNull()
+  })
+})
+
+describe('saveConnectionFlow 错误透传（password 契约 bug 修复的回归面）', () => {
+  it('失败 → null + connectionSaveError 落具体文案；成功 → 清空', async () => {
+    installCwbMock()
+    useAppStore.setState({ connections: [] })
+    const cwb = window.cwb
+    vi.mocked(cwb.saveConnection).mockRejectedValueOnce(new Error('密码认证必须提供密码'))
+    let saved: unknown = 'unset'
+    await act(async () => {
+      saved = await useAppStore.getState().saveConnectionFlow(
+        makeConnection({ id: '', authMethod: 'password' })
+      )
+    })
+    expect(saved).toBeNull()
+    expect(useAppStore.getState().connectionSaveError).toBe('密码认证必须提供密码')
+
+    vi.mocked(cwb.saveConnection).mockResolvedValueOnce(makeConnection({ id: 'c-new' }))
+    await act(async () => {
+      saved = await useAppStore.getState().saveConnectionFlow(makeConnection({ id: '' }))
+    })
+    expect(saved).not.toBeNull()
+    expect(useAppStore.getState().connectionSaveError).toBe('')
   })
 })
 

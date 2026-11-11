@@ -536,6 +536,29 @@ describe('设置中心「远程连接」分类', () => {
     expect(saved.keyPath).toBe('C:\\Users\\me\\.ssh\\id_ed25519')
   })
 
+  // 回归（password 契约 bug）：明文密码必须走一次性 password 字段——
+  // 历史实现误放 passwordEncrypted，main 侧视为既有密文透传而在 save 合并时丢弃
+  // → 新建密码认证连接保存必失败（「密码认证必须提供密码」→ 通用「保存失败」）
+  it('连接档案 CRUD：密码认证保存 → 明文经一次性 password 字段（非 passwordEncrypted）', async () => {
+    const { api, section } = await openConnectionsSection()
+    fireEvent.click(within(section).getByRole('button', { name: '新增连接' }))
+    const form = screen.getByRole('form', { name: '远程连接' })
+    fireEvent.change(within(form).getByLabelText('名称'), { target: { value: 'VM-pw' } })
+    fireEvent.change(within(form).getByLabelText('主机'), { target: { value: '192.168.142.128' } })
+    fireEvent.change(within(form).getByLabelText('用户名'), { target: { value: 'liuhait1' } })
+    fireEvent.click(within(form).getByRole('radio', { name: '密码' }))
+    // 「密码」同时命中 radio（label 包裹文本）与密码输入框（aria-label）——selector 限定
+    fireEvent.change(within(form).getByLabelText('密码', { selector: 'input[type="password"]' }), {
+      target: { value: 'pw-plain-123' }
+    })
+    fireEvent.click(within(form).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(api.saveConnection).toHaveBeenCalled())
+    const saved = vi.mocked(api.saveConnection).mock.calls[0][0]
+    expect(saved.authMethod).toBe('password')
+    expect(saved.password).toBe('pw-plain-123')
+    expect(saved.passwordEncrypted).toBeUndefined()
+  })
+
   it('测试连接（2.1/2.2）：连接类失败展示分级错误 + 四类排障提示（9.2）', async () => {
     const api = await renderApp()
     vi.mocked(api.testConnection).mockResolvedValue({
@@ -637,7 +660,7 @@ describe('设置中心「远程连接」分类', () => {
     expect(within(result).queryByRole('button', { name: '确认并锁定指纹' })).toBeNull()
   })
 
-  it('私钥认证可选口令（S2 语义）：key 模式填口令 → saveConnection 带 passwordEncrypted', async () => {
+  it('私钥认证可选口令（S2 语义）：key 模式填口令 → saveConnection 带一次性 password（非 passwordEncrypted——契约修复）', async () => {
     const api = await renderApp()
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
     const dialog = await screen.findByRole('dialog', { name: '设置' })
@@ -652,12 +675,14 @@ describe('设置中心「远程连接」分类', () => {
     })
     fireEvent.click(within(form).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(api.saveConnection).toHaveBeenCalled())
-    expect(vi.mocked(api.saveConnection).mock.calls[0][0]).toMatchObject({
+    const saved = vi.mocked(api.saveConnection).mock.calls[0][0]
+    expect(saved).toMatchObject({
       id: 'c1',
       authMethod: 'key',
       keyPath: 'C:\\Users\\me\\.ssh\\id_ed25519',
-      passwordEncrypted: 'ssh-pass-123'
+      password: 'ssh-pass-123'
     })
+    expect(saved.passwordEncrypted).toBeUndefined()
   })
 
   it('远程代理面板（6.4=c）：状态卡读取 + 配置保存回环（A5 UI 桩测）', async () => {

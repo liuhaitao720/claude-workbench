@@ -58,6 +58,7 @@ import {
   parseConnectionInput
 } from './connections-store'
 import { testConnectionRecord } from './ssh/test-connection'
+import { ConnectionError } from './ssh/errors'
 import { browseRemoteDir } from './ssh/manager'
 import { ensureServer } from './server-installer'
 
@@ -1438,7 +1439,18 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     if (typeof id !== 'string' || id === '') {
       throw new Error(connectionMessage(mainLanguage(), 'shape'))
     }
-    await ctx.connection.connect(id)
+    try {
+      await ctx.connection.connect(id)
+    } catch (err) {
+      // TOFU 首连（hostKeyConfirm）：需 UI 确认指纹后锁定重连。IPC 错误只保
+      // message（自定义字段不穿越序列化），故照 needInstall token 先例在
+      // message 前缀 [cwb:host-key-confirm] 供 renderer connectFlow 分流弹窗；
+      // 指纹已在 ConnectionError.message 的（SHA256:xxx）括号段内。
+      if (err instanceof ConnectionError && err.kind === 'hostKeyConfirm') {
+        throw new Error(`[cwb:host-key-confirm] ${err.message}`)
+      }
+      throw err
+    }
     // S4 健康检查（SSH 已通前提下）：不可达 → needInstall token 错误（见上方注释）
     await ctx.remotePty.ensureConnected(id)
   })

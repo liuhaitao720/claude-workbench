@@ -7,6 +7,7 @@ import { SmokeBridge } from './components/SmokeBridge'
 import { SkillsDialog } from './components/SkillsDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { ServerInstallDialog } from './components/ServerInstallDialog'
+import { ConnectErrorToast, HostKeyConfirmDialog } from './components/HostKeyConfirmDialog'
 import { useI18n, syncLanguageToMain } from './i18n'
 
 /** ?smoke=1：--smoke 冒烟模式下 main 注入的 URL query（模块加载时解析一次，运行期不变） */
@@ -88,6 +89,10 @@ export function App() {
           onClose={() => useAppStore.getState().dismissServerInstall()}
         />
       )}
+      {/* TOFU 首连确认（侧栏/终端直连入口；设置页测试连接路径已有同等 UI） */}
+      <HostKeyConfirmDialog />
+      {/* 连接失败具体文案浮出（此前仅 console.error——用户侧「点了没反应」） */}
+      <ConnectErrorToast />
     </div>
   )
 }

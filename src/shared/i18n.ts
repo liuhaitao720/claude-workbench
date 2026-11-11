@@ -522,6 +522,10 @@ export const zh = {
     '私钥口令与密码同样经系统凭据保护加密保存；编辑时留空=保持原值（无口令私钥可不填）',
   's6.hostKeyFingerprint': '主机指纹',
   's6.confirmHostKey': '确认并锁定指纹',
+  's6.hostKeyConfirmTitle': '确认主机指纹',
+  's6.hostKeyConfirmBody':
+    '首次连接该主机。请核对指纹与远端 ssh-keygen -lf 输出一致后确认锁定；不一致切勿继续（疑似中间人）',
+  's6.connectFailedToast': '连接失败',
   's6.hostKeyChangedWarn':
     '指纹与已锁定值不一致，连接已阻断——确认是 VM 重装等预期变更后，重新确认锁定新指纹',
   // ── 远程代理面板（6.4=c：配置存 VM 侧，客户端经 SSH/server 协议读写） ──────
@@ -1066,6 +1070,10 @@ export const en: Record<MessageKey, string> = {
     'The key passphrase is stored encrypted exactly like the password; leave blank when editing to keep the current value (skip for passphrase-less keys)',
   's6.hostKeyFingerprint': 'Host key fingerprint',
   's6.confirmHostKey': 'Confirm and lock fingerprint',
+  's6.hostKeyConfirmTitle': 'Confirm host key',
+  's6.hostKeyConfirmBody':
+    'First connection to this host. Verify the fingerprint matches ssh-keygen -lf output on the remote before confirming; do NOT continue if it differs (possible MITM)',
+  's6.connectFailedToast': 'Connection failed',
   's6.hostKeyChangedWarn':
     'The fingerprint no longer matches the locked value; the connection is blocked — after confirming an expected change (e.g. VM reinstall), confirm and lock the new fingerprint',
   's6.remoteProxy': 'Remote proxy',

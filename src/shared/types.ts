@@ -236,6 +236,16 @@ export interface ConnectionRecord {
    * （1.4=A：Electron safeStorage 加密存 userData，凭据不落明文不入仓库）。
    * 仅 S2 connections-store 读写；renderer 经 saveConnection 传入后不回读展示。
    */
+  /**
+   * 一次性明文 password（saveConnection 单程传递专用）：
+   * authMethod='password' 时=SSH 密码，'key' 时=可选私钥口令。
+   * 仅 main 侧 parseConnectionInput 读取并即刻 safeStorage 加密，绝不进任何
+   * 持久化/日志/回传（list()/get() 输出与 store 内部档案均不含本字段）。
+   * 注意：把明文放进 passwordEncrypted 会被 main 视为既有密文原样传入而在
+   * save 合并时丢弃（历史 bug：新建密码认证连接保存必失败——密码认证必须
+   * 提供密码）。
+   */
+  password?: string
   passwordEncrypted?: string
   /**
    * TOFU 首连确认后锁定的 host key 指纹（1.5=A）；后续指纹变更阻断+告警（S2）。

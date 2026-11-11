@@ -136,15 +136,20 @@ export function ConnectionsSection({ initialEditId }: { initialEditId: string | 
       user: form.user.trim(),
       authMethod: form.authMethod,
       ...(form.authMethod === 'key' ? { keyPath: form.keyPath.trim() } : {}),
-      // 明文仅经 IPC 单程传递（S2 落盘前 safeStorage 加密）；留空=保持原值。
-      // S2 语义：key 模式下该字段复用为可选的私钥口令密文——两种认证方式统一传递
-      ...(form.password !== '' ? { passwordEncrypted: form.password } : {}),
+      // 明文仅经 IPC 单程传递（main 侧 parseConnectionInput 读取后即刻 safeStorage
+      // 加密；字段名必须用一次性 password——放进 passwordEncrypted 会被
+      // main 当作既有密文透传而在 save 合并时丢弃 → 新建密码认证连接必失败）。
+      // 留空=保持原值。
+      ...(form.password !== '' ? { password: form.password } : {}),
       createdAt: editing?.createdAt ?? new Date().toISOString()
     }
     setFormError('')
     const saved = await saveConnectionFlow(rec)
     if (saved === null) {
-      setFormError(t('s6.saveFailed'))
+      // 具体错误（「密码认证必须提供密码」等）透传展示——打包态用户无法开 DevTools
+      // 看运行日志，「详见运行日志」等于没有信息
+      const detail = useAppStore.getState().connectionSaveError
+      setFormError(detail !== '' ? `${t('s6.saveFailed')}${detail}` : t('s6.saveFailed'))
       return
     }
     setForm(null)
@@ -261,7 +266,7 @@ export function ConnectionsSection({ initialEditId }: { initialEditId: string | 
                   className="settings-input grow mono"
                   type="text"
                   aria-label={t('conn.dialog.host')}
-                  placeholder="192.168.80.128"
+                  placeholder="192.168.142.128"
                   value={form.host}
                   onChange={(e) => setForm({ ...form, host: e.target.value })}
                 />
