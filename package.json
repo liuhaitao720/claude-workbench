@@ -1,6 +1,6 @@
 {
   "name": "ssh-workbench",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "productName": "SSH Workbench",
   "description": "SSH Workbench——多项目多任务终端工作台（Claude Code 本机与 SSH 远程）",
   "private": true,

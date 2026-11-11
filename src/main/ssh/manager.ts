@@ -547,20 +547,49 @@ function sanitize(s: string): string {
 export class RealSftpSession implements SftpSession {
   constructor(private readonly sftp: SFTPWrapper) {}
 
-  /** 目录清单（S6 注册对话框浏览器；名字排序；不含 . / ..） */
+  /**
+   * 目录清单（S6 注册对话框浏览器；名字排序；不含 . / ..）。
+   * v1.5.4（用户 Windows 实测反馈）：仅返回目录——该清单的用途是「远程项目根
+   * 目录选择器」，文件对用户是噪音；指向目录的符号链接（readdir attrs 为
+   * LNK 模式 120777 → isDirectory()=false，被误判为文件）以 stat（跟链）复核
+   * 纳入——死链/指向文件的链接自然落选。
+   */
   async list(dir: string): Promise<Array<{ name: string; isDir: boolean }>> {
-    const entries = await new Promise<Array<{ filename: string; attrs: { isDirectory(): boolean } }>>(
+    const entries = await new Promise<Array<{ filename: string; attrs: { isDirectory(): boolean; mode?: number } }>>(
       (resolve, reject) => {
         this.sftp.readdir(dir, (err, list) => {
           if (err != null) reject(new Error(sanitize(err.message)))
-          else resolve(list as Array<{ filename: string; attrs: { isDirectory(): boolean } }>)
+          else resolve(list as Array<{ filename: string; attrs: { isDirectory(): boolean; mode?: number } }>)
         })
       }
     )
-    return entries
-      .filter((e) => e.filename !== '.' && e.filename !== '..')
-      .map((e) => ({ name: e.filename, isDir: e.attrs.isDirectory() }))
-      .sort((a, b) => a.name.localeCompare(b.name))
+    const S_IFMT = 0o170000
+    const S_IFLNK = 0o120000
+    const out: Array<{ name: string; isDir: boolean }> = []
+    for (const e of entries) {
+      if (e.filename === '.' || e.filename === '..') continue
+      if (e.attrs.isDirectory()) {
+        out.push({ name: e.filename, isDir: true })
+        continue
+      }
+      // 符号链接：跟链 stat 复核目标是否目录（每链接一次往返——目录内链接通常少量）
+      const mode = e.attrs.mode ?? 0
+      if ((mode & S_IFMT) === S_IFLNK) {
+        const st = await this.statFile(`${dir === '/' ? '' : dir}/${e.filename}`).catch(() => null)
+        if (st?.isDirectory() === true) out.push({ name: e.filename, isDir: true })
+      }
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  /** SFTP stat（跟符号链接；list 的 LNK 复核用——路径为远端 POSIX 形态，手动拼接防 Windows path.join 反斜杠） */
+  private async statFile(path: string): Promise<{ isDirectory(): boolean }> {
+    return new Promise((resolve, reject) => {
+      this.sftp.stat(path, (err, st) => {
+        if (err != null) reject(new Error(sanitize(err.message)))
+        else resolve(st as { isDirectory(): boolean })
+      })
+    })
   }
 
   async readFile(path: string): Promise<Buffer> {

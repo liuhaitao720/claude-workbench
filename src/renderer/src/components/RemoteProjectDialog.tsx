@@ -223,15 +223,8 @@ function RemoteDirBrowser({
                 </button>
               </li>
             ))}
-          {/* 文件仅展示（灰）——远程项目根须为目录 */}
-          {result?.ok === true &&
-            (result.entries ?? [])
-              .filter((e) => !e.isDir)
-              .map((e) => (
-                <li key={e.name}>
-                  <span className="sftp-entry file">📄 {e.name}</span>
-                </li>
-              ))}
+          {/* v1.5.4（用户指令）：只显示目录——main 侧 list() 已只返回目录（含
+              指向目录的符号链接，LNK 跟链 stat 复核），文件不再展示 */}
         </ul>
         <div className="dialog-actions">
           <button

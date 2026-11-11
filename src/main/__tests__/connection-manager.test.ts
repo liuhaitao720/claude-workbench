@@ -13,7 +13,7 @@ import { Server as SshServer } from 'ssh2'
 import { IpcChannels } from '../../shared/ipc-channels'
 import type { ConnectionManager } from '../ssh/connection-manager'
 import { ConnectionError } from '../ssh/errors'
-import { RealConnectionManager, browseRemoteDir } from '../ssh/manager'
+import { RealConnectionManager, RealSftpSession, browseRemoteDir } from '../ssh/manager'
 import { createSshConnectionStack } from '../ssh'
 import {
   ConnectionsStore,
@@ -875,10 +875,8 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
 
     // browseRemoteDir：缺省请求=远端 home（realpath('.')）；失败 → ok:false 分级文案
     const fakeSession = {
-      list: async () => [
-        { name: 'proj-a', isDir: true },
-        { name: 'notes.txt', isDir: false }
-      ],
+      // v1.5.4 语义：list() 只返回目录（真实链路 RealSftpSession.list 见 ⑧b）
+      list: async () => [{ name: 'proj-a', isDir: true }],
       realpath: async (p: string) => (p === '.' ? '/home/vmuser' : p)
     }
     const fakeMgr = { sftp: async () => fakeSession } as unknown as ConnectionManager
@@ -886,10 +884,7 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
     expect(await browseRemoteDir(fakeMgr, 'c1')).toEqual({
       ok: true,
       path: '/home/vmuser',
-      entries: [
-        { name: 'proj-a', isDir: true },
-        { name: 'notes.txt', isDir: false }
-      ]
+      entries: [{ name: 'proj-a', isDir: true }]
     })
     const failing = {
       sftp: async (): Promise<never> => {
@@ -899,6 +894,37 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
     const res = await browseRemoteDir(failing, 'c1')
     expect(res.ok).toBe(false)
     expect(res.error).toContain('认证失败')
+  })
+
+  // v1.5.4（用户 Windows 实测）：指向目录的符号链接在 readdir 中 mode=LNK →
+  // isDirectory()=false 被误判为文件；跟链 stat 复核纳入，且 list 只返回目录
+  it('⑧b RealSftpSession.list：LNK 指向目录经 stat 复核纳入；死链/文件排除；仅返回目录', async () => {
+    const statCalls: string[] = []
+    const wrapper = {
+      readdir: (_dir: string, cb: (e: Error | null, l?: unknown[]) => void) => {
+        cb(null, [
+          { filename: 'real-dir', attrs: { isDirectory: () => true, mode: 0o40755 } },
+          { filename: 'file.txt', attrs: { isDirectory: () => false, mode: 0o100644 } },
+          { filename: 'link-dir', attrs: { isDirectory: () => false, mode: 0o120777 } },
+          { filename: 'link-dead', attrs: { isDirectory: () => false, mode: 0o120777 } },
+          { filename: '.', attrs: { isDirectory: () => true, mode: 0o40755 } },
+          { filename: '..', attrs: { isDirectory: () => true, mode: 0o40755 } }
+        ])
+      },
+      stat: (p: string, cb: (e: Error | null, st?: unknown) => void) => {
+        statCalls.push(p)
+        if (p === '/home/dir/link-dir') cb(null, { isDirectory: () => true })
+        else cb(new Error('No such file'))
+      }
+    } as unknown as import('ssh2').SFTPWrapper
+    const session = new RealSftpSession(wrapper)
+    const out = await session.list('/home/dir')
+    expect(out).toEqual([
+      { name: 'link-dir', isDir: true },
+      { name: 'real-dir', isDir: true }
+    ])
+    // 只有 LNK 条目触发 stat（普通文件/目录零额外往返）
+    expect(statCalls).toEqual(['/home/dir/link-dir', '/home/dir/link-dead'])
   })
 })
 
@@ -979,10 +1005,25 @@ describe('L2.5 S2 装配（createAppContext 注入 Real 栈 / broadcast 到 EVEN
     // Connect：真实状态机 → connecting/connected 经 EVENT 面到达（A2 全链）。
     // S4：SSH 连通后连接流程做 cwb-server 健康检查（WS+ping）——mock sshd 无
     // server 监听 17717 → needInstall token 错误上抛（S6 安装弹窗触发源）；
-    // SSH 层状态机不受影响（仍 connected——SFTP/注册等非 server 用途可用）
-    await expect(invoke(IpcChannels.ConnectionsConnect, saved.id)).rejects.toThrow(
-      /need-server-install/
-    )
+    // SSH 层状态机不受影响（仍 connected——SFTP/注册等非 server 用途可用）。
+    // 环境自适应（v1.5.4）：真实 cwb-server 若在本机 17717 运行（Windows 实测
+    // 装过的存活实例——mock sshd 的 forwardOut 拨真实 TCP 即连上真 server），
+    // 健康检查通过 → Connect resolve；无 server 环境才断言 needInstall 拒绝。
+    const serverPortOpen = await new Promise<boolean>((resolve) => {
+      const sock = tcpConnect(17717, '127.0.0.1')
+      sock.once('connect', () => {
+        sock.destroy()
+        resolve(true)
+      })
+      sock.once('error', () => resolve(false))
+    })
+    if (serverPortOpen) {
+      await invoke(IpcChannels.ConnectionsConnect, saved.id)
+    } else {
+      await expect(invoke(IpcChannels.ConnectionsConnect, saved.id)).rejects.toThrow(
+        /need-server-install/
+      )
+    }
     expect(stack.getState(saved.id)).toBe('connected')
     const states = h.sentEvents
       .filter(([c]) => c === IpcChannels.ConnectionStateChanged)
