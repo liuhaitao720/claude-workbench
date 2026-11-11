@@ -704,6 +704,10 @@ export interface CWBApi {
     connectionId: string,
     patch: Partial<RemoteProxyConfig>
   ): Promise<RemoteProxyConfig>
+  /** VM 侧代理启动（v1.6.1：server 帧 proxy.start；返回启动后状态） */
+  startRemoteProxy(connectionId: string): Promise<RemoteProxyStatus>
+  /** VM 侧代理停止（v1.6.1：server 帧 proxy.stop） */
+  stopRemoteProxy(connectionId: string): Promise<RemoteProxyStatus>
 
   // ── smoke（1，测试专用）──────────────────────
   /** S4 冒烟回执：renderer 收到 PTY 数据后回报 main */

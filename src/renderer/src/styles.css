@@ -2598,3 +2598,11 @@ button {
   word-break: break-all;
   opacity: 0.92;
 }
+
+/* 远程代理状态卡动作区（v1.6.1 启停按钮；右对齐） */
+.proxy-card .proxy-actions {
+  margin-left: auto;
+  align-self: center;
+  display: flex;
+  gap: 6px;
+}

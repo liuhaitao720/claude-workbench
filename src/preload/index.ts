@@ -225,6 +225,10 @@ const api: CWBApi = {
       connectionId,
       patch
     ) as Promise<RemoteProxyConfig>,
+  startRemoteProxy: (connectionId) =>
+    ipcRenderer.invoke(IpcChannels.RemoteProxyStart, connectionId) as Promise<RemoteProxyStatus>,
+  stopRemoteProxy: (connectionId) =>
+    ipcRenderer.invoke(IpcChannels.RemoteProxyStop, connectionId) as Promise<RemoteProxyStatus>,
   reportSmoke: (payload) => {
     void ipcRenderer.send(IpcChannels.SmokeReport, payload)
   }

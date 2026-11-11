@@ -349,6 +349,15 @@ export function installCwbMock(
     setRemoteProxyConfig: vi.fn(async (_id: string, patch: Partial<RemoteProxyConfig>) => ({
       ...patch
     })),
+    startRemoteProxy: vi.fn(async () => ({
+      running: true,
+      port: 12700,
+      stats: { total: 0, active: 0, direct: 0, viaProxy: 0 }
+    })),
+    stopRemoteProxy: vi.fn(async () => ({
+      running: false,
+      stats: { total: 0, active: 0, direct: 0, viaProxy: 0 }
+    })),
     reportSmoke: vi.fn()
   }
 

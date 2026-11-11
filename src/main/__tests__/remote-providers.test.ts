@@ -121,8 +121,7 @@ describe('v1.6.0 远程模型配置（~/.cwb/providers.json 经 SSH read-modify-
     expect(curl).toContain(`'https://api.example.com/v1/models'`)
     expect(curl).toContain(`-H 'Authorization: Bearer sk'"'"'x y'`)
     // 非 200 / curl 失败的错误面
-    // @ts-expect-error 替换 exec 行为
-    mgr.exec = async () => ({ code: 28, stdout: '', stderr: 'curl: timeout' })
+    ;(mgr as { exec: unknown }).exec = async () => ({ code: 28, stdout: '', stderr: 'curl: timeout' })
     const bad = await probeRemoteModels(mgr, 'c1', provider())
     expect(bad.ok).toBe(false)
     expect(bad.error).toContain('timeout')

@@ -76,7 +76,9 @@ const HANDLE = {
   ServerInstall: 'cwb:server:install', // S7：首连推送/升级 cwb-server（6.7）
   RemoteProxyStatus: 'cwb:remote-proxy:status', // S4：VM 侧代理状态（6.4=c 协议转发）
   RemoteProxyConfigGet: 'cwb:remote-proxy:config-get', // S4：VM 侧代理配置读
-  RemoteProxyConfigSet: 'cwb:remote-proxy:config-set' // S4：VM 侧代理配置写（A5 回环）
+  RemoteProxyConfigSet: 'cwb:remote-proxy:config-set', // S4：VM 侧代理配置写（A5 回环）
+  RemoteProxyStart: 'cwb:remote-proxy:start', // v1.6.1：VM 侧代理启动（server 帧 proxy.start——S6 遗留缺口补齐）
+  RemoteProxyStop: 'cwb:remote-proxy:stop' // v1.6.1：VM 侧代理停止（server 帧 proxy.stop）
 } as const
 
 const SEND = {

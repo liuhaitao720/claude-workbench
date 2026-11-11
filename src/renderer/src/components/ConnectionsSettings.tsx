@@ -535,6 +535,26 @@ function RemoteProxyPanel() {
     }
   }
 
+  // v1.6.1：VM 侧代理启停（server 帧 proxy.start/stop——S6 遗留缺口：此前状态卡
+  // 永远「已停止」且无启用入口）。返回值即动作后状态，直接落卡。
+  const [proxyBusy, setProxyBusy] = useState(false)
+  const runProxyAction = async (action: 'start' | 'stop'): Promise<void> => {
+    if (connId === '' || proxyBusy) return
+    setLoadError('')
+    setProxyBusy(true)
+    try {
+      setStatus(
+        action === 'start'
+          ? await window.cwb.startRemoteProxy(connId)
+          : await window.cwb.stopRemoteProxy(connId)
+      )
+    } catch (err) {
+      setLoadError(errMsg(err))
+    } finally {
+      setProxyBusy(false)
+    }
+  }
+
   return (
     <div className="remote-proxy-block" data-testid="remote-proxy-panel">
       <p className="section-title">{t('s6.remoteProxy')}</p>
@@ -583,6 +603,29 @@ function RemoteProxyPanel() {
                 {t('settings.proxyActive', { n: status.stats.active })}
                 <br />
                 {t('settings.proxySplit', { d: status.stats.direct, v: status.stats.viaProxy })}
+              </span>
+            )}
+            {status !== null && (
+              <span className="proxy-actions">
+                {status.running ? (
+                  <button
+                    type="button"
+                    className="btn small"
+                    disabled={proxyBusy}
+                    onClick={() => void runProxyAction('stop')}
+                  >
+                    {t('settings.proxyStopBtn')}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn small"
+                    disabled={proxyBusy}
+                    onClick={() => void runProxyAction('start')}
+                  >
+                    {t('settings.proxyStartBtn')}
+                  </button>
+                )}
               </span>
             )}
           </div>

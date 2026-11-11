@@ -767,6 +767,30 @@ describe('设置中心「远程连接」分类', () => {
     await waitFor(() => expect(urlInput.value).toBe('http://10.0.0.9:7890'))
   })
 
+  // v1.6.1：VM 侧代理启停按钮（S6 遗留缺口——此前状态卡永远「已停止」无启用入口）
+  it('远程代理启停：停止态显示「启动」→ startRemoteProxy → 状态卡翻转运行中（端口可见）；运行态可停止', async () => {
+    const api = await renderApp()
+    vi.mocked(api.getRemoteProxyStatus).mockResolvedValue({
+      running: false,
+      stats: { total: 0, active: 0, direct: 0, viaProxy: 0 }
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
+    const dialog = await screen.findByRole('dialog', { name: '设置' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '远程连接' }))
+    const panel = await screen.findByTestId('remote-proxy-panel')
+    // 停止态：唯一按钮=启动
+    const startBtn = await within(panel).findByRole('button', { name: '启动' })
+    fireEvent.click(startBtn)
+    await waitFor(() => expect(api.startRemoteProxy).toHaveBeenCalledWith('c1'))
+    // start 返回 running=true + port → 状态卡显示端口与运行分钟数；按钮翻转为停止
+    await waitFor(() => expect(within(panel).getByText(/12700/)).toBeDefined())
+    const stopBtn = within(panel).getByRole('button', { name: '停止' })
+    fireEvent.click(stopBtn)
+    await waitFor(() => expect(api.stopRemoteProxy).toHaveBeenCalledWith('c1'))
+    // stop 返回 running=false → 回到启动按钮
+    await waitFor(() => expect(within(panel).getByRole('button', { name: '启动' })).toBeDefined())
+  })
+
   it('claude CLI 分类远程上下文占位说明（6.3/6.5）', async () => {
     await renderApp()
     fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)

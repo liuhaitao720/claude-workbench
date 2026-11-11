@@ -1615,6 +1615,20 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       { type: 'proxy.status' }
     )
   )
+  // v1.6.1：VM 侧代理启停（server 帧 proxy.start/stop——S6 面板期只接了 status/config，
+  // 启停缺口补齐后远程代理才真正可从客户端启用）
+  ipcMain.handle(IpcChannels.RemoteProxyStart, (_e, connectionId: unknown) =>
+    ctx.remotePty.proxyRequest<RemoteProxyStatus>(
+      requireConnectionId(connectionId),
+      { type: 'proxy.start' }
+    )
+  )
+  ipcMain.handle(IpcChannels.RemoteProxyStop, (_e, connectionId: unknown) =>
+    ctx.remotePty.proxyRequest<RemoteProxyStatus>(
+      requireConnectionId(connectionId),
+      { type: 'proxy.stop' }
+    )
+  )
   ipcMain.handle(IpcChannels.RemoteProxyConfigGet, (_e, connectionId: unknown) =>
     ctx.remotePty.proxyRequest<RemoteProxyConfig>(
       requireConnectionId(connectionId),
