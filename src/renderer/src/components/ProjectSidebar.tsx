@@ -5,6 +5,7 @@ import type { ProjectRecord, ProviderRegistryState, TaskRecord } from '../../../
 import {
   SIDEBAR_WIDTH_DEFAULT,
   clampSidebarWidth,
+  normalizeSidebarScope,
   useAppStore
 } from '../store'
 import { APP_VERSION } from '../app-info'
@@ -40,6 +41,17 @@ export function ProjectSidebar() {
   const connections = useAppStore((s) => s.connections)
   const selectedProjectId = useAppStore((s) => s.selectedProjectId)
   const openProjectFlow = useAppStore((s) => s.openProjectFlow)
+  // v2.0.1 侧栏作用域（用户确认原型 design/sidebar-scope-v2.html）：chips 切域，
+  // 列表按域过滤；主操作随域（本机=打开目录 / 服务器=注册远程目录）
+  const sidebarScope = useAppStore((s) => s.sidebarScope)
+  const setSidebarScope = useAppStore((s) => s.setSidebarScope)
+  const registerRemoteProjectFlow = useAppStore((s) => s.registerRemoteProjectFlow)
+  const activeScope = normalizeSidebarScope(sidebarScope, connections.map((c) => c.id))
+  const scopeConn =
+    activeScope !== 'all' && activeScope !== 'local'
+      ? connections.find((c) => c.id === activeScope)
+      : undefined
+
   const selectProject = useAppStore((s) => s.selectProject)
   const openTaskAutoResume = useAppStore((s) => s.openTaskAutoResume)
   // 3.10=A 整栏折叠态持久化（消费 settings.sidebarCollapsedPersist；A17 推翻）
@@ -314,17 +326,67 @@ export function ProjectSidebar() {
               </span>
             </div>
           </div>
+          {/* v2.0.1 作用域 chips：全部/本机/各服务器（连接状态点+域内计数） */}
+          <div className="scope-chips" role="group" aria-label={t('sidebar.scopeAria')} data-testid="sidebar-scope-chips">
+            <button
+              type="button"
+              aria-pressed={activeScope === 'all'}
+              className={`sb-chip${activeScope === 'all' ? ' on' : ''}`}
+              onClick={() => setSidebarScope('all')}
+            >
+              {t('sidebar.scopeAll')} <span className="n">{projects.length}</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={activeScope === 'local'}
+              className={`sb-chip${activeScope === 'local' ? ' on' : ''}`}
+              onClick={() => setSidebarScope('local')}
+            >
+              {t('sidebar.scopeLocal')}{' '}
+              <span className="n">{projects.filter((p) => p.connectionId === undefined).length}</span>
+            </button>
+            {connections.map((c) => {
+              const st = useAppStore.getState().connectionStates[c.id]?.state
+              const n = projects.filter((p) => p.connectionId === c.id).length
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  aria-pressed={activeScope === c.id}
+                  className={`sb-chip${activeScope === c.id ? ' on' : ''}`}
+                  data-testid={`sb-chip-${c.id}`}
+                  onClick={() => setSidebarScope(c.id)}
+                >
+                  <span className="sb-chip-dot" data-state={st ?? 'offline'} />
+                  {c.name} <span className="n">{n}</span>
+                </button>
+              )
+            })}
+          </div>
           <div className="sidebar-actions">
             <div className="sidebar-dir-row">
-              <button
-                type="button"
-                className="btn dir-icon-btn"
-                title={t('sidebar.openDir')}
-                aria-label={t('sidebar.openDir')}
-                onClick={() => void openProjectFlow()}
-              >
-                📁
-              </button>
+              {scopeConn !== undefined ? (
+                <button
+                  type="button"
+                  className="btn primary dir-icon-btn"
+                  title={t('sidebar.registerRemote', { name: scopeConn.name })}
+                  aria-label={t('sidebar.registerRemote', { name: scopeConn.name })}
+                  onClick={() => void registerRemoteProjectFlow(scopeConn.id, '')}
+                  data-testid="btn-register-remote"
+                >
+                  ＋
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn dir-icon-btn"
+                  title={t('sidebar.openDir')}
+                  aria-label={t('sidebar.openDir')}
+                  onClick={() => void openProjectFlow()}
+                >
+                  📁
+                </button>
+              )}
               <input
                 ref={searchRef}
                 className="search-input"
@@ -337,7 +399,7 @@ export function ProjectSidebar() {
             </div>
           </div>
           {/* 搜索态隐藏「最近」（评审 F5）：搜索聚焦树内结果，最近区块与词无关属噪音 */}
-          <ProjectTree query={query} onNewTask={openNewTask} />
+          <ProjectTree query={query} onNewTask={openNewTask} scope={activeScope} />
           {projects.length === 0 && (
             <div className="sidebar-empty">{t('sidebar.empty')}</div>
           )}

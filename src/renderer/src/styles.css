@@ -2790,3 +2790,36 @@ button {
 .xfer .xfer-row button {
   cursor: default;
 }
+
+/* ── v2.0.1 侧栏作用域 chips（用户确认原型 design/sidebar-scope-v2.html） ── */
+.scope-chips {
+  display: flex;
+  gap: 6px;
+  padding: 2px 12px 8px;
+  flex-wrap: wrap;
+}
+
+.sb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border-3);
+  background: var(--bg-panel);
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.sb-chip:hover { background: var(--bg-hover); }
+
+.sb-chip.on {
+  background: var(--bg-sel);
+  border-color: var(--accent);
+  color: var(--text-max);
+}
+
+.sb-chip .n { font-size: 10px; color: var(--text-4); }
+
+.sb-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dot-gray); flex: none; }
+.sb-chip-dot[data-state='connected'] { background: var(--ok-dot); }

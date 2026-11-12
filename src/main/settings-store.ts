@@ -66,6 +66,8 @@ export class AppSettingsStore {
             : {}),
           // v2.0 文件面板目录记忆（Record<cid, string>——同 serverNodesCollapsed 容错口径）
           ...(isFilesPanelPath(rec['filesPanelPath']) ? { filesPanelPath: { ...rec['filesPanelPath'] } } : {}),
+          // v2.0.1 侧栏作用域（字符串窄集——非法值落 all 由消费点归一，此处只保结构）
+          ...(typeof rec['sidebarScope'] === 'string' ? { sidebarScope: rec['sidebarScope'] } : {}),
           // v2.0 下载落位三键（缺省不落键=现行为：direct + 默认目录 + 按连接分档）
           ...(typeof rec['downloadDir'] === 'string' ? { downloadDir: rec['downloadDir'] } : {}),
           ...(rec['downloadMode'] === 'ask' ? { downloadMode: 'ask' as const } : {}),

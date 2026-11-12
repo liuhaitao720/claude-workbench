@@ -37,11 +37,14 @@ interface TreeEntry {
  */
 export function ProjectTree({
   query,
-  onNewTask
+  onNewTask,
+  scope = 'all'
 }: {
   query: string
   /** 项目菜单「新建任务」入口：预选中该项目并打开顶部新建对话框（见 ProjectSidebar） */
   onNewTask: (projectId: string) => void
+  /** v2.0.1 侧栏作用域过滤（用户确认原型）：'all'=分组全集 | 'local'=仅本机根级 | 连接 id=仅该组 */
+  scope?: string
 }) {
   const t = useI18n()
   const projects = useAppStore((s) => s.projects)
@@ -81,13 +84,18 @@ export function ProjectTree({
 
   // 根级=本机项目 + 孤儿远程项目（connectionId 指向已删档案——3.9 删除不级联时回根级兜底）
   const connIds = new Set(connections.map((c) => c.id))
-  const localEntries = projects
-    .filter((p) => p.connectionId === undefined || !connIds.has(p.connectionId))
-    .map(buildEntry)
-    .filter(keepNonNull)
+  const localEntries =
+    scope !== 'all' && scope !== 'local'
+      ? [] // v2.0.1 服务器域：根级（本机+孤儿远程）整组不渲染
+      : projects
+          .filter((p) => p.connectionId === undefined || !connIds.has(p.connectionId))
+          .map(buildEntry)
+          .filter(keepNonNull)
 
   // 服务器分组：命中服务器名/host → 整组保留（子项目不再逐个过滤）
+  // v2.0.1 服务器域：仅渲染该连接组（all/local 渲染全部——local 在组级再隐藏）
   const serverGroups = connections
+    .filter((conn) => (scope === 'all' || scope === 'local' ? true : conn.id === scope))
     .map((conn) => {
       const serverHit = q !== '' && (conn.name.toLowerCase().includes(q) || conn.host.toLowerCase().includes(q))
       const entries = projects
@@ -98,14 +106,18 @@ export function ProjectTree({
       return { conn, entries }
     })
     .filter((g): g is { conn: ConnectionRecord; entries: TreeEntry[] } => g !== null)
+    // v2.0.1：local 域服务器组整组隐藏（仅 all/自身域渲染服务器组）
+    .filter(() => scope !== 'local')
 
   const noMatch =
-    q !== '' && localEntries.length === 0 && serverGroups.length === 0
+    (q !== '' || (scope !== 'all' && localEntries.length === 0 && serverGroups.length === 0)) &&
+    localEntries.length === 0 &&
+    serverGroups.length === 0
 
   return (
     <MenuOpenCtx.Provider value={{ openKey, setOpenKey }}>
       {noMatch ? (
-        <div className="search-empty">{t('tree.noMatch')}</div>
+        <div className="search-empty">{q === '' ? t('sidebar.scopeEmpty') : t('tree.noMatch')}</div>
       ) : (
         <ul className="project-list">
           {localEntries.map(({ project, tasks: pTasks }) => (

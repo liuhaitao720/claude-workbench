@@ -2,7 +2,8 @@ import './test-setup'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { App } from './App'
-import { installCwbMock, makeProject, makeTask } from './test-helpers'
+import { installCwbMock, makeConnection, makeProject, makeTask } from './test-helpers'
+import { useAppStore } from './store'
 import { useAppStore } from './store'
 
 /** S6 新功能域：搜索过滤（A）/ 时间分组+最近区块（C）/ 图标栏折叠（D）/ 快捷键（F） */
@@ -401,5 +402,67 @@ describe('设置入口（v1.2.2：Skills / 设置两个 SVG 图标按钮）', ()
 
     fireEvent.click(gear)
     expect(await screen.findByRole('dialog', { name: '设置' })).toBeDefined()
+  })
+})
+
+
+describe('v2.0.1 侧栏作用域过滤（用户确认原型 sidebar-scope-v2）', () => {
+  const conn = makeConnection({ id: 'c1', name: 'VM-Dev' })
+  const pLocal = makeProject({ id: 'pl', name: 'LocalA', dir: 'D:\\a' })
+  const pLocal2 = makeProject({ id: 'pl2', name: 'LocalB', dir: 'D:\\b' })
+  const pRemote = makeProject({ id: 'pr', name: 'RemoteR', dir: '/home/dev/r', connectionId: 'c1' })
+
+  async function renderScoped(): Promise<void> {
+    installCwbMock({ projects: [pLocal, pLocal2, pRemote], connections: [conn] })
+    useAppStore.setState({
+      projects: [pLocal, pLocal2, pRemote],
+      connections: [conn],
+      connectionStates: { c1: { state: 'connected' } }
+    })
+    render(<App />)
+    await waitFor(() => expect(document.querySelector('.sidebar-scope-chips')).toBeDefined())
+  }
+
+  it('chips 渲染（全部 3/本机 2/VM-Dev 1）；切 VM-Dev → 仅远程项目、本机组消失；主操作变「注册远程目录」', async () => {
+    await renderScoped()
+    const chips = screen.getByTestId('sidebar-scope-chips')
+    expect(within(chips).getByText('全部')).toBeDefined()
+    expect(within(chips).getByText('本机')).toBeDefined()
+    expect(within(chips).getByText('VM-Dev')).toBeDefined()
+    // 默认 all：本机与远程组都在
+    expect(projectNode('pl')).not.toBeNull()
+    expect(projectNode('pr')).not.toBeNull()
+    // 切 VM-Dev
+    fireEvent.click(screen.getByTestId('sb-chip-c1'))
+    console.log('scope-after-click=', useAppStore.getState().sidebarScope)
+    await waitFor(() => expect(projectNode('pl')).toBeNull())
+    expect(projectNode('pl2')).toBeNull()
+    expect(projectNode('pr')).not.toBeNull()
+    // 主操作随域
+    expect(screen.getByTestId('btn-register-remote')).toBeDefined()
+  })
+
+  it('切本机 → 远程组消失、本机保留、主操作回到「打开目录」；scope 持久化 setAppSettings', async () => {
+    await renderScoped()
+    const chips = screen.getByTestId('sidebar-scope-chips')
+    fireEvent.click(within(chips).getByText('本机'))
+    await waitFor(() => expect(projectNode('pr')).toBeNull())
+    expect(projectNode('pl')).not.toBeNull()
+    expect(screen.queryByTestId('btn-register-remote')).toBeNull()
+    await waitFor(() =>
+      expect(useAppStore.getState().sidebarScope).toBe('local')
+    )
+  })
+
+  it('失效作用域归一：scope 指向已删连接 → 渲染回 all（全量可见）', async () => {
+    installCwbMock({ projects: [pLocal, pRemote], connections: [conn] })
+    useAppStore.setState({
+      projects: [pLocal, pRemote],
+      connections: [conn],
+      sidebarScope: 'ghost-conn'
+    })
+    render(<App />)
+    await waitFor(() => expect(projectNode('pl')).not.toBeNull())
+    expect(projectNode('pr')).not.toBeNull()
   })
 })

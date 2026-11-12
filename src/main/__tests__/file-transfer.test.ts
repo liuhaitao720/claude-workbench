@@ -136,11 +136,11 @@ function withHandlePrimitives(sftp: SftpSession): SftpSession {
   const inFlight = { reads: 0, maxConcurrent: 0 }
   return {
     ...sftp,
-    openReadHandle: async (p) => {
+    openReadHandle: async (p: string) => {
       await base.readFile(p) // 存在性校验
       return HANDLE
     },
-    readAt: async (h, offset, length) => {
+    readAt: async (h: unknown, offset: number, length: number) => {
       void h
       if (handleFile === null) throw new Error('no file')
       inFlight.reads += 1
@@ -150,7 +150,7 @@ function withHandlePrimitives(sftp: SftpSession): SftpSession {
       return handleFile.subarray(offset, offset + length)
     },
     openWriteHandle: async () => HANDLE,
-    writeAt: async (h, offset, data) => {
+    writeAt: async (h: unknown, offset: number, data: Buffer) => {
       void h
       const cur = handleWritten.get(handleTarget) ?? Buffer.alloc(0)
       const next = Buffer.alloc(Math.max(cur.length, offset + data.length))

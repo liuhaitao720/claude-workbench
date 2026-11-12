@@ -390,6 +390,8 @@ export interface AppSettings {
   downloadPerConnection?: boolean
   /** v2.0 文件面板 per-connection 目录记忆（cid → 远端路径） */
   filesPanelPath?: Record<string, string>
+  /** v2.0.1 侧栏作用域：'all' | 'local' | 连接 id（连接删除后消费点归一回 all） */
+  sidebarScope?: string
   /**
    * 自动升级（v1.2.1，缺省 true）：启动静默检查 → 有新版本后台下载校验 →
    * 运行中的任务全部结束后自动退出替换重启（有任务在跑时不打断）。

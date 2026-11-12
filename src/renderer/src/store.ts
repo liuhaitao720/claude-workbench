@@ -107,6 +107,19 @@ export interface SidebarPrefs {
   filesPanelPath?: Record<string, string>
 }
 
+/** v2.0.1 侧栏作用域（用户确认原型 design/sidebar-scope-v2.html）：
+ *  'all'=现行分组视图 | 'local'=仅本机 | 连接 id=仅该服务器项目 */
+export type SidebarScope = 'all' | 'local' | string
+
+/** 作用域合法域集（连接删除后旧 id 失效 → 回退 all） */
+export function normalizeSidebarScope(
+  scope: SidebarScope,
+  connectionIds: ReadonlyArray<string>
+): SidebarScope {
+  if (scope === 'all' || scope === 'local') return scope
+  return connectionIds.includes(scope) ? scope : 'all'
+}
+
 /** 设置中心分类 id（v1.7.0 作用域化：本机 7 项 / 远程 7 项——见 SETTINGS_SECTIONS_OF）。
  *  'connections'=远程作用域的「连接与自检」（本机作用域不出现该分类）。 */
 export type SettingsSectionId =
@@ -257,6 +270,8 @@ interface AppState {
   serverLogs: RemoteServerLogEvent[]
   /** 侧栏持久化键（getAppSettings 启动拉取；写入经 setAppSettings） */
   uiSettings: SidebarPrefs
+  /** v2.0.1 侧栏作用域（'all' | 'local' | 连接 id——消费点经 normalizeSidebarScope 归一） */
+  sidebarScope: SidebarScope
   /** server 安装/升级确认弹窗目标（connectFlow 的 needInstall 信号触发，6.7=A） */
   pendingServerInstall: { connectionId: string } | null
   /**
@@ -307,6 +322,8 @@ interface AppState {
   /** 侧栏持久化键动作（setAppSettings patch 落盘，失败静默——仅本会话生效） */
   setSidebarWidth: (px: number) => void
   setSidebarCollapsed: (collapsed: boolean) => void
+  /** v2.0.1 侧栏作用域切换（持久化 appSettings.sidebarScope） */
+  setSidebarScope: (scope: SidebarScope) => void
   toggleServerNodeCollapsed: (connectionId: string) => void
   /** 关闭 server 安装确认弹窗（取消路径） */
   dismissServerInstall: () => void
@@ -425,7 +442,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
             typeof s.sidebarWidth === 'number' ? clampSidebarWidth(s.sidebarWidth) : undefined,
           sidebarCollapsedPersist: s.sidebarCollapsedPersist === true,
           serverNodesCollapsed: s.serverNodesCollapsed ?? {}
-        }
+        },
+        // v2.0.1 侧栏作用域恢复（合法域集校验在消费点——此处存原值，连接后载入时归一）
+        ...(typeof s.sidebarScope === 'string' ? { sidebarScope: s.sidebarScope } : {})
       })
     } catch (err) {
       console.error('[cwb] loadSidebarPrefs failed:', err)
@@ -609,6 +628,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }, 300)
   },
 
+  setSidebarScope: (scope) => {
+    set({ sidebarScope: scope })
+    void window.cwb.setAppSettings({ sidebarScope: scope }).catch(() => {})
+  },
+
   setSidebarCollapsed: (collapsed) => {
     set((s) => ({ uiSettings: { ...s.uiSettings, sidebarCollapsedPersist: collapsed } }))
     window.cwb.setAppSettings({ sidebarCollapsedPersist: collapsed }).catch(() => {})
@@ -767,6 +791,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   connectionStates: {},
   serverLogs: [],
   uiSettings: {},
+  /** v2.0.1 侧栏作用域（loadSidebarPrefs 从 appSettings 恢复；连接失效回退在消费点归一） */
+  sidebarScope: 'all' as SidebarScope,
   pendingServerInstall: null,
   pendingHostKeyConfirm: null,
   connectionSaveError: '',
