@@ -2844,8 +2844,12 @@ button {
 
 /* ── v2.0.2 git diff 审查（主区审查模式）────────────────────────────── */
 
-/* 终端宿主 wrapper（双态保挂载：审查前台时 display:none） */
-.terminal-hosts { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+/* 终端宿主 wrapper（双态保挂载：审查前台时 display:none）。
+   2.0.2 热修：.terminal-panel 是非 flex 的 block 容器（自身 flex:1 拿高度、
+   padding 4px，子层靠 height:100% 链）——wrapper 须 height:100% 透传；
+   此前 flex:1 在非 flex 父级里失效 → 高度 auto → term-host 100% 失参照，
+   xterm fit 反馈后终端只占上半、下半空白 */
+.terminal-hosts { width: 100%; height: 100%; }
 
 /* 审查虚拟 tab（◆ 图标 + 项目名 + 改动数角标） */
 .review-tab-icon { color: var(--accent); font-size: 11px; }
@@ -2863,12 +2867,14 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-/* 审查视图布局：工具栏 / 双栏主体 / hunk 导航条 */
+/* 审查视图布局：工具栏 / 双栏主体 / hunk 导航条。
+   2.0.2 热修：同为 .terminal-panel 的 block 子层——height:100% 拿满高，
+   内部自身 flex column（子层 flex:1 在确定高度下生效） */
 .diff-review {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 0;
+  width: 100%;
+  height: 100%;
   background: var(--bg-app);
 }
 .diff-toolbar {
