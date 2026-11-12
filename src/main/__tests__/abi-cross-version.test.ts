@@ -151,11 +151,14 @@ describe.skipIf(!sshPortOpen())('S8 ABI 假文件路径：损坏 pty.node → he
     // authorized_keys surgical 清理（marker+key 两行）+ wc 复核（checkpoint 纪律）
     try {
       const lines = readFileSync(authorizedKeysPath, 'utf8').split('\n')
-      const idx = lines.findIndex((l) => l.startsWith('# cwb-s8-abi '))
-      if (idx >= 0) {
+      // v2.0.1 健壮化：循环删全部 marker 对（此前失败运行遗留孤儿/重复时，单次
+      // splice 清不净 → 复核断言永红——环境级级联，本测试无法自愈）
+      let idx = lines.findIndex((l) => l.startsWith('# cwb-s8-abi '))
+      while (idx >= 0) {
         lines.splice(idx, 2)
-        writeFileSync(authorizedKeysPath, lines.join('\n'))
+        idx = lines.findIndex((l) => l.startsWith('# cwb-s8-abi '))
       }
+      writeFileSync(authorizedKeysPath, lines.join('\n'))
       const after = readFileSync(authorizedKeysPath, 'utf8')
       expect(after.includes('# cwb-s8-abi ')).toBe(false)
       expect(after.trim().split('\n').filter((l) => l !== '').length).toBeGreaterThanOrEqual(1)

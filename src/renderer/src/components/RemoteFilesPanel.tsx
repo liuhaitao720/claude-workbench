@@ -236,6 +236,14 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
         ))}
       </div>
       <div className="files-toolbar">
+        <button
+          type="button"
+          className="btn small"
+          title={t('files.goHome')}
+          onClick={() => load(undefined)}
+        >
+          🏠
+        </button>
         <button type="button" className="btn small" disabled={st.path === '' || st.path === '/'} onClick={goUp} title="Alt+↑">
           ↑
         </button>
@@ -355,7 +363,7 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
           </div>
         </div>
       )}
-      <TransferBar />
+      <TransferBar connName={connName} />
     </div>
   )
 }
@@ -379,16 +387,29 @@ function localPathsFromDataTransfer(dt: DataTransfer): string[] {
   return out
 }
 
-/** 传输条（面板底部：聚合进度 + 展开队列；取消/重试） */
-function TransferBar() {
+/** 传输条（面板底部：聚合进度 + 保存目录头 + 展开队列；取消/重试） */
+function TransferBar({ connName }: { connName: string }) {
   const t = useI18n()
   const [items, setItems] = useState<TransferItem[]>([])
   const [open, setOpen] = useState(false)
+  /** v2.0.1（用户实测②）：顶部统一显示当前下载保存目录（与 main 落位逻辑同源派生） */
+  const [saveDir, setSaveDir] = useState('')
 
   useEffect(() => {
     void window.cwb.listTransfers().then(setItems).catch(() => {})
+    void window.cwb
+      .getAppSettings()
+      .then((s) => {
+        const root =
+          s.downloadDir !== undefined && s.downloadDir.trim() !== ''
+            ? s.downloadDir.trim()
+            : t('files.defaultSaveDir')
+        setSaveDir(s.downloadPerConnection === false ? root : `${root}${root.endsWith('\\') ? '' : '\\'}${connName}`)
+      })
+      .catch(() => {})
     return window.cwb.onTransfersProgress((fresh) => setItems(fresh))
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 目录随连接名/语言取一次
+  }, [connName])
 
   // v2.0.1（用户实测"下载无提示"）：出现活动项即自动展开队列——肉眼即时反馈
   const hasActive = items.some((i) => i.status === 'active' || i.status === 'queued')
@@ -438,6 +459,9 @@ function TransferBar() {
       </div>
       {open && (
         <div className="xfer-list" data-testid="xfer-table">
+          <p className="xfer-savedir" data-testid="xfer-savedir" title={saveDir}>
+            {t('files.saveDirLabel')}: <span className="mono">{saveDir}</span>
+          </p>
           <div className="xfer-head">
             <span> </span>
             <span>{t('files.xferColFile')}</span>

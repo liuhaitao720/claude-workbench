@@ -137,6 +137,35 @@ function fitAndSync(taskId: string, host: HTMLElement): void {
   window.cwb.ptyResize(taskId, term.cols, term.rows)
 }
 
+/**
+ * v2.0.1（用户实测③）：终端输入行点击移动光标——点击点与光标同屏行时，列差
+ * 换算为左/右方向键序列（claude 输入框语义；xterm 本身无法移动 TUI 光标）。
+ * 跨行/选中态/不可见行返回 null（不动作——保守，避免多行输入误跳）。
+ * @param cellW/cellH 单元格像素（viewport 均分近似）
+ * @param cursorScreenX/Y 光标屏坐标（buffer.cursorX / cursorY-viewportY）
+ */
+export function caretSequenceForClick(
+  clickX: number,
+  clickY: number,
+  rect: { left: number; top: number; width: number; height: number },
+  cols: number,
+  rows: number,
+  cursorScreenX: number,
+  cursorScreenY: number
+): string | null {
+  if (cols <= 0 || rows <= 0 || rect.width <= 0 || rect.height <= 0) return null
+  const cellW = rect.width / cols
+  const cellH = rect.height / rows
+  const col = Math.floor((clickX - rect.left) / cellW)
+  const row = Math.floor((clickY - rect.top) / cellH)
+  if (row !== cursorScreenY) return null // 仅同行（多行输入跨行交给方向键）
+  if (col < 0 || col >= cols) return null
+  const delta = col - cursorScreenX
+  if (delta === 0) return null
+  const key = delta > 0 ? '\x1b[C' : '\x1b[D'
+  return key.repeat(Math.min(Math.abs(delta), 512))
+}
+
 function disposeTaskTerminal(taskId: string, host: HTMLElement): void {
   const term = terminalCache.get(taskId)
   if (term) {
@@ -342,6 +371,33 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
     ta?.addEventListener('compositionend', onCompositionEnd)
     ta?.addEventListener('blur', onTextareaBlur)
 
+    // v2.0.1（用户实测③）：点击输入行移动光标——mouseup 且无选区/非拖拽时，
+    // 同行列差换算方向键序列注入（caretSequenceForClick；frozen 沿键入冻结口径）
+    let downAt: { x: number; y: number } | null = null
+    const onMouseDown = (e: MouseEvent): void => {
+      downAt = { x: e.clientX, y: e.clientY }
+    }
+    const onMouseUp = (e: MouseEvent): void => {
+      const d = downAt
+      downAt = null
+      if (d === null || Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) > 4) return // 拖选
+      if (terminal.hasSelection()) return
+      if (isTaskInputFrozen(task.id)) return
+      const rect = host.getBoundingClientRect()
+      const seq = caretSequenceForClick(
+        e.clientX,
+        e.clientY,
+        { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+        terminal.cols,
+        terminal.rows,
+        terminal.buffer.active.cursorX,
+        terminal.buffer.active.cursorY - terminal.buffer.active.viewportY
+      )
+      if (seq !== null) window.cwb.ptyWrite(task.id, seq)
+    }
+    host.addEventListener('mousedown', onMouseDown)
+    host.addEventListener('mouseup', onMouseUp)
+
     const onDataDisposer = terminal.onData((d) => {
       // 5.3=A 断连冻结：连接态非 connected 时键入无效（不排队补发——重连瞬间一口气
       // 到达易误提交）；重连恢复自动解冻（store 连接态驱动，每次键入实时读）
@@ -378,6 +434,8 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
       cancelAnimationFrame(resizeRaf)
       host.removeEventListener('wheel', onWheel, { capture: true })
       resizeObserver.disconnect()
+      host.removeEventListener('mousedown', onMouseDown)
+      host.removeEventListener('mouseup', onMouseUp)
       onDataDisposer.dispose()
       unsubscribePty()
       ta?.removeEventListener('compositionstart', onCompositionStart)

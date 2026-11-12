@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { RemoteFileEntry } from '../../shared/types'
 import { App } from './App'
-import { terminalCache } from './components/TerminalPanel'
+import { terminalCache, caretSequenceForClick } from './components/TerminalPanel'
 import { installCwbMock, makeConnection, makeProject, makeTask } from './test-helpers'
 import { useAppStore } from './store'
 
@@ -138,8 +138,30 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
     const row = await within(bar).findByText('big.bin')
     expect(row).toBeDefined()
     expect(within(bar).getByText('进度')).toBeDefined() // 表头在场
+    expect(within(bar).getByTestId('xfer-savedir').textContent).toContain('SSH Workbench') // 保存目录头（默认目录派生）
     fireEvent.click(within(bar).getByRole('button', { name: '×' }))
     await waitFor(() => expect(api.cancelTransfer).toHaveBeenCalledWith('tf-1'))
+  })
+
+  it('家目录快捷键：点 🏠 → listRemoteFiles(cid, undefined)（realpath(.)=home）', async () => {
+    const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
+    let calls = 0
+    vi.mocked(api.listRemoteFiles).mockImplementation(async (_cid, p) => {
+      calls += 1
+      // 首拉回 home；进子目录后点 🏠 应再次以 undefined 调用
+      return { ok: true, path: p === undefined ? '/home/dev' : '/home/dev/work', entries: [] }
+    })
+    render(<App />)
+    const panel = await openPanel(api)
+    const dirRow = document.createElement('div') // 先进子目录（直接调一次 load 语义——借双击路径）
+    void dirRow
+    const homeBtn = panel.querySelector('button[title="回到用户主目录（~）"]') as HTMLElement
+    expect(homeBtn).not.toBeNull()
+    fireEvent.click(homeBtn)
+    await waitFor(() => {
+      expect(api.listRemoteFiles).toHaveBeenLastCalledWith('c1', undefined)
+    })
+    expect(calls).toBeGreaterThanOrEqual(2)
   })
 
   it('面板目录记忆：uiSettings.filesPanelPath 持久化（setAppSettings 携带路径表）', async () => {
@@ -156,5 +178,21 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
         expect.objectContaining({ filesPanelPath: expect.objectContaining({ c1: '/home/dev/work' }) })
       )
     )
+  })
+})
+
+
+describe('v2.0.1 终端点击移位（caretSequenceForClick 纯函数）', () => {
+  const rect = { left: 0, top: 0, width: 800, height: 400 }
+  const cols = 100 // cellW=8
+  const rows = 25 // cellH=16
+  it('同行点击：光标 col20 → 点击 col35 = 15×右箭头；点击 col5 = 15×左箭头', () => {
+    expect(caretSequenceForClick(35 * 8, 10 * 16, rect, cols, rows, 20, 10)).toBe('\x1b[C'.repeat(15))
+    expect(caretSequenceForClick(5 * 8, 10 * 16, rect, cols, rows, 20, 10)).toBe('\x1b[D'.repeat(15))
+  })
+  it('跨行点击/点击光标处/越界：null（保守不动作）', () => {
+    expect(caretSequenceForClick(30 * 8, 11 * 16, rect, cols, rows, 20, 10)).toBeNull()
+    expect(caretSequenceForClick(20 * 8, 10 * 16, rect, cols, rows, 20, 10)).toBeNull()
+    expect(caretSequenceForClick(9999, 10 * 16, rect, cols, rows, 20, 10)).toBeNull()
   })
 })
