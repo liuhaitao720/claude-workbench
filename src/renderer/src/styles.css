@@ -2751,11 +2751,13 @@ button {
 .files-rename-input { background: var(--bg-input); border: 1px solid var(--accent); border-radius: 4px; color: var(--text-1); font-size: 12px; padding: 2px 6px; width: 100%; }
 .files-dropzone { position: absolute; inset: 0; background: rgba(61,118,179,.14); border: 2px dashed var(--accent); margin: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 6px; z-index: 10; color: var(--text-1); pointer-events: none; } /* v2.0.2 拖拽修复：遮罩纯视觉化——不参与拖拽命中测试，防 Chromium 拖拽目标因重渲染失效致 drop 丢失 */
 .files-conflict { position: absolute; inset: 0; background: var(--overlay); display: flex; align-items: center; justify-content: center; z-index: 11; }
-.files-conflict-title { width: 420px; background: var(--bg-dialog); border: 1px solid var(--border-1); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow-lg); font-size: 13.5px; font-weight: 600; }
-.files-conflict-hint { font-size: 11.5px; margin: 6px 0 8px; }
-.files-conflict-files { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; max-height: 120px; overflow-y: auto; }
+/* v2.0.2：卡片容器收拢标题/提示/清单/按钮（原卡片样式误挂在标题 p 上且内容平级散落） */
+.files-conflict-card { width: 440px; max-width: calc(100% - 32px); background: var(--bg-dialog); border: 1px solid var(--border-1); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 8px; }
+.files-conflict-title { font-size: 13.5px; font-weight: 600; margin: 0; }
+.files-conflict-hint { font-size: 11.5px; margin: 0; }
+.files-conflict-files { display: flex; flex-direction: column; gap: 2px; margin: 0; max-height: 120px; overflow-y: auto; }
 .files-conflict-file { font-family: ui-monospace,Consolas,monospace; font-size: 11.5px; color: var(--text-2); background: var(--bg-input); border: 1px solid var(--border-2); border-radius: 4px; padding: 2px 8px; }
-.files-conflict-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.files-conflict-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-top: 4px; }
 
 /* 传输条（面板底部；复用原型样式系） */
 .xfer { border-top: 1px solid var(--border-1); background: var(--bg-app); }

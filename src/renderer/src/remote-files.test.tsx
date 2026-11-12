@@ -102,13 +102,23 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
     fireEvent.doubleClick(dirRow)
     await waitFor(() => expect(api.listRemoteFiles).toHaveBeenLastCalledWith('c1', '/home/dev/docs'))
     await waitFor(() => expect(panel.textContent).toContain('docs'))
-    // 上传：pick 返回 → 冲突弹窗（引擎侧预检在真实链路——mock 下弹窗仍前置问策略）
+    // v2.0.2（用户实测）：同名预检——pick 的文件与当前清单无同名 → 不弹窗直接入队
     fireEvent.click(within(panel).getByRole('button', { name: /上传/ }))
     await waitFor(() => expect(api.pickLocalForUpload).toHaveBeenCalledWith(true, true))
-    const dlg = await screen.findByRole('dialog', { name: '同名文件处理' })
-    fireEvent.click(within(dlg).getByRole('button', { name: '覆盖' }))
     await waitFor(() =>
       expect(api.uploadRemoteFiles).toHaveBeenCalledWith('c1', ['D:\\new-doc.md'], '/home/dev/docs', 'overwrite')
+    )
+    expect(screen.queryByRole('dialog', { name: '同名文件处理' })).toBeNull()
+
+    // 同名（deploy.md 已在清单）→ 弹窗三选；覆盖 → 以所选策略入队
+    vi.mocked(api.pickLocalForUpload).mockResolvedValue(['D:\\deploy.md'])
+    fireEvent.click(within(panel).getByRole('button', { name: /上传/ }))
+    const dlg = await screen.findByRole('dialog', { name: '同名文件处理' })
+    // v2.0.2：卡片容器收拢（标题/提示/文件/按钮同卡片，不再平级散落）
+    expect(within(dlg).getByText('deploy.md')).toBeDefined()
+    fireEvent.click(within(dlg).getByRole('button', { name: '覆盖' }))
+    await waitFor(() =>
+      expect(api.uploadRemoteFiles).toHaveBeenCalledWith('c1', ['D:\\deploy.md'], '/home/dev/docs', 'overwrite')
     )
   })
 

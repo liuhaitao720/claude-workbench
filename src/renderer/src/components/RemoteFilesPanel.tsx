@@ -178,10 +178,18 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
   }
 
   const startUpload = async (paths: string[]): Promise<void> => {
-    // 冲突预检交引擎；skip 策略对冲突项仍入队（引擎覆盖语义）——v1 裁决：三选在
-    // 入队前问一次（渲染侧无法逐项预检不阻塞），用户选 skip 时改用 rename 后取消
-    // 冲突项不可行（引擎已定名）——简化：skip=以 rename 名入队后由冲突清单 cancel
-    const policy = await askConflictPolicy(paths)
+    // v2.0.2（用户实测）：同名预检——当前清单里没有同名才不弹窗直接传（此前无
+    // 条件弹三选）。清单可能略陈旧（引擎仍按所选策略兜底），无同名时策略无差别。
+    const baseOf = (p: string): string => p.split(/[\\/]/).pop() ?? p
+    const clash = paths
+      .map(baseOf)
+      .filter((n) => st.entries.some((e) => e.name === n))
+    if (clash.length === 0) {
+      await window.cwb.uploadRemoteFiles(connectionId, paths, st.path, 'overwrite')
+      load(st.path, false)
+      return
+    }
+    const policy = await askConflictPolicy(clash)
     if (policy === null) return // 用户取消整批
     const r = await window.cwb.uploadRemoteFiles(connectionId, paths, st.path, policy)
     if (policy === 'skip' && r.conflicts.length > 0) {
@@ -191,10 +199,10 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
     load(st.path, false)
   }
 
-  const askConflictPolicy = async (_paths: string[]): Promise<'overwrite' | 'skip' | 'rename' | null> => {
+  const askConflictPolicy = async (clashNames: string[]): Promise<'overwrite' | 'skip' | 'rename' | null> => {
     return new Promise((resolve) => {
       setConflict({
-        files: _paths.map((p) => p.split(/[\\/]/).pop() ?? p),
+        files: clashNames,
         apply: (policy) => {
           setConflict(null)
           resolve(policy)
@@ -519,33 +527,39 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
       )}
       {conflict !== null && (
         <div className="files-conflict" role="dialog" aria-label={t('files.conflictTitle')}>
-          <p className="files-conflict-title">{t('files.conflictTitle')}</p>
-          <p className="muted files-conflict-hint">{t('files.conflictHint', { n: String(conflict.files.length) })}</p>
-          <div className="files-conflict-files">
-            {conflict.files.slice(0, 5).map((f) => (
-              <span key={f} className="files-conflict-file">
-                {f}
-              </span>
-            ))}
-            {conflict.files.length > 5 && <span className="muted">+{conflict.files.length - 5}</span>}
-          </div>
-          <div className="files-conflict-actions">
-            <button type="button" className="btn" onClick={() => conflict.apply('skip')}>
-              {t('files.conflictSkip')}
-            </button>
-            <button type="button" className="btn" onClick={() => conflict.apply('rename')}>
-              {t('files.conflictRename')}
-            </button>
-            <button type="button" className="btn primary" onClick={() => conflict.apply('overwrite')}>
-              {t('files.conflictOverwrite')}
-            </button>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => conflictCancelRef.current?.()}
-            >
-              {t('common.cancel')}
-            </button>
+          {/* v2.0.2（用户实测「布局乱」）：卡片容器收拢全部内容——此前标题/提示/
+              文件清单/按钮是 overlay 的平级子节点，flex 横排挤成一行 */}
+          <div className="files-conflict-card">
+            <p className="files-conflict-title">{t('files.conflictTitle')}</p>
+            <p className="muted files-conflict-hint">
+              {t('files.conflictHint', { n: String(conflict.files.length) })}
+            </p>
+            <div className="files-conflict-files">
+              {conflict.files.slice(0, 5).map((f) => (
+                <span key={f} className="files-conflict-file">
+                  {f}
+                </span>
+              ))}
+              {conflict.files.length > 5 && <span className="muted">+{conflict.files.length - 5}</span>}
+            </div>
+            <div className="files-conflict-actions">
+              <button type="button" className="btn" onClick={() => conflict.apply('skip')}>
+                {t('files.conflictSkip')}
+              </button>
+              <button type="button" className="btn" onClick={() => conflict.apply('rename')}>
+                {t('files.conflictRename')}
+              </button>
+              <button type="button" className="btn primary" onClick={() => conflict.apply('overwrite')}>
+                {t('files.conflictOverwrite')}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => conflictCancelRef.current?.()}
+              >
+                {t('common.cancel')}
+              </button>
+            </div>
           </div>
         </div>
       )}
