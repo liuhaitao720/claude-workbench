@@ -709,13 +709,13 @@ describe('应用更新（「关于」分类内）', () => {
     expect(screen.getByTitle('有新版本 v1.2.0')).toBeDefined()
   })
 
-  it('v1.2.1 自动升级：开关缺省勾选、关闭写 settings；available 事件落 store；waiting-tasks 显示等待态', async () => {
+  it('自动升级开关（v2.0.1 缺省关）：点击开启写 settings；available 事件落 store；waiting-tasks 显示等待态', async () => {
     const api = await renderApp()
     const s = await openSettings()
     gotoSection(s, '关于')
-    // 缺省开（main settings 缺字段时视为 true）
+    // v2.0.1（用户指令）：缺省关——默认仅检查不自动升级
     const auto = s.getByRole('checkbox', { name: '有新版本时自动升级' }) as HTMLInputElement
-    expect(auto.checked).toBe(true)
+    expect(auto.checked).toBe(false)
 
     // 自动检查结果经进度事件送到界面（无需用户点「检查更新」）
     act(() => {
@@ -740,8 +740,9 @@ describe('应用更新（「关于」分类内）', () => {
     // 就绪后按钮变成「立即升级」（自动路径会自动执行，这是手动兜底）
     expect(s.getByRole('button', { name: '立即升级' })).toBeDefined()
 
+    // v2.0.1：缺省关——点击=开启（写 true）；此前缺省开点击写 false 的口径已过时
     fireEvent.click(auto)
-    await waitFor(() => expect(api.setAppSettings).toHaveBeenCalledWith({ autoUpdate: false }))
+    await waitFor(() => expect(api.setAppSettings).toHaveBeenCalledWith({ autoUpdate: true }))
   })
 })
 

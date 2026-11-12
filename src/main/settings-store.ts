@@ -40,7 +40,7 @@ export class AppSettingsStore {
       closeToTray: true,
       launchAtLogin: false,
       language: 'zh',
-      autoUpdate: true
+      autoUpdate: false
     }
     try {
       const parsed: unknown = JSON.parse(readFileSync(this.file, 'utf8'))
@@ -51,7 +51,7 @@ export class AppSettingsStore {
           launchAtLogin: typeof rec['launchAtLogin'] === 'boolean' ? rec['launchAtLogin'] : false,
           language: rec['language'] === 'en' ? 'en' : 'zh',
           // v1.2.1 缺省开启（用户要求升级无需手动点按钮；想要手动的人可在设置里关）
-          autoUpdate: typeof rec['autoUpdate'] === 'boolean' ? rec['autoUpdate'] : true,
+          autoUpdate: typeof rec['autoUpdate'] === 'boolean' ? rec['autoUpdate'] : false,
           // v1.4 本地代理随应用启动（缺省不开）
           ...(typeof rec['proxyAutoStart'] === 'boolean' ? { proxyAutoStart: rec['proxyAutoStart'] } : {}),
           // SSH 远程模式侧栏持久化键（S1 批0；S6 消费——缺省不落键=现行为）

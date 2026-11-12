@@ -319,7 +319,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [appUpdProgress, setAppUpdProgress] = useState<AppUpdateProgressEvent | null>(null)
   const [appUpdReady, setAppUpdReady] = useState(false)
   /** v1.2.1 自动升级开关（main settings.json 持久化；缺省开） */
-  const [autoUpdate, setAutoUpdate] = useState(true)
+  const [autoUpdate, setAutoUpdate] = useState(false)
   /** S14：当前展示的分类（默认首项「外观」；v1.2.2 起无 ⓘ 直达入口）。
    *  S6：初值取 store.settingsOpenSection（服务器菜单「编辑连接…」等入口直达用） */
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(
@@ -437,7 +437,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       .then((s) => {
         setCloseToTray(s.closeToTray)
         setLaunchAtLogin(s.launchAtLogin)
-        setAutoUpdate(s.autoUpdate !== false)
+        setAutoUpdate(s.autoUpdate === true)
         setProxyAutoStart(s.proxyAutoStart === true)
         setDownloadDir(s.downloadDir ?? '')
         setDownloadMode(s.downloadMode === 'ask' ? 'ask' : 'direct')

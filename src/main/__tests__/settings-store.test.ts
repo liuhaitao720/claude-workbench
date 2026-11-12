@@ -22,7 +22,7 @@ describe('AppSettingsStore', () => {
 
   it('文件缺失 → 默认值（托盘常驻 / 不自启 / 中文）', () => {
     const store = new AppSettingsStore(file)
-    expect(store.get()).toEqual({ closeToTray: true, launchAtLogin: false, language: 'zh', autoUpdate: true })
+    expect(store.get()).toEqual({ closeToTray: true, launchAtLogin: false, language: 'zh', autoUpdate: false })
   })
 
   it('patch 合并并落盘；再次 load 读回（含 language）', () => {
@@ -30,13 +30,13 @@ describe('AppSettingsStore', () => {
     store.set({ language: 'en' })
     store.set({ launchAtLogin: true })
     const saved = JSON.parse(readFileSync(file, 'utf8')) as AppSettings
-    expect(saved).toEqual({ closeToTray: true, launchAtLogin: true, language: 'en', autoUpdate: true })
+    expect(saved).toEqual({ closeToTray: true, launchAtLogin: true, language: 'en', autoUpdate: false })
     // 新实例（等价于重启）读回同一组值
     expect(new AppSettingsStore(file).get()).toEqual({
       closeToTray: true,
       launchAtLogin: true,
       language: 'en',
-      autoUpdate: true
+      autoUpdate: false
     })
   })
 
@@ -48,7 +48,7 @@ describe('AppSettingsStore', () => {
       closeToTray: true,
       launchAtLogin: false,
       language: 'zh',
-      autoUpdate: true
+      autoUpdate: false
     })
   })
 
@@ -56,7 +56,7 @@ describe('AppSettingsStore', () => {
     const onChange = vi.fn()
     const store = new AppSettingsStore(file, onChange)
     store.set({ language: 'en' })
-    expect(onChange).toHaveBeenCalledWith({ closeToTray: true, launchAtLogin: false, language: 'en', autoUpdate: true })
+    expect(onChange).toHaveBeenCalledWith({ closeToTray: true, launchAtLogin: false, language: 'en', autoUpdate: false })
   })
 
   it('get() 返回副本（调用方改动不污染缓存）', () => {
