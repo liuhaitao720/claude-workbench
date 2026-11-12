@@ -1670,6 +1670,15 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     if (cur === '' || lat === '') return { notes: [], error: '参数缺失' }
     return fetchClaudeChangelog(cur, lat)
   })
+  // v2.0.1：本机路径用系统程序打开（文件管理器定位目录——传输条保存目录「打开」）；
+  // 仅接受已存在的绝对路径（existsSync 守门，避免任意 openPath 探测）
+  ipcMain.handle(IpcChannels.ShellOpenPath, async (_e, target: unknown) => {
+    if (typeof target !== 'string' || target === '') return { ok: false, error: 'empty path' }
+    if (!existsSync(target)) return { ok: false, error: 'path not found' }
+    const err = await shell.openPath(target)
+    return err === '' ? { ok: true } : { ok: false, error: err }
+  })
+
   // v1.0.8 外部链接：白名单校验后交系统浏览器；拒绝（含 openExternal 失败）只返回 false 不抛错
   ipcMain.handle(IpcChannels.ShellOpenExternal, async (_e, url: string) => {
     if (!isSafeExternalUrl(url)) return false
@@ -1702,6 +1711,13 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       return ctx.notify.setWebhook(u, enabled === true)
     }
   )
+  // v2.0.1 通知留痕：拉取 + 事件订阅桥（"没收到推送"可自诊——最近 8 次 sent/failed/skipped）
+  ipcMain.handle(IpcChannels.NotifyTrailGet, () => ({
+    trail: ctx.notify.listTrail(),
+    localEnabled: ctx.notify.getConfig().enabled
+  }))
+  ctx.notify.onNotifyTrail((e) => broadcastEvent(IpcChannels.NotifyTrailEvent, e))
+
   ipcMain.handle(IpcChannels.NotifyTest, async (_e, cid: unknown) => {
     const c = asCid(cid)
     if (c !== undefined) {

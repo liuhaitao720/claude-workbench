@@ -663,6 +663,12 @@ export interface CWBApi {
   // ── webhook 通知（3，v0.5④N）───────────────
   /** 读取通知配置（默认 {url:'', enabled:false}） */
   getNotifyConfig(cid?: string): Promise<NotifyConfig>
+  /** v2.0.1 通知留痕（"没收到推送"自诊）：最近 8 次推送尝试 + 本机开关态 */
+  getNotifyTrail(): Promise<{
+    trail: Array<{ at: string; taskId: string; status: string; detail?: string }>
+    localEnabled: boolean
+  }>
+  onNotifyTrail(cb: (e: { at: string; taskId: string; status: string; detail?: string }) => void): () => void
   /** 保存 webhook 配置 */
   setNotifyWebhook(url: string, enabled: boolean, cid?: string): Promise<NotifyConfig>
   /** 立即推送测试消息 */
@@ -778,5 +784,7 @@ export interface CWBApi {
   /** S4 冒烟回执：renderer 收到 PTY 数据后回报 main */
   /** v2.0 拖拽文件 → 本机绝对路径（webUtils；Electron 44 File.path 已废） */
   getPathForFile(file: File): string | undefined
+  /** v2.0.1 本机路径系统打开（目录=资源管理器定位；存在性 main 侧守门） */
+  openLocalPath(target: string): Promise<{ ok: boolean; error?: string }>
   reportSmoke(payload: string): void
 }

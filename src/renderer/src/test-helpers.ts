@@ -102,6 +102,8 @@ export type CwbApiMock = Omit<CWBApi, 'addProject' | 'testConnection'> & {
   ptyCallbacks: Array<(e: PtyDataEvent) => void>
   /** v2.0 捕获的 onTransfersProgress 回调（测试注入进度用） */
   transfersProgressCallbacks: Array<(items: TransferItem[]) => void>
+  /** v2.0.1 捕获的 onNotifyTrail 回调（通知留痕事件） */
+  notifyTrailCallbacks: Array<(e: never) => void>
   /** 捕获的 onTaskUpdate 回调 */
   taskUpdateCallbacks: Array<(t: TaskUpdateEvent) => void>
   /** 捕获的 onTaskActivity 回调（v3.2） */
@@ -133,6 +135,7 @@ export type CwbApiMock = Omit<CWBApi, 'addProject' | 'testConnection'> & {
  *  事后覆写 mock 来不及，必须经 opts 在 render 前注入）。
  *  S6：connections/appSettings 同理预置（侧栏分组树与持久化键消费）。 */
 const transfersProgressCbs: Array<(items: TransferItem[]) => void> = []
+const notifyTrailCbs: Array<(e: never) => void> = []
 
 export function installCwbMock(
   opts: {
@@ -389,11 +392,18 @@ export function installCwbMock(
     cancelTransfer: vi.fn(async () => undefined),
     retryTransfer: vi.fn(async () => undefined),
     transfersProgressCallbacks: transfersProgressCbs,
+    notifyTrailCallbacks: notifyTrailCbs,
+    getNotifyTrail: vi.fn(async () => ({ trail: [], localEnabled: true })),
+    onNotifyTrail: vi.fn((cb: (e: never) => void) => {
+      notifyTrailCbs.push(cb)
+      return () => {}
+    }),
     onTransfersProgress: vi.fn((cb: (items: TransferItem[]) => void) => {
       transfersProgressCbs.push(cb)
       return () => {}
     }),
     getPathForFile: vi.fn(() => undefined),
+    openLocalPath: vi.fn(async () => ({ ok: true })),
     reportSmoke: vi.fn()
   }
 

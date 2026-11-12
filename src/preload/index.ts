@@ -168,6 +168,16 @@ const api: CWBApi = {
     ipcRenderer.invoke(IpcChannels.NotifyGet, cid) as Promise<NotifyConfig>,
   setNotifyWebhook: (url: string, enabled: boolean, cid?: string) =>
     ipcRenderer.invoke(IpcChannels.NotifySet, cid, url, enabled) as Promise<NotifyConfig>,
+  getNotifyTrail: () =>
+    ipcRenderer.invoke(IpcChannels.NotifyTrailGet) as Promise<{
+      trail: Array<{ at: string; taskId: string; status: string; detail?: string }>
+      localEnabled: boolean
+    }>,
+  onNotifyTrail: (cb: (e: { at: string; taskId: string; status: string; detail?: string }) => void) => {
+    const listener = (_e: unknown, ev: { at: string; taskId: string; status: string; detail?: string }): void => cb(ev)
+    ipcRenderer.on(IpcChannels.NotifyTrailEvent, listener as never)
+    return () => ipcRenderer.removeListener(IpcChannels.NotifyTrailEvent, listener as never)
+  },
   sendTestNotify: (cid?: string) =>
     ipcRenderer.invoke(IpcChannels.NotifyTest, cid) as Promise<{ ok: boolean; error?: string }>,
   // v1.4 模型服务 provider（参考 cc-switch：档案 CRUD + 默认切换；仅配置注入）
@@ -265,6 +275,8 @@ const api: CWBApi = {
   stopRemoteProxy: (connectionId) =>
     ipcRenderer.invoke(IpcChannels.RemoteProxyStop, connectionId) as Promise<RemoteProxyStatus>,
   /** v2.0 拖拽文件 → 本机绝对路径（Electron 44 File.path 已废——webUtils 官方口） */
+  openLocalPath: (target) =>
+    ipcRenderer.invoke(IpcChannels.ShellOpenPath, target) as Promise<{ ok: boolean; error?: string }>,
   getPathForFile: (file: File): string | undefined =>
     webUtils?.getPathForFile?.(file) ?? (file as File & { path?: string }).path,
   reportSmoke: (payload) => {

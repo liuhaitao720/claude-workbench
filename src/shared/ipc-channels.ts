@@ -30,6 +30,7 @@ const HANDLE = {
   NotifyGet: 'cwb:notify:get',
   NotifySet: 'cwb:notify:set',
   NotifyTest: 'cwb:notify:test',
+  NotifyTrailGet: 'cwb:notify:trail',
   // v0.9 应用设置
   SettingsGet: 'cwb:settings:get',
   SettingsSet: 'cwb:settings:set',
@@ -39,6 +40,7 @@ const HANDLE = {
   FontsInstalled: 'cwb:fonts:installed',
   // v1.0.8 外部链接（终端链接点击 → 系统浏览器，main 侧协议白名单）
   ShellOpenExternal: 'cwb:shell:open-external',
+  ShellOpenPath: 'cwb:shell:open-path',
   // v1.1.0 应用自更新
   AppUpdateCheck: 'cwb:app-update:check',
   AppUpdateDownload: 'cwb:app-update:download',
@@ -114,7 +116,9 @@ const EVENT = {
   /** 远程 server 日志（S1 落通道：S3 server.log 帧→S4 桥接 broadcastRemoteServerLog；脱敏元数据，8.1=A） */
   RemoteServerLog: 'cwb:event:remote-server-log',
   /** v2.0 传输进度（FileTransferManager 节流 ~100ms；items=跨连接合并清单） */
-  TransfersProgress: 'cwb:event:transfers-progress'
+  TransfersProgress: 'cwb:event:transfers-progress',
+  /** v2.0.1 通知留痕推送（NotifyService trail → 设置 Webhook 页诊断区） */
+  NotifyTrailEvent: 'cwb:event:notify-trail'
 } as const
 
 export const IpcChannels = { ...HANDLE, ...SEND, ...EVENT } as const

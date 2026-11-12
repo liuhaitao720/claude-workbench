@@ -62,8 +62,49 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
   const [st, setSt] = useState<PanelState>({ path: '', entries: [], loading: true, error: '' })
   /** 浏览历史（后退用；进目录/跳面包屑即压栈） */
   const historyRef = useRef<string[]>([])
-  /** v2.0.1 多选（FinalShell 语义）：单击选中/取消；Ctrl 单击增减；点空白清空 */
+  /** v2.0.1 多选（FinalShell 语义）：单击选中/取消；Ctrl 增减；Shift 范围；拖动框选 */
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
+  /** Shift 范围锚点（上次单击行索引；目录切换/清空时复位） */
+  const anchorIdxRef = useRef<number | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
+  /** 拖动框选（橡皮筋）：起点/当前矩形（相对列表视口 px） */
+  const [band, setBand] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  const bandStartRef = useRef<{ x: number; y: number } | null>(null)
+
+  const rowNames = (): string[] => st.entries.map((f) => f.name)
+  const applyRange = (from: number, to: number, base: ReadonlySet<string>): ReadonlySet<string> => {
+    const names = rowNames()
+    const [a, b] = from <= to ? [from, to] : [to, from]
+    const n = new Set(base)
+    for (let i = a; i <= b; i++) {
+      const nm = names[i]
+      if (nm !== undefined) n.add(nm)
+    }
+    return n
+  }
+
+  /** 框选与行矩形求交（视口坐标系；jsdom 零矩形下安全返回空） */
+  const bandHits = (x1: number, y1: number, x2: number, y2: number): ReadonlySet<string> => {
+    const rect = listRef.current?.getBoundingClientRect()
+    if (rect === undefined || rect.height === 0) return new Set()
+    const top = Math.min(y1, y2)
+    const bottom = Math.max(y1, y2)
+    const rows = listRef.current?.querySelectorAll<HTMLElement>('.files-row') ?? []
+    const hits = new Set<string>()
+    for (const row of rows) {
+      const r = row.getBoundingClientRect()
+      if (r.height === 0) continue
+      const rowTop = r.top - rect.top + listRef.current!.scrollTop
+      const rowBottom = rowTop + r.height
+      if (rowBottom >= top && rowTop <= bottom) {
+        const nm = row.dataset['fileName']
+        if (nm !== undefined) hits.add(nm)
+      }
+      void x1
+      void x2
+    }
+    return hits
+  }
   const [renaming, setRenaming] = useState<{ from: string; value: string } | null>(null)
   const [conflict, setConflict] = useState<{ files: string[]; apply: (policy: 'overwrite' | 'skip' | 'rename') => void } | null>(null)
   const connName = connections.find((c) => c.id === connectionId)?.name ?? ''
@@ -308,7 +349,37 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
           ⬆ {t('files.upload')}
         </button>
       </div>
-      <div className="files-list">
+      <div
+        className="files-list"
+        ref={listRef}
+        onMouseDown={(e) => {
+          // 框选起点（仅左键且非按钮/输入/行内操作——落在行上也允许，拖动>4px 才成框）
+          if (e.button !== 0) return
+          const rect = listRef.current?.getBoundingClientRect()
+          if (rect === undefined) return
+          bandStartRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top + listRef.current!.scrollTop }
+        }}
+        onMouseMove={(e) => {
+          const st0 = bandStartRef.current
+          const rect = listRef.current?.getBoundingClientRect()
+          if (st0 === null || rect === undefined || band === null) return
+          const cur = { x: e.clientX - rect.left, y: e.clientY - rect.top + listRef.current!.scrollTop }
+          if (Math.abs(cur.x - st0.x) + Math.abs(cur.y - st0.y) < 4) return
+          setBand({ x1: st0.x, y1: st0.y, x2: cur.x, y2: cur.y })
+          setSelected(bandHits(st0.x, st0.y, cur.x, cur.y))
+        }}
+        onMouseUp={() => {
+          bandStartRef.current = null
+          if (band !== null) {
+            setBand(null)
+            anchorIdxRef.current = null
+          }
+        }}
+        onMouseLeave={() => {
+          bandStartRef.current = null
+          setBand(null)
+        }}
+      >
         {st.loading && <p className="muted files-hint">{t('common.detecting')}</p>}
         {!st.loading && st.error !== '' && <p className="inline-error">{st.error}</p>}
         {!st.loading && st.error === '' && st.entries.length === 0 && (
@@ -320,17 +391,25 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
             className={`files-row${f.isDir ? ' dir' : ''}${selected.has(f.name) ? ' sel' : ''}`}
             data-file-name={f.name}
             data-selected={selected.has(f.name) ? '1' : undefined}
-            onClick={(e) =>
-              setSelected((prev) => {
-                if (e.ctrlKey || e.metaKey) {
+            onClick={(e) => {
+              const idx = st.entries.findIndex((f2) => f2.name === f.name)
+              if (e.shiftKey && anchorIdxRef.current !== null) {
+                setSelected((prev) => applyRange(anchorIdxRef.current!, idx, prev))
+                return
+              }
+              if (e.ctrlKey || e.metaKey) {
+                anchorIdxRef.current = idx
+                setSelected((prev) => {
                   const n = new Set(prev)
                   if (n.has(f.name)) n.delete(f.name)
                   else n.add(f.name)
                   return n
-                }
-                return prev.has(f.name) && prev.size === 1 ? new Set() : new Set([f.name])
-              })
-            }
+                })
+                return
+              }
+              anchorIdxRef.current = idx
+              setSelected((prev) => (prev.has(f.name) && prev.size === 1 ? new Set() : new Set([f.name])))
+            }}
             onDoubleClick={() => {
               if (f.isDir) {
                 into(f.name)
@@ -397,6 +476,18 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
             </span>
           </div>
         ))}
+        {band !== null && (
+          <div
+            className="files-band"
+            style={{
+              left: Math.min(band.x1, band.x2),
+              top: Math.min(band.y1, band.y2),
+              width: Math.abs(band.x2 - band.x1),
+              height: Math.abs(band.y2 - band.y1)
+            }}
+            data-testid="files-band"
+          />
+        )}
       </div>
       {dragging && (
         <div className="files-dropzone">
@@ -482,21 +573,32 @@ function TransferBar({ connName }: { connName: string }) {
   /** v2.0.1（用户实测②）：顶部统一显示当前下载保存目录（与 main 落位逻辑同源派生） */
   const [saveDir, setSaveDir] = useState('')
 
+  /** v2.0.1：真实可打开路径（默认目录占位时不可开——按钮禁用）+ 显示文案 */
+  const [openableDir, setOpenableDir] = useState('')
   useEffect(() => {
     void window.cwb.listTransfers().then(setItems).catch(() => {})
     void window.cwb
       .getAppSettings()
       .then((s) => {
-        const root =
-          s.downloadDir !== undefined && s.downloadDir.trim() !== ''
-            ? s.downloadDir.trim()
-            : t('files.defaultSaveDir')
-        setSaveDir(s.downloadPerConnection === false ? root : `${root}${root.endsWith('\\') ? '' : '\\'}${connName}`)
+        const root = s.downloadDir !== undefined ? s.downloadDir.trim() : ''
+        const openable =
+          root === ''
+            ? '' // 默认目录（系统下载/SSH Workbench）——main 落位，此处未知则不开
+            : s.downloadPerConnection === false
+              ? root
+              : `${root}${root.endsWith('\\') ? '' : '\\'}${connName}`
+        setOpenableDir(openable)
+        setSaveDir(openable !== '' ? openable : t('files.defaultSaveDir'))
       })
       .catch(() => {})
     return window.cwb.onTransfersProgress((fresh) => setItems(fresh))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 目录随连接名/语言取一次
   }, [connName])
+
+  const openSaveDir = async (): Promise<void> => {
+    if (openableDir === '') return
+    await window.cwb.openLocalPath(openableDir).catch(() => undefined)
+  }
 
   // v2.0.1（用户实测"下载无提示"）：出现活动项即自动展开队列——肉眼即时反馈
   const hasActive = items.some((i) => i.status === 'active' || i.status === 'queued')
@@ -546,8 +648,24 @@ function TransferBar({ connName }: { connName: string }) {
       </div>
       {open && (
         <div className="xfer-list" data-testid="xfer-table">
-          <p className="xfer-savedir" data-testid="xfer-savedir" title={saveDir}>
+          <p
+            className="xfer-savedir"
+            data-testid="xfer-savedir"
+            title={openableDir !== '' ? `${saveDir}（双击打开）` : saveDir}
+            onDoubleClick={() => void openSaveDir()}
+          >
             {t('files.saveDirLabel')}: <span className="mono">{saveDir}</span>
+            {openableDir !== '' && (
+              <button
+                type="button"
+                className="btn small"
+                style={{ marginLeft: 8 }}
+                data-testid="btn-open-savedir"
+                onClick={() => void openSaveDir()}
+              >
+                {t('files.openDirBtn')}
+              </button>
+            )}
           </p>
           <div className="xfer-head">
             <span> </span>

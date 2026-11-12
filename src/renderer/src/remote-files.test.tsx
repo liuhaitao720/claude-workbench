@@ -194,6 +194,24 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
     expect(api.deleteRemote).toHaveBeenCalledWith('c1', '/home/dev/b.md', false)
   })
 
+  it('Shift+click 范围选择：点第 1 行后 Shift 点第 3 行 → 三行全选中', async () => {
+    const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
+    vi.mocked(api.listRemoteFiles).mockResolvedValue({
+      ok: true,
+      path: '/home/dev',
+      entries: ['f1', 'f2', 'f3', 'f4'].map((n) => ({ name: n, isDir: false, size: 1, mtimeMs: 0 }))
+    })
+    render(<App />)
+    const panel = await openPanel(api)
+    const row = (n: string) => panel.querySelector(`[data-file-name="${n}"]`) as HTMLElement
+    fireEvent.click(row('f1'))
+    fireEvent.click(row('f3'), { shiftKey: true })
+    expect(row('f1').dataset['selected']).toBe('1')
+    expect(row('f2').dataset['selected']).toBe('1')
+    expect(row('f3').dataset['selected']).toBe('1')
+    expect(row('f4').dataset['selected']).toBeUndefined()
+  })
+
   it('双击小文本文件 → peekRemoteFile（本机打开）；大文件/未知扩展 → 走下载', async () => {
     const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
     vi.mocked(api.listRemoteFiles).mockResolvedValue({

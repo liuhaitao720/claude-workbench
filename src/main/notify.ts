@@ -59,6 +59,13 @@ export function inferChannel(url: string): NotifyConfig['channel'] {
 }
 
 /** 按通道构造 payload（导出便于单测；形状见 spec-v0.5 ④N） */
+export interface NotifyTrailEntry {
+  at: string
+  taskId: string
+  status: 'sent' | 'failed' | 'skipped'
+  detail?: string
+}
+
 export function buildNotifyPayload(channel: NotifyConfig['channel'], text: string): Record<string, unknown> {
   if (channel === 'wecom') {
     return { msgtype: 'markdown', markdown: { content: text } }
@@ -118,7 +125,10 @@ export class NotifyService {
   onActivityEvent(event: TaskActivityEvent, configOverride?: NotifyConfig): void {
     if (event.activity !== 'awaiting') return
     const config = configOverride ?? this.load()
-    if (!config.enabled || config.url.length === 0) return
+    if (!config.enabled || config.url.length === 0) {
+      this.recordTrail(event.taskId, 'skipped', config.enabled ? 'no url' : 'disabled')
+      return
+    }
     const at = this.now()
     const last = this.lastPushAt.get(event.taskId)
     if (last !== undefined && at - last < PUSH_DEBOUNCE_MS) return
@@ -128,7 +138,7 @@ export class NotifyService {
       hour12: false
     })
     const text = this.t('notify.awaiting', { name, when })
-    void this.push(config, text)
+    void this.push(config, text, event.taskId)
   }
 
   /** 以指定配置立即推送（远程「测试推送」用——本地测试走 sendTest） */
@@ -157,12 +167,41 @@ export class NotifyService {
   /** taskId → 最近一次推送时刻（防抖表） */
   private readonly lastPushAt = new Map<string, number>()
 
-  /** 推送（失败静默 + console.error——旁路提醒不阻塞状态机） */
-  private async push(config: NotifyConfig, text: string): Promise<void> {
+  /** 推送（失败静默 + console.error——旁路提醒不阻塞状态机）；v2.0.1 留痕（设置页诊断） */
+  private async push(config: NotifyConfig, text: string, taskId?: string): Promise<void> {
     try {
       await this.postJson(config, text)
+      if (taskId !== undefined) this.recordTrail(taskId, 'sent')
     } catch (err) {
       console.error('[cwb] notify push failed:', err instanceof Error ? err.message : err)
+      if (taskId !== undefined) this.recordTrail(taskId, 'failed', err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  /** 最近推送尝试留痕（环形 8 条；onNotifyTrail 订阅外送——设置 Webhook 页消费） */
+  private readonly trail: NotifyTrailEntry[] = []
+  private readonly trailListeners = new Set<(e: NotifyTrailEntry) => void>()
+
+  recordTrail(taskId: string, status: NotifyTrailEntry['status'], detail?: string): void {
+    const entry: NotifyTrailEntry = {
+      at: new Date().toISOString(),
+      taskId,
+      status,
+      ...(detail !== undefined ? { detail } : {})
+    }
+    this.trail.push(entry)
+    if (this.trail.length > 8) this.trail.shift()
+    for (const cb of this.trailListeners) cb(entry)
+  }
+
+  listTrail(): readonly NotifyTrailEntry[] {
+    return [...this.trail]
+  }
+
+  onNotifyTrail(cb: (e: NotifyTrailEntry) => void): () => void {
+    this.trailListeners.add(cb)
+    return () => {
+      this.trailListeners.delete(cb)
     }
   }
 

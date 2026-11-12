@@ -1678,6 +1678,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   </p>
                 )}
                 <p className="hint-small">{t('settings.notifyHint')}</p>
+                {/* v2.0.1 推送留痕（用户实测"没收到推送"自诊）：最近 8 次 sent/failed/skipped */}
+                <NotifyTrail />
+
               
                 </div>
               </div>
@@ -2056,6 +2059,43 @@ function LockedGate() {
       <button type="button" className="btn primary" onClick={() => cid !== undefined && void connectFlow(cid)}>
         {t('settings.scopeLockedCta', { name })}
       </button>
+    </div>
+  )
+}
+
+
+/** v2.0.1 通知推送留痕（设置 Webhook 页诊断区）：最近 8 次尝试 + 本机开关态提醒 */
+function NotifyTrail() {
+  const t = useI18n()
+  const [trail, setTrail] = useState<Array<{ at: string; taskId: string; status: string; detail?: string }>>([])
+  const [localEnabled, setLocalEnabled] = useState(true)
+
+  useEffect(() => {
+    void window.cwb
+      .getNotifyTrail()
+      .then((r) => {
+        setTrail(r.trail)
+        setLocalEnabled(r.localEnabled)
+      })
+      .catch(() => {})
+    return window.cwb.onNotifyTrail((e) => setTrail((prev) => [...prev, e].slice(-8)))
+  }, [])
+
+  if (trail.length === 0) return null
+  return (
+    <div className="notify-trail" data-testid="notify-trail">
+      <p className="hint-small" style={{ marginBottom: 2 }}>
+        {t('settings.notifyTrailTitle')}
+        {!localEnabled && <span className="inline-error"> · {t('settings.notifyTrailLocalOff')}</span>}
+      </p>
+      <ul>
+        {trail.map((e) => (
+          <li key={e.at + e.taskId} data-status={e.status}>
+            {new Date(e.at).toLocaleTimeString()} · {e.status}
+            {e.detail !== undefined ? ` · ${e.detail}` : ''} · {e.taskId.slice(0, 8)}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
