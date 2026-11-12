@@ -187,3 +187,18 @@ describe('DiffReview 组件交互', () => {
     expect(rows[2]!.textContent).toContain('?')
   })
 })
+
+describe('v2.0.3 审查竖条入口（常驻可见）', () => {
+  it('git 项目 + active 任务 → 竖条「审查改动」可见；点击直达项目与 worktree 目录；非 git 无按钮', async () => {
+    await renderApp()
+    const wtTask = makeTask({ id: 'tw', projectId: 'p1', name: 'worktree 活', cwd: 'D:\\repo-a', worktreePath: 'D:\\repo-a\\.cwb-worktrees\\tw' })
+    useAppStore.setState((s) => ({ tasks: [...s.tasks, wtTask], openTaskIds: [...s.openTaskIds, 'tw'], activeTaskId: 'tw' }))
+    const rail = await screen.findByTestId('btn-review-rail')
+    expect(rail.textContent).toContain('审查改动')
+    fireEvent.click(rail)
+    await waitFor(() => {
+      expect(useAppStore.getState().reviewState?.projectId).toBe('p1')
+      expect(useAppStore.getState().reviewState?.cwd).toBe('D:\\repo-a\\.cwb-worktrees\\tw')
+    })
+  })
+})

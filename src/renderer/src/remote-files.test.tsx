@@ -15,7 +15,7 @@ import { useAppStore } from './store'
 
 const conn = makeConnection({ id: 'c1', name: 'VM-Dev' })
 const pRemote = makeProject({ id: 'pr', name: 'R', dir: '/home/dev/r', connectionId: 'c1' })
-const tRun = makeTask({ id: 'tr', projectId: 'pr', name: '跑着', status: 'running' })
+const tRun = makeTask({ id: 'tr', projectId: 'pr', name: '跑着', status: 'running', cwd: '/home/dev' })
 
 function entriesFixture(): RemoteFileEntry[] {
   return [
@@ -35,7 +35,8 @@ async function openPanel(api: ReturnType<typeof installCwbMock>): Promise<HTMLEl
   fireEvent.click(toggle)
   // eslint-disable-next-line no-console
   const panel = await screen.findByTestId('files-panel')
-  await waitFor(() => expect(api.listRemoteFiles).toHaveBeenCalledWith('c1', undefined))
+  // v2.0.3：任务窗口上下文开面板 → 直达该任务项目工作目录（tRun.cwd）
+  await waitFor(() => expect(api.listRemoteFiles).toHaveBeenCalledWith('c1', '/home/dev'))
   return panel
 }
 
@@ -294,5 +295,69 @@ describe('v2.0.1 终端点击移位（caretSequenceForClick 纯函数）', () =>
     expect(caretSequenceForClick(30 * 8, 11 * 16, rect, cols, rows, 20, 10)).toBeNull()
     expect(caretSequenceForClick(20 * 8, 10 * 16, rect, cols, rows, 20, 10)).toBeNull()
     expect(caretSequenceForClick(9999, 10 * 16, rect, cols, rows, 20, 10)).toBeNull()
+  })
+})
+
+describe('v2.0.3 文件面板任务上下文直达', () => {
+  afterEach(cleanup)
+
+  it('本地任务 active → 开面板回落原行为（无目标连接/记忆目录=undefined）', async () => {
+    const pLocal = makeProject({ id: 'pl', name: 'L', dir: 'D:\\local', isGit: true })
+    const tLocal = makeTask({ id: 'tl', projectId: 'pl', name: '本地活', status: 'running' })
+    const api = installCwbMock({ projects: [pRemote, pLocal], tasks: [tRun, tLocal], connections: [conn] })
+    vi.mocked(api.listRemoteFiles).mockResolvedValue({ ok: true, path: '/home/dev', entries: entriesFixture() })
+    // 前序用例遗留的 filesTargetConn 会让 App 挂载即开面板——渲染前清干净
+    act(() => {
+      useAppStore.setState({ filesTargetConn: null })
+    })
+    render(<App />)
+    await waitFor(() => expect(useAppStore.getState().connections.length).toBeGreaterThan(0))
+    act(() => {
+      // 前序用例的 per-connection 目录记忆不带入（本用例断言无上下文回落）
+      useAppStore.setState({
+        activeTaskId: 'tl',
+        connectionStates: { c1: { state: 'connected' } },
+        filesTargetConn: null,
+        uiSettings: { ...useAppStore.getState().uiSettings, filesPanelPath: {} }
+      })
+    })
+    fireEvent.click(await screen.findByRole('button', { name: '远程文件' }))
+    await screen.findByTestId('files-panel')
+    await waitFor(() => expect(api.listRemoteFiles).toHaveBeenCalledWith('c1', undefined))
+  })
+})
+
+describe('v2.0.2 拖拽上传修复（提示遮罩纯视觉化 + leave/drop 收起）', () => {
+  afterEach(cleanup)
+
+  async function openForDrag(): Promise<HTMLElement> {
+    const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
+    vi.mocked(api.listRemoteFiles).mockResolvedValue({ ok: true, path: '/home/dev', entries: entriesFixture() })
+    act(() => {
+      useAppStore.setState({ filesTargetConn: null })
+    })
+    render(<App />)
+    await waitFor(() => expect(useAppStore.getState().connections.length).toBeGreaterThan(0))
+    act(() => {
+      useAppStore.setState({ connectionStates: { c1: { state: 'connected' } } })
+    })
+    fireEvent.click(await screen.findByRole('button', { name: '远程文件' }))
+    return await screen.findByTestId('files-panel')
+  }
+
+  it('dragOver → 提示条出现且 pointer-events:none；经子元素 dragLeave（relatedTarget 面板外）→ 收起；drop → 收起', async () => {
+    const panel = await openForDrag()
+    fireEvent.dragOver(panel)
+    const dropzone = document.querySelector('.files-dropzone') as HTMLElement | null
+    expect(dropzone).not.toBeNull()
+    // （pointer-events:none 为 CSS 层断言——jsdom 不解析该属性，真浏览器生效；此处保行为断言）
+    // 经子元素离开（relatedTarget=null=出窗）→ 收起（此前仅 currentTarget===target 判定不收）
+    fireEvent.dragLeave(panel, { relatedTarget: null })
+    await waitFor(() => expect(document.querySelector('.files-dropzone')).toBeNull())
+    // dragOver 再现后 drop → 收起
+    fireEvent.dragOver(panel)
+    expect(document.querySelector('.files-dropzone')).not.toBeNull()
+    fireEvent.drop(panel, { dataTransfer: { files: [], types: ['Files'] } })
+    await waitFor(() => expect(document.querySelector('.files-dropzone')).toBeNull())
   })
 })

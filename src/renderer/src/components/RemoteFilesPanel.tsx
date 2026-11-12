@@ -213,10 +213,27 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
     e.preventDefault()
     setDragging(false)
     const paths = localPathsFromDataTransfer(e.dataTransfer)
-    if (paths.length === 0) return
+    if (paths.length === 0) {
+      // 可诊断性：drop 到达但取不到本机路径（webUtils 桥断/拖入非文件）——留痕
+      console.error('[cwb] drop with no local paths:', e.dataTransfer.types.join(','))
+      return
+    }
     await startUpload(paths)
   }
   const [dragging, setDragging] = useState(false)
+
+  // v2.0.2 拖拽修复兜底：Chromium 拖拽目标因重渲染失效时 drop 不派发（被
+  // will-navigate 静默吞掉）且 dragleave 丢失 → 提示条卡死。document 级
+  // dragend/drop 一律收起提示（dragend 在源端取消拖拽、drop 在任意处释放均触发）
+  useEffect(() => {
+    const clear = (): void => setDragging(false)
+    document.addEventListener('dragend', clear)
+    document.addEventListener('drop', clear)
+    return () => {
+      document.removeEventListener('dragend', clear)
+      document.removeEventListener('drop', clear)
+    }
+  }, [])
 
   const download = (f: RemoteFileEntry): void => {
     void window.cwb
@@ -295,7 +312,12 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
         setDragging(true)
       }}
       onDragLeave={(e) => {
-        if (e.currentTarget === e.target) setDragging(false)
+        // v2.0.2：经子元素离开（relatedTarget 不在面板内）也算离场——此前仅
+        // currentTarget===target 判定，从列表行/面包屑离开时提示条不消失
+        const to = e.relatedTarget
+        if (to === null || !(to instanceof Node) || !e.currentTarget.contains(to)) {
+          setDragging(false)
+        }
       }}
       onDrop={(e) => void onDrop(e)}
     >

@@ -1,4 +1,4 @@
-import { useEffect , useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { initListeners, useAppStore } from './store'
 import { ProjectSidebar } from './components/ProjectSidebar'
 import { TabBar } from './components/TabBar'
@@ -103,6 +103,21 @@ export function App() {
       : filesOpen && connectedConn !== null
         ? connectedConn
         : null
+  // v2.0.3 审查竖条入口目标：当前任务的项目（git——worktree 任务带 worktree 目录）
+  // 优先，回落选中项目；两者皆非 git 则不显示
+  const activeTaskId = useAppStore((s) => s.activeTaskId)
+  const tasks = useAppStore((s) => s.tasks)
+  const selectedProjectId = useAppStore((s) => s.selectedProjectId)
+  const reviewEntry = useMemo(() => {
+    const task = tasks.find((x) => x.id === activeTaskId)
+    const byTask =
+      task !== undefined ? projects.find((p) => p.id === task.projectId && p.isGit) : undefined
+    if (byTask !== undefined && task !== undefined) {
+      return { projectId: byTask.id, cwd: task.worktreePath ?? task.cwd }
+    }
+    const bySel = projects.find((p) => p.id === selectedProjectId && p.isGit)
+    return bySel !== undefined ? { projectId: bySel.id, cwd: bySel.dir } : null
+  }, [activeTaskId, tasks, projects, selectedProjectId])
   // S6（6.7=A）：连接流程触发 needInstall 时的 server 安装/升级确认弹窗
   const pendingServerInstall = useAppStore((s) => s.pendingServerInstall)
 
@@ -119,20 +134,50 @@ export function App() {
         <TabBar />
         <div className="main-workspace">
         <TerminalPanel />
-        {/* v2.0 远程文件面板（FinalShell 式右侧——用户确认原型）：开合状态 +
-            目标连接为 renderer 态（第一个已连接远程；记忆 per-connection 目录） */}
-        {filesConnId === null ? (
-          connectedConn !== null && (
+        {/* v2.0.3 右缘竖条：审查改动常驻入口（此前仅项目菜单⋯/快捷键/AI 完成 toast，
+            用户实测「看不见进入方式」）+ 远程文件入口。任务窗口上下文优先：审查=当前
+            任务的项目（worktree 任务带 worktree 目录）；文件面板=直达该任务项目工作目录 */}
+        <div className="rail-stack">
+          {reviewEntry !== null && (
             <button
               type="button"
               className="files-rail-toggle"
-              title={t('files.openPanel')}
-              onClick={() => setFilesOpen(true)}
+              title={t('review.railToggleTitle')}
+              data-testid="btn-review-rail"
+              onClick={() => void useAppStore.getState().openReview(reviewEntry.projectId, reviewEntry.cwd)}
             >
-              {t('files.openPanel')}
+              {t('review.railToggle')}
             </button>
-          )
-        ) : (
+          )}
+          {filesConnId === null &&
+            connectedConn !== null && (
+              <button
+                type="button"
+                className="files-rail-toggle"
+                title={t('files.openPanel')}
+                onClick={() => {
+                  // v2.0.3（用户指令）：任务窗口上下文开文件面板 → 直达该任务远程项目
+                  // 的工作目录（此前回落首个已连接+各连接记忆目录）；非远程任务回原行为
+                  const s = useAppStore.getState()
+                  const task = s.tasks.find((x) => x.id === s.activeTaskId)
+                  const project = task !== undefined ? s.projects.find((p) => p.id === task.projectId) : undefined
+                  if (
+                    task !== undefined &&
+                    project?.connectionId !== undefined &&
+                    s.connectionStates[project.connectionId]?.state === 'connected'
+                  ) {
+                    s.openFilesPanel(project.connectionId, task.worktreePath ?? task.cwd)
+                  }
+                  setFilesOpen(true)
+                }}
+              >
+                {t('files.openPanel')}
+              </button>
+            )}
+        </div>
+        {/* v2.0 远程文件面板（FinalShell 式右侧——用户确认原型）：开合状态 +
+            目标连接为 renderer 态（第一个已连接远程；记忆 per-connection 目录） */}
+        {filesConnId !== null && (
           <div className="remote-files-host" data-testid="remote-files-host">
             <RemoteFilesPanel connectionId={filesConnId} />
             <button

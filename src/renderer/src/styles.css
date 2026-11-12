@@ -2749,7 +2749,7 @@ button {
 .files-row:hover .files-acts { opacity: 1; }
 .files-hint { padding: 30px 16px; text-align: center; }
 .files-rename-input { background: var(--bg-input); border: 1px solid var(--accent); border-radius: 4px; color: var(--text-1); font-size: 12px; padding: 2px 6px; width: 100%; }
-.files-dropzone { position: absolute; inset: 0; background: rgba(61,118,179,.14); border: 2px dashed var(--accent); margin: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 6px; z-index: 10; color: var(--text-1); }
+.files-dropzone { position: absolute; inset: 0; background: rgba(61,118,179,.14); border: 2px dashed var(--accent); margin: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 6px; z-index: 10; color: var(--text-1); pointer-events: none; } /* v2.0.2 拖拽修复：遮罩纯视觉化——不参与拖拽命中测试，防 Chromium 拖拽目标因重渲染失效致 drop 丢失 */
 .files-conflict { position: absolute; inset: 0; background: var(--overlay); display: flex; align-items: center; justify-content: center; z-index: 11; }
 .files-conflict-title { width: 420px; background: var(--bg-dialog); border: 1px solid var(--border-1); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow-lg); font-size: 13.5px; font-weight: 600; }
 .files-conflict-hint { font-size: 11.5px; margin: 6px 0 8px; }
@@ -3033,3 +3033,12 @@ button {
   font-size: 12px;
   color: var(--text-1);
 }
+
+/* v2.0.3 右缘竖条按钮堆（审查改动 + 远程文件）：原单按钮样式拆为堆叠——
+   首个保上半圆角、末个保下半圆角、相邻去上边框；单独时维持原整圆角 */
+.rail-stack { display: flex; flex-direction: column; align-self: flex-start; margin-top: 44px; }
+.rail-stack .files-rail-toggle { margin-top: 0; border-radius: 6px 0 0 6px; }
+.rail-stack .files-rail-toggle:first-child:not(:last-child) { border-radius: 6px 0 0 0; }
+.rail-stack .files-rail-toggle + .files-rail-toggle { border-top: none; }
+.rail-stack .files-rail-toggle:last-child:not(:first-child) { border-radius: 0 0 0 6px; }
+.rail-stack .files-rail-toggle:only-child { border-radius: 6px 0 0 6px; }
