@@ -72,6 +72,7 @@ export function App() {
           <div className="empty-hint">{t('app.emptyHint')}</div>
         )}
         <TabBar />
+        <div className="main-workspace">
         <TerminalPanel />
         {/* v2.0 远程文件面板（FinalShell 式右侧——用户确认原型）：开合状态 +
             目标连接为 renderer 态（第一个已连接远程；记忆 per-connection 目录） */}
@@ -99,6 +100,7 @@ export function App() {
             </button>
           </div>
         )}
+        </div>
       </div>
       {settingsOpen && (
         <SettingsDialog

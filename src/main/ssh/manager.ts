@@ -604,13 +604,25 @@ export class RealSftpSession implements SftpSession {
         else resolve(list as Array<{ filename: string; attrs: Stats }>)
       })
     })
+    const S_IFMT2 = 0o170000
+    const S_IFLNK2 = 0o120000
     const out: Array<{ name: string; isDir: boolean; size: number; mtimeMs: number }> = []
     for (const e of raw) {
       if (e.filename === '.' || e.filename === '..') continue
-      const isDir = e.attrs.isDirectory()
-      if (isDir) {
+      if (e.attrs.isDirectory()) {
         out.push({ name: e.filename, isDir: true, size: 0, mtimeMs: statMtimeMs(e.attrs) })
         continue
+      }
+      // 软链接目录（v2.0.1 修复——用户实测 /home/<user>/src→/mnt/src 被当文件）：
+      // readdir attrs 是链接自身（LNK/isDirectory=false）——跟链 stat 复核目标，
+      // 目录则按目录呈现（可进入；list() v1.5.4 同语义补齐）。死链保持文件态。
+      const mode = e.attrs.mode ?? 0
+      if ((mode & S_IFMT2) === S_IFLNK2) {
+        const st = await this.statAny(`${dir === '/' ? '' : dir}/${e.filename}`).catch(() => null)
+        if (st?.isDirectory() === true) {
+          out.push({ name: e.filename, isDir: true, size: 0, mtimeMs: statMtimeMs(e.attrs) })
+          continue
+        }
       }
       out.push({ name: e.filename, isDir: false, size: e.attrs.size, mtimeMs: statMtimeMs(e.attrs) })
     }

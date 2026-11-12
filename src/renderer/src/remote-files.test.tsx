@@ -134,9 +134,10 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
     })
     const bar = await screen.findByTestId('transfer-bar')
     expect(bar.textContent).toContain('50%')
-    fireEvent.click(bar.querySelector('.xfer-bar') as HTMLElement) // 展开
+    // v2.0.1：活动项出现即自动展开（无需手点）——表格直接在场
     const row = await within(bar).findByText('big.bin')
     expect(row).toBeDefined()
+    expect(within(bar).getByText('进度')).toBeDefined() // 表头在场
     fireEvent.click(within(bar).getByRole('button', { name: '×' }))
     await waitFor(() => expect(api.cancelTransfer).toHaveBeenCalledWith('tf-1'))
   })

@@ -113,13 +113,6 @@ export function broadcastConnectionState(e: ConnectionStateChangedEvent): void {
  */
 const remoteNotifyCache = new Map<string, { cfg: NotifyConfig | null; at: number }>()
 
-/** v2.0 传输进度广播（模块级：任一连接的 manager 节流触发即推合并清单） */
-let broadcastTransfers: ((items: TransferItem[]) => void) | null = null
-
-/** v2.0 广播装配器：main.ts 经此注入真实 webContents 广播（handler 注册前生效） */
-export function registerTransfersBroadcaster(send: (items: TransferItem[]) => void): void {
-  broadcastTransfers = send
-}
 const REMOTE_NOTIFY_CACHE_TTL_MS = 60_000
 
 export function broadcastRemoteServerLog(e: RemoteServerLogEvent): void {
@@ -1270,7 +1263,11 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       m = new FileTransferManager({
         connection: ctx.connection,
         connectionId: cid,
-        onProgress: () => broadcastTransfers?.(allTransfers())
+        // v2.0.1 修复（用户实测"下载无任何提示"）：进度直连 broadcastEvent——
+        // 此前经模块级 broadcastTransfers 指针（预留 main.ts 装配但未接线），
+        // 永远为 null → 传输条停在初始快照。broadcastEvent 自带窗口广播与
+        // EVENT_CHANNELS 契约校验（TransfersProgress 已在契约内）。
+        onProgress: () => broadcastEvent(IpcChannels.TransfersProgress, allTransfers())
       })
       fileManagers.set(cid, m)
     }

@@ -2710,15 +2710,22 @@ button {
 }
 
 /* ── v2.0 远程文件面板 ────────────────────────────────────────────────── */
+.main-workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
 .remote-files-host {
   display: flex;
   border-left: 1px solid var(--border-1);
   background: var(--bg-panel);
+  min-height: 0;
 }
 
 .files-panel {
-  width: 340px;
-  min-width: 280px;
+  width: 440px;
+  min-width: 360px;
   display: flex;
   flex-direction: column;
   position: relative;
@@ -2733,7 +2740,7 @@ button {
 .crumb .sep { color: var(--text-4); }
 .files-toolbar { display: flex; gap: 6px; padding: 7px 12px; border-bottom: 1px solid var(--border-2); }
 .files-list { flex: 1; overflow-y: auto; padding: 4px 0; }
-.files-row { display: grid; grid-template-columns: 20px 1fr 64px 84px 92px; gap: 8px; align-items: center; padding: 4px 12px; font-size: 12.5px; }
+.files-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) 56px 78px; gap: 8px; align-items: center; padding: 4px 12px; font-size: 12.5px; }
 .files-row:hover { background: var(--bg-hover); }
 .files-row .files-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .files-row.dir .files-name { font-weight: 600; }
@@ -2757,8 +2764,10 @@ button {
 .xfer .prog { flex: 1; height: 5px; border-radius: 3px; background: var(--bg-input); overflow: hidden; }
 .xfer .prog i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
 .xfer .xfer-meta { font-size: 11px; color: var(--text-3); font-family: ui-monospace,Consolas,monospace; white-space: nowrap; }
-.xfer-list { max-height: 168px; overflow-y: auto; border-top: 1px solid var(--border-2); }
-.xfer-row { display: grid; grid-template-columns: 14px 1fr 100px 110px 56px; gap: 8px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--border-2); font-size: 12px; }
+.xfer-list { max-height: 200px; overflow-y: auto; border-top: 1px solid var(--border-2); }
+.xfer-head, .xfer-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) 96px 92px 52px; gap: 8px; align-items: center; padding: 5px 12px; font-size: 11.5px; }
+.xfer-head { position: sticky; top: 0; background: var(--bg-panel); color: var(--text-4); border-bottom: 1px solid var(--border-2); z-index: 1; font-size: 10.5px; letter-spacing: .04em; }
+.xfer-row { border-bottom: 1px solid var(--border-2); font-size: 12px; }
 .xfer-row .xfer-dir { color: var(--text-3); }
 .xfer-row .xfer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xfer-row .xfer-st { color: var(--text-4); font-size: 11px; text-align: right; font-family: ui-monospace,Consolas,monospace; }

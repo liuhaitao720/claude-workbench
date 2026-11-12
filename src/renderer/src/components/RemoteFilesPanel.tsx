@@ -270,6 +270,7 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
             {renaming?.from === f.name ? (
               <input
                 className="files-rename-input"
+                spellCheck={false}
                 autoFocus
                 value={renaming.value}
                 onChange={(e) => setRenaming({ from: f.name, value: e.target.value })}
@@ -280,12 +281,16 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
                 onBlur={() => void submitRename()}
               />
             ) : (
-              <span className="files-name" title={f.name}>
+              <span
+                className="files-name"
+                title={`${f.name}${f.mtimeMs > 0 ? ` · ${fmtTime(f.mtimeMs)}` : ''}`}
+              >
                 {f.name}
               </span>
             )}
-            <span className="files-size">{f.isDir ? '—' : fmtSize(f.size)}</span>
-            <span className="files-mtime">{fmtTime(f.mtimeMs)}</span>
+            <span className="files-size" title={f.isDir ? undefined : `${f.size} B`}>
+              {f.isDir ? '—' : fmtSize(f.size)}
+            </span>
             <span className="files-acts">
               {!f.isDir && (
                 <button type="button" className="btn small" title={t('files.download')} onClick={() => download(f)}>
@@ -385,6 +390,17 @@ function TransferBar() {
     return window.cwb.onTransfersProgress((fresh) => setItems(fresh))
   }, [])
 
+  // v2.0.1（用户实测"下载无提示"）：出现活动项即自动展开队列——肉眼即时反馈
+  const hasActive = items.some((i) => i.status === 'active' || i.status === 'queued')
+  const seenActiveRef = useRef(false)
+  useEffect(() => {
+    if (hasActive && !seenActiveRef.current) {
+      seenActiveRef.current = true
+      setOpen(true)
+    }
+    if (!hasActive) seenActiveRef.current = false
+  }, [hasActive])
+
   const active = items.filter((i) => i.status === 'active' || i.status === 'queued')
   const recent = items.filter((i) => i.status === 'done' || i.status === 'error' || i.status === 'canceled').slice(0, 8)
   const totalBytes = active.reduce((n, i) => n + i.totalBytes, 0)
@@ -421,7 +437,14 @@ function TransferBar() {
         <span className="xfer-meta">{open ? '▾' : '▸'}</span>
       </div>
       {open && (
-        <div className="xfer-list">
+        <div className="xfer-list" data-testid="xfer-table">
+          <div className="xfer-head">
+            <span> </span>
+            <span>{t('files.xferColFile')}</span>
+            <span>{t('files.xferColProgress')}</span>
+            <span>{t('files.xferColStatus')}</span>
+            <span> </span>
+          </div>
           {[...active, ...recent].map((i) => {
             const p = i.totalBytes > 0 ? Math.round((i.transferredBytes / i.totalBytes) * 100) : 0
             return (

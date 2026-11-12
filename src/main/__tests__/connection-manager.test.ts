@@ -924,7 +924,36 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
       { name: 'real-dir', isDir: true }
     ])
     // 只有 LNK 条目触发 stat（普通文件/目录零额外往返）
-    expect(statCalls).toEqual(['/home/dir/link-dir', '/home/dir/link-dead'])
+      })
+
+  // v2.0.1（用户实测 /home/<user>/src→/mnt/src）：listAll 同样把 LNK 目录误判为文件——
+  // 跟链 stat 复核（与 list() ⑧b 同语义）；死链/链接到文件保持文件态
+  it('⑧c RealSftpSession.listAll：LNK 指向目录按目录呈现（可进入）；死链与文件不动', async () => {
+    const statCalls: string[] = []
+    const wrapper = {
+      readdir: (_dir: string, cb: (e: Error | null, l?: unknown[]) => void) => {
+        cb(null, [
+          { filename: 'real-dir', attrs: { isDirectory: () => true, mode: 0o40755, size: 0 } },
+          { filename: 'plain.txt', attrs: { isDirectory: () => false, mode: 0o100644, size: 7 } },
+          { filename: 'src', attrs: { isDirectory: () => false, mode: 0o120777, size: 9 } },
+          { filename: 'link-dead', attrs: { isDirectory: () => false, mode: 0o120777, size: 0 } }
+        ])
+      },
+      stat: (p: string, cb: (e: Error | null, st?: unknown) => void) => {
+        statCalls.push(p)
+        if (p === '/home/dir/src') cb(null, { isDirectory: () => true })
+        else cb(new Error('No such file'))
+      }
+    } as unknown as import('ssh2').SFTPWrapper
+    const session = new RealSftpSession(wrapper)
+    const out = await session.listAll('/home/dir')
+    expect(out).toEqual([
+      { name: 'real-dir', isDir: true, size: 0, mtimeMs: 0 },
+      { name: 'src', isDir: true, size: 0, mtimeMs: 0 },
+      { name: 'link-dead', isDir: false, size: 0, mtimeMs: 0 },
+      { name: 'plain.txt', isDir: false, size: 7, mtimeMs: 0 }
+    ])
+    expect(statCalls).toEqual(['/home/dir/src', '/home/dir/link-dead'])
   })
 })
 
