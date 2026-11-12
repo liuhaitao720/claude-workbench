@@ -70,6 +70,15 @@ export interface RemotePtyManagerOptions {
   transportFactory?: (events: ServerClientEvents) => ServerTransport
   connectTimeoutMs?: number
   requestTimeoutMs?: number
+  /**
+   * v2.0.1（用户实测「重启后首开远程任务无上下文」根因修复）：本连接下记录为
+   * running 的任务 id（组合根注入——tasks.json 归一后仍 running 的远程任务）。
+   * reconcile 对账时除已知注册表外，**主动认领**这些任务的 server 存活实例
+   * （attach+回放）——此前 reconcile 在 transport 未建时早退，且即使 transport
+   * 就绪也只重连已知条目：重启后首连 ensureConnected 只建传输不对账，上一会话
+   * 保活任务永远无人 attach → 首开空白（关掉重开偶发可见是后续路径副作用）。
+   */
+  runningTaskIds?: () => string[]
 }
 
 export class RemotePtyManager implements PtyBackend {
@@ -308,9 +317,16 @@ export class RemotePtyManager implements PtyBackend {
   }
 
   private async reconcile(): Promise<void> {
-    if (this.transport === null) return // 从未使用（懒建——首 spawn 才接 WS）
-    if (this.tasks.size === 0 && this.pendingKills.size === 0) {
-      await this.transport.connect() // 保持传输可用（后续 spawn/write 直达）
+    // v2.0.1：移除 transport===null 早退——对账自身建传输（与 ensureConnected 竞争
+    // 时 ensureTransport 幂等）。候选=已知注册表 ∪ 记录 running 但未注册（重启后
+    // 首连认领）；全空仍 connect 保持传输可用。
+    const adopt = (this.opts.runningTaskIds?.() ?? []).filter((id) => !this.tasks.has(id))
+    if (this.tasks.size === 0 && this.pendingKills.size === 0 && adopt.length === 0) {
+      try {
+        await this.ensureTransport()
+      } catch (err) {
+        this.log('warn', `server connect failed: ${errMsg(err)}`)
+      }
       return
     }
     let t: ServerTransport
@@ -324,7 +340,7 @@ export class RemotePtyManager implements PtyBackend {
     for (const taskId of [...this.pendingKills]) {
       t.send({ type: 'task.kill', taskId })
     }
-    if (this.tasks.size === 0) return
+    // v2.0.1：移除 tasks.size===0 早退——候选可纯来自 adopt（重启后首连认领）
     try {
       const list = await t.request<Array<Record<string, unknown>>>({ type: 'task.list' })
       const alive = new Map<string, Record<string, unknown>>()
@@ -333,17 +349,23 @@ export class RemotePtyManager implements PtyBackend {
           alive.set(s['taskId'], s)
         }
       }
-      for (const [taskId] of [...this.tasks]) {
+      const candidates = new Set<string>([...this.tasks.keys(), ...adopt])
+      for (const taskId of candidates) {
         const summary = alive.get(taskId)
         if (summary !== undefined) {
           try {
             await t.request({ type: 'task.attach', taskId })
-            const entry = this.tasks.get(taskId)
-            if (entry !== undefined) {
+            let entry = this.tasks.get(taskId)
+            if (entry === undefined) {
+              // v2.0.1 认领路径：重启后首连——记录 running 但客户端注册表无此任务
+              const size = this.lastSize.get(taskId) ?? DEFAULT_SIZE
+              entry = { cols: size.cols, rows: size.rows, attached: true }
+              this.tasks.set(taskId, entry)
+            } else {
               entry.attached = true
-              // pid 以对账结果为准（server 重启后宿主 pid 可能变化）
-              if (typeof summary['pid'] === 'number') entry.pid = summary['pid']
             }
+            // pid 以对账结果为准（server 重启后宿主 pid 可能变化）
+            if (typeof summary['pid'] === 'number') entry.pid = summary['pid']
           } catch (err) {
             this.log('warn', `re-attach failed (${taskId}): ${errMsg(err)}`)
           }
@@ -380,6 +402,11 @@ export interface RemotePtyHubOptions {
   onServerLog: (e: RemoteServerLogEvent) => void
   claudeBin?: string
   /**
+   * v2.0.1：连接下记录 running 的任务 id（组合根注入 tasks/projects 派生）——
+   * manager 认领对账用（重启后首连 attach 保活任务；见 RemotePtyManagerOptions）
+   */
+  runningTaskIdsOf?: (connectionId: string) => string[]
+  /**
    * hooks 反向转发接收端（ipc 注入 task-activity 的 127.0.0.1 随机口；A3 接线：
    * VM 侧 forwardIn 入站流 pipe 到这里）。未提供时入站流直接断开（禁乱拨）。
    */
@@ -412,6 +439,9 @@ export class RemotePtyHub {
         onServerLog: (level, message) =>
           this.opts.onServerLog({ connectionId, level, message }),
         ...(this.opts.claudeBin !== undefined ? { claudeBin: this.opts.claudeBin } : {}),
+        ...(this.opts.runningTaskIdsOf !== undefined
+          ? { runningTaskIds: () => this.opts.runningTaskIdsOf!(connectionId) }
+          : {}),
         ...(this.opts.connectTimeoutMs !== undefined
           ? { connectTimeoutMs: this.opts.connectTimeoutMs }
           : {}),

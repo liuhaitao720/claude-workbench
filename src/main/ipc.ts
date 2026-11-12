@@ -572,6 +572,16 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     hookSink: async () => {
       await activity.ready()
       return { host: '127.0.0.1', port: activity.port }
+    },
+    // v2.0.1：重启后首连认领——记录 running 的远程任务派生（reconcile attach+回放）
+    runningTaskIdsOf: (cid) => {
+      const out: string[] = []
+      for (const t of tasks.list()) {
+        if (t.status !== 'running') continue
+        const pc = projects.get(t.projectId)
+        if (pc !== undefined && pc.connectionId === cid) out.push(t.id)
+      }
+      return out
     }
   })
   /** task→project.connectionId 路由解析（远程=指向 hub 的 per-connection manager） */

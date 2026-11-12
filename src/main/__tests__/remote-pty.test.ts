@@ -264,6 +264,42 @@ describe('S4 RemotePtyManager 状态机（FakeTransport 帧级 mock）', () => {
     expect(mgr.pid('t-alive')).toBe(7)
   })
 
+  it('⑨ 重启后首连认领（v2.0.1——用户实测首开无上下文根因）：无 spawn/无传输 → connected 事件自建传输 + runningTaskIds 认领 attach（含 pid 回填）', async () => {
+    const data: PtyDataEvent[] = []
+    const exits: string[] = []
+    const conn = new FakeConnection()
+    const transport = new FakeTransport()
+    const mgr = new RemotePtyManager({
+      connectionId: conn.id,
+      connection: conn.asManager(),
+      callbacks: { onData: (e) => data.push(e), onExit: (id) => exits.push(id) },
+      transportFactory: (events) => {
+        transport.bind(events)
+        return transport
+      },
+      runningTaskIds: () => ['t-prev-1', 't-prev-2']
+    })
+    transport.listPayload = [{ taskId: 't-prev-1', pid: 4242, attached: false }] // t-prev-2 已消亡
+    transport.connectImpl = async () => {
+      transport.connected = true
+    }
+    // 首连（此前此路径 transport===null 直接早退——什么都不发生）
+    conn.emitState('connected')
+    await vi.waitFor(() => {
+      expect(transport.framesOf('task.attach')).toEqual([{ type: 'task.attach', taskId: 't-prev-1' }])
+      expect(mgr.isRunning('t-prev-1')).toBe(true)
+    })
+    // 认领条目入注册表（isRunning/pid 生效）；消亡者合成 onExit（记录回终态）
+    expect(mgr.isRunning('t-prev-1')).toBe(true)
+    expect(mgr.pid('t-prev-1')).toBe(4242)
+    expect(exits).toEqual(['t-prev-2'])
+    // server 回放流（attach 后 task.data）经 onData 外送——renderer 缓冲后首开即上下文
+    transport.emit({ type: 'task.data', taskId: 't-prev-1', chunk: 'ctx-line' })
+    await vi.waitFor(() => {
+      expect(data).toEqual([{ taskId: 't-prev-1', data: 'ctx-line' }])
+    })
+  })
+
   it('⑧ 重连时 server 不可达（needInstall）→ 降级记日志，注册表保持（不误杀）', async () => {
     const { mgr, transport, conn, logs, exits } = makeManager()
     await mgr.spawnClaude('t1', [], '/cwd')
