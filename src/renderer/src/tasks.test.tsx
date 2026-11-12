@@ -747,3 +747,59 @@ describe('v0.4.5 closed 视觉态（tab 未打开/已从标题栏关闭 → 灰�
     expect(visual('tc3')).toBe('exited')
   })
 })
+
+describe('v2.0.2 首开自愈（远程任务失同步：running→exited 且本会话零 PTY 数据）', () => {
+  const remoteProject = makeProject({
+    id: 'pr', name: 'VM-Dev', isGit: true, dir: '/home/dev/repo', connectionId: 'c1'
+  })
+
+  /** 推一条任务更新（走 initListeners 订阅链——与生产一致） */
+  function pushTaskUpdate(api: ReturnType<typeof installCwbMock>, status: string): void {
+    for (const cb of api.taskUpdateCallbacks) {
+      cb({
+        id: 'th1', projectId: 'pr', name: '自愈', sessionId: 'th1', cwd: '/home/dev/repo',
+        status: status as 'running', createdAt: new Date().toISOString(),
+        lastActiveAt: new Date().toISOString()
+      })
+    }
+  }
+
+  it('零数据 exited（点开空白那类）→ 自动 resume 一次；再次 exited 不重复', async () => {
+    const api = await renderWithProject(remoteProject, [
+      makeTask({ id: 'th1', projectId: 'pr', name: '自愈', status: 'running', cwd: '/home/dev/repo' })
+    ])
+    useAppStore.setState({ openTaskIds: ['th1'], activeTaskId: 'th1' })
+    act(() => pushTaskUpdate(api, 'exited'))
+    await waitFor(() => expect(api.resumeTask).toHaveBeenCalledTimes(1))
+    // 每任务一次：再次 exited 不再自愈
+    act(() => pushTaskUpdate(api, 'exited'))
+    await act(async () => {})
+    expect(api.resumeTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('本会话收到过 PTY 数据（真实会话退出）→ 不自愈；stopped（显式停止）→ 不自愈', async () => {
+    const api = await renderWithProject(remoteProject, [
+      makeTask({ id: 'th1', projectId: 'pr', name: '自愈', status: 'running', cwd: '/home/dev/repo' })
+    ])
+    useAppStore.setState({ openTaskIds: ['th1'], activeTaskId: 'th1' })
+    act(() => emitTaskData({ taskId: 'th1', data: 'context loaded' }))
+    act(() => pushTaskUpdate(api, 'exited'))
+    await act(async () => {})
+    expect(api.resumeTask).not.toHaveBeenCalled()
+
+    // 显式停止（用户意图）不自愈——换零数据场景验证
+    const api2 = await renderWithProject(remoteProject, [
+      makeTask({ id: 'th2', projectId: 'pr', name: '停止', status: 'running', cwd: '/home/dev/repo' })
+    ])
+    useAppStore.setState({ openTaskIds: ['th2'], activeTaskId: 'th2' })
+    for (const cb of api2.taskUpdateCallbacks) {
+      cb({
+        id: 'th2', projectId: 'pr', name: '停止', sessionId: 'th2', cwd: '/home/dev/repo',
+        status: 'stopped' as 'running', createdAt: new Date().toISOString(),
+        lastActiveAt: new Date().toISOString()
+      })
+    }
+    await act(async () => {})
+    expect(api2.resumeTask).not.toHaveBeenCalled()
+  })
+})

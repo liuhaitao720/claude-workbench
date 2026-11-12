@@ -72,6 +72,7 @@ export function discardTaskData(taskId: string): void {
 
 export function emitTaskData(e: PtyDataEvent): void {
   taskLastDataAt.set(e.taskId, Date.now())
+  taskDataSeen.add(e.taskId) // v2.0.2 首开自愈判据：本会话收到过数据=有上下文
   const set = taskDataListeners.get(e.taskId)
   if (set !== undefined && set.size > 0) {
     for (const cb of set) cb(e.data)
@@ -87,6 +88,17 @@ export function emitTaskData(e: PtyDataEvent): void {
 
 /** 各任务最近一次 PTY 输出时间戳（v3.2 activityMap 无条目时的字节启发兜底源） */
 const taskLastDataAt = new Map<string, number>()
+
+/**
+ * v2.0.2 首开自愈（远程任务失同步根治）：本会话收到过 PTY 数据的任务集
+ * （emitTaskData 落名）+ 已自愈任务集（每任务一次，防循环）。
+ * 背景（server.log 实证）：客户端重启后偶发「任务记录 running 而 server 注册表
+ * 已无此任务」（任务在客户端切换间隙真死/失认领）——首开必空白（resize unknown），
+ * 此前须手动关掉再打开（respawn claude --resume 才带回上下文）。现由 store 在
+ * running→exited 且零数据时自动代发一次 resume，等价替用户完成该动作。
+ */
+const taskDataSeen = new Set<string>()
+const taskAutoHealed = new Set<string>()
 
 export function getLastDataAt(taskId: string): number | undefined {
   return taskLastDataAt.get(taskId)
@@ -925,6 +937,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     try {
       await window.cwb.removeTask(taskId, opts)
       discardTaskData(taskId) // v1.7.5：清待放缓冲（防陈旧内存）
+      taskDataSeen.delete(taskId) // v2.0.2：自愈判据随任务清理
+      taskAutoHealed.delete(taskId)
     } catch (err) {
       console.error('[cwb] removeTask failed:', err)
       return
@@ -1024,7 +1038,27 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setActive: (taskId) =>
     set({ activeTaskId: taskId, reviewActive: false }),
 
-  applyTaskUpdate: (t) => set((s) => ({ tasks: upsertTask(s.tasks, t) })),
+  applyTaskUpdate: (t) => {
+    const before = get()
+    const prev = before.tasks.find((x) => x.id === t.id)
+    set({ tasks: upsertTask(before.tasks, t) })
+    // v2.0.2 首开自愈：远程任务 running→exited、tab 开着、本会话零 PTY 数据
+    // （=点开空白那类失同步——server 注册表已无此任务，reconcile 合成 onExit 落
+    // exited）→ 自动代发一次 resume（respawn claude --resume 带回上下文，等价用户
+    // 手动「关掉再打开」）。'stopped' 不自愈（显式停止=用户意图）；有数据/已愈过
+    // 不再动（正常 claude /exit 不误伤；每任务一次防循环）。
+    if (
+      prev !== undefined &&
+      prev.status === 'running' &&
+      t.status === 'exited' &&
+      before.openTaskIds.includes(t.id) &&
+      !taskDataSeen.has(t.id) &&
+      !taskAutoHealed.has(t.id)
+    ) {
+      taskAutoHealed.add(t.id)
+      void get().resumeTaskFlow(t.id)
+    }
+  },
 
   applyTaskActivity: (taskId, activity) =>
     set((s) => ({ activityMap: { ...s.activityMap, [taskId]: activity } })),
