@@ -704,6 +704,54 @@ export class RealSftpSession implements SftpSession {
     }
   }
 
+  // ── v2.0.1 传输提速句柄原语（契约见 SftpSession 尾注释）────────────────
+
+  async openReadHandle(path: string): Promise<unknown> {
+    return new Promise<Buffer>((resolve, reject) => {
+      this.sftp.open(path, 'r', (err, h) => {
+        if (err != null) reject(new Error(sanitize(err.message)))
+        else resolve(h as Buffer)
+      })
+    })
+  }
+
+  async readAt(handle: unknown, offset: number, length: number): Promise<Buffer> {
+    const h = handle as Buffer
+    const buf = Buffer.alloc(length)
+    const r = await new Promise<{ br: number; b: Buffer }>((resolve, reject) => {
+      this.sftp.read(h, buf, 0, length, offset, (err, br, b) => {
+        if (err != null) reject(new Error(sanitize(err.message)))
+        else resolve({ br, b })
+      })
+    })
+    return r.br === length ? r.b : r.b.subarray(0, Math.max(0, r.br))
+  }
+
+  async openWriteHandle(path: string, truncate: boolean): Promise<unknown> {
+    return new Promise<Buffer>((resolve, reject) => {
+      this.sftp.open(path, truncate ? 'w' : 'r+', (err, h) => {
+        if (err != null) reject(new Error(sanitize(err.message)))
+        else resolve(h as Buffer)
+      })
+    })
+  }
+
+  async writeAt(handle: unknown, offset: number, data: Buffer): Promise<void> {
+    const h = handle as Buffer
+    await new Promise<void>((resolve, reject) => {
+      this.sftp.write(h, data, 0, data.length, offset, (err) => {
+        if (err != null) reject(new Error(sanitize(err.message)))
+        else resolve()
+      })
+    })
+  }
+
+  async closeHandle(handle: unknown): Promise<void> {
+    await new Promise<void>((resolve) => {
+      this.sftp.close(handle as Buffer, () => resolve())
+    })
+  }
+
   /** v1.7.0 建远端目录（远程 skills 导入递归上传）；已存在视为成功（幂等） */
   async mkdir(dir: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {

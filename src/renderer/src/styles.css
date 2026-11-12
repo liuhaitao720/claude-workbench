@@ -2779,3 +2779,14 @@ button {
 /* 终端区右侧开合竖条 */
 .files-rail-toggle { writing-mode: vertical-lr; padding: 10px 4px; background: var(--bg-sel); border: 1px solid var(--border-3); border-left: none; border-radius: 6px 0 0 6px; color: var(--text-2); cursor: pointer; font-size: 12px; letter-spacing: .2em; align-self: flex-start; margin-top: 44px; }
 .files-rail-toggle:hover { color: var(--text-1); }
+
+/* v2.0.1（用户实测）：文件面板鼠标形状始终箭头——行/面包屑/竖条不再手型，按钮亦统一 */
+.files-panel,
+.files-panel .files-row,
+.files-panel .crumb button,
+.files-panel button,
+.files-rail-toggle,
+.xfer .xfer-bar,
+.xfer .xfer-row button {
+  cursor: default;
+}

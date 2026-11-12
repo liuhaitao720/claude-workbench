@@ -64,6 +64,19 @@ export interface SftpSession {
    * open 'r+' 定位写（断点续传预留——v2.0 失败重试从头，接口已就位）。
    */
   writeRange?(path: string, start: number, data: Buffer): Promise<void>
+
+  /* ── v2.0.1 传输提速（用户实测下载显著慢于 FinalShell）：句柄复用 + 调用方并行
+   * 分块。旧 readRange/writeRange 每块 open/read/close 三往返且串行——SFTP 单请求
+   * 又受包上限约束，吞吐被 RTT 压死。以下五原语供传输引擎组装并行流水（对齐
+   * libssh2/fastGet 并发语义，但保留取消/进度控制）。句柄类型不透明（实现侧为
+   * ssh2 Buffer）。 */
+  openReadHandle?(path: string): Promise<unknown>
+  /** 定位读（返回 ≤length；短读=EOF）；句柄由 openReadHandle 建立 */
+  readAt?(handle: unknown, offset: number, length: number): Promise<Buffer>
+  /** 打开写句柄（truncate=true 覆盖语义；false 追加/定位——续传预留） */
+  openWriteHandle?(path: string, truncate: boolean): Promise<unknown>
+  writeAt?(handle: unknown, offset: number, data: Buffer): Promise<void>
+  closeHandle?(handle: unknown): Promise<void>
 }
 
 /** v2.0 文件条目（FilesPanel 列表；mtimeMs 取不到=0） */

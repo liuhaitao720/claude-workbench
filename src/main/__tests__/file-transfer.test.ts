@@ -126,6 +126,93 @@ async function mkpath(sftp: SftpSession, dir: string): Promise<void> {
   }
 }
 
+// v2.0.1：句柄原语 fake（内存 FS 同源——读写经句柄定位，天然乱序）
+function withHandlePrimitives(sftp: SftpSession): SftpSession {
+  const HANDLE = Symbol('h')
+  const base = sftp as SftpSession & {
+    readFile: (p: string) => Promise<Buffer>
+    writeFile: (p: string, d: string | Buffer) => Promise<void>
+  }
+  const inFlight = { reads: 0, maxConcurrent: 0 }
+  return {
+    ...sftp,
+    openReadHandle: async (p) => {
+      await base.readFile(p) // 存在性校验
+      return HANDLE
+    },
+    readAt: async (h, offset, length) => {
+      void h
+      if (handleFile === null) throw new Error('no file')
+      inFlight.reads += 1
+      inFlight.maxConcurrent = Math.max(inFlight.maxConcurrent, inFlight.reads)
+      await new Promise((r) => setTimeout(r, 5)) // 制造乱序窗口
+      inFlight.reads -= 1
+      return handleFile.subarray(offset, offset + length)
+    },
+    openWriteHandle: async () => HANDLE,
+    writeAt: async (h, offset, data) => {
+      void h
+      const cur = handleWritten.get(handleTarget) ?? Buffer.alloc(0)
+      const next = Buffer.alloc(Math.max(cur.length, offset + data.length))
+      cur.copy(next, 0)
+      data.copy(next, offset)
+      handleWritten.set(handleTarget, next)
+    },
+    closeHandle: async () => undefined,
+    __stats: inFlight
+  } as unknown as SftpSession & { __stats: { maxConcurrent: number } }
+}
+let handleFile: Buffer | null = null
+let handleTarget = ''
+const handleWritten = new Map<string, Buffer>()
+
+describe('v2.0.1 并行传输流水（句柄原语路径）', () => {
+  it('下载：8 路并发读（maxConcurrent>1）+ 乱序完成 → 本地字节一致', async () => {
+    const { sftp } = makeFakeSftp()
+    await mkpath(sftp, '/home/dev')
+    const payload = Buffer.alloc(300 * 1024, 0x5a) // 300KB / 512KB chunk=1 块——改 chunk 64KB 验并行
+    handleFile = payload
+    const hs = withHandlePrimitives(sftp)
+    const mgr = new FileTransferManager({
+      connection: fakeConn(hs),
+      connectionId: 'c1',
+      chunkSize: 64 * 1024,
+      concurrency: 8
+    })
+    const target = join(mkdtempSync(join(tmpdir(), 'cwb-pdl-')), 'p.bin')
+    tempDirs.push(dirnameOf(target))
+    const item = await mgr.enqueueDownload({ remotePath: '/home/dev/p.bin', localPath: target })
+    // statFile 决定 totalBytes——fake 内存 FS 没有该文件（handleFile 独立）——先落进去
+    await sftp.writeFile!('/home/dev/p.bin', payload)
+    await waitDone(mgr, item.id)
+    expect(readFileSync(target).equals(payload)).toBe(true)
+    const stats = (hs as unknown as { __stats: { maxConcurrent: number } }).__stats
+    expect(stats.maxConcurrent).toBeGreaterThan(1)
+    handleFile = null
+  })
+
+  it('上传：并行定位写 → 远端字节一致（乱序 writeAt 归位）', async () => {
+    const { sftp, dirOf } = makeFakeSftp()
+    await mkpath(sftp, '/home/dev')
+    handleTarget = '/home/dev/up.bin'
+    handleWritten.clear()
+    const hs = withHandlePrimitives(sftp)
+    const local = localFile(200 * 1024) // 200KB @64KB = 4 块并行
+    const mgr = new FileTransferManager({
+      connection: fakeConn(hs),
+      connectionId: 'c1',
+      chunkSize: 64 * 1024,
+      concurrency: 8
+    })
+    const { items } = await mgr.enqueueUpload({ localPaths: [local], remoteDir: '/home/dev', policy: 'overwrite' })
+    await waitDone(mgr, items[0].id)
+    expect(handleWritten.get('/home/dev/up.bin')?.length).toBe(200 * 1024)
+    expect(readFileSync(local).equals(handleWritten.get('/home/dev/up.bin')!)).toBe(true)
+    void dirOf
+    handleTarget = ''
+  })
+})
+
 describe('v2.0 FileTransferManager（fake SFTP 内存 FS）', () => {
   it('单文件上传：分块写 → 远端字节一致 → done + 进度事件含全量清单', async () => {
     const { sftp, dirOf } = makeFakeSftp()

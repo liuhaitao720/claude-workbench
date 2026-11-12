@@ -71,7 +71,9 @@ export interface TransferManagerOptions {
   chunkSize?: number
 }
 
-const DEFAULT_CHUNK = 1024 * 1024
+const DEFAULT_CHUNK = 512 * 1024
+/** v2.0.1 并行分块数（对齐 libssh2 fastGet 并发语义——RTT 掩盖；NAT 链路 8 路实测优） */
+const DEFAULT_PARALLEL = 8
 const PROGRESS_THROTTLE_MS = 100
 
 export class FileTransferManager {
@@ -266,10 +268,17 @@ export class FileTransferManager {
       ? walkLocal(it.origin.local, it.origin.remote).files
       : [{ local: it.origin.local, remote: it.origin.remote, size: statSync(it.origin.local).size }]
     const sftp = await this.sftp()
+    const parallel =
+      sftp.openWriteHandle !== undefined &&
+      sftp.writeAt !== undefined &&
+      sftp.closeHandle !== undefined
     for (const f of files) {
       if (this.canceled.has(it.id)) return
-      // 目录成员的目标名冲突预检在 enqueue 只做了顶层——成员覆盖按批量策略：
-      // overwrite 直写（'w' 截断）；skip 成员级跳过；rename 成员级重命名
+      if (parallel && f.size > 0) {
+        await this.parallelPut(sftp, it, f, chunk)
+        continue
+      }
+      // 串行回退（空文件直落 writeRange 0 块建文件）
       const fh = openLocalRead(f.local)
       try {
         let offset = 0
@@ -288,11 +297,83 @@ export class FileTransferManager {
     }
   }
 
+  /** v2.0.1 并行上传：句柄一次打开，多路定位读本地 + 定位写远端（取消边界收割） */
+  private async parallelPut(
+    sftp: SftpSession,
+    it: TransferItem,
+    f: { local: string; remote: string; size: number },
+    chunk: number
+  ): Promise<void> {
+    const h = await sftp.openWriteHandle!(f.remote, true)
+    const fh = openLocalRead(f.local)
+    let next = 0
+    try {
+      await Promise.all(
+        Array.from({ length: Math.min(this.opts.concurrency || DEFAULT_PARALLEL, 64) }, async () => {
+          for (;;) {
+            if (this.canceled.has(it.id)) return
+            const off = next
+            next += chunk
+            if (off >= f.size) return
+            const len = Math.min(chunk, f.size - off)
+            const buf = readChunkAt(fh, off, len)
+            await sftp.writeAt!(h, off, buf)
+            it.transferredBytes += len
+            this.emit(false)
+          }
+        })
+      )
+    } finally {
+      await sftp.closeHandle!(h).catch(() => undefined)
+      closeLocal(fh)
+    }
+  }
+
   private async runDownload(it: TransferItem, chunk: number): Promise<void> {
     const sftp = await this.sftp()
     mkdirSync(dirname(it.origin.local), { recursive: true })
     const size = it.totalBytes
-    // v1：整文件目标直写（失败重试重开覆盖；.part 临时名留断点续传版一并处理）
+    // v2.0.1 提速：句柄原语在场 → 并行流水（open 一次，8 路定位读 + 本地定位写；
+    // 取消在完成回调边界收割）。回退=串行 readRange（每块 open/close——fake/旧桩）。
+    if (
+      sftp.openReadHandle !== undefined &&
+      sftp.readAt !== undefined &&
+      sftp.closeHandle !== undefined
+    ) {
+      const h = await sftp.openReadHandle(it.origin.remote)
+      const out = openLocalWrite(it.origin.local)
+      let next = 0
+      let eof = -1
+      const workerErr: Error[] = []
+      const emit = (): void => this.emit(false)
+      try {
+        await Promise.all(
+          Array.from({ length: Math.min(this.opts.concurrency || DEFAULT_PARALLEL, 64) }, async () => {
+            for (;;) {
+              if (this.canceled.has(it.id) || eof >= 0 || workerErr.length > 0) return
+              const off = next
+              next += chunk
+              if (size > 0 && off >= size) return
+              const buf = await sftp.readAt!(h, off, chunk)
+              if (buf.length === 0) {
+                eof = off
+                return
+              }
+              writeAtLocal(out, buf, off)
+              it.transferredBytes += buf.length
+              emit()
+              if (buf.length < chunk) eof = off + buf.length
+            }
+          })
+        )
+        if (workerErr.length > 0) throw workerErr[0]!
+      } finally {
+        await sftp.closeHandle!(h).catch(() => undefined)
+        closeLocal(out)
+      }
+      return
+    }
+    // 串行回退（原实现语义不变）
     let offset = 0
     let out: number | null = null
     try {
@@ -339,6 +420,19 @@ function readChunkLocal(fd: number, len: number): Buffer {
 }
 function openLocalWrite(p: string): number {
   return openSync(p, 'w')
+}
+/** 定位读（并行上传：多 worker 共享只读 fd——readSync 带 position 线程安全于事件环） */
+function readChunkAt(fd: number, position: number, len: number): Buffer {
+  const b = Buffer.alloc(len)
+  const n = readSync(fd, b, 0, len, position)
+  return n === len ? b : b.subarray(0, n)
+}
+/** 定位写（并行下载落盘——乱序完成按 offset 归位） */
+function writeAtLocal(fd: number, buf: Buffer, position: number): void {
+  let written = 0
+  while (written < buf.length) {
+    written += writeSync(fd, buf, written, buf.length - written, position + written)
+  }
 }
 function closeLocal(fd: number): void {
   closeSync(fd)
