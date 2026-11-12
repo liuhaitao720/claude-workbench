@@ -32,6 +32,11 @@ export interface RemoteTaskSpawnRequest {
    */
   settingsPath?: string
   /**
+   * 任务显示名（v2.0.2 server 侧 webhook 推送文案用——服务器端推送需任务名；
+   * 旧客户端不传=server 回退 taskId 前 8 位）。缺省不附。
+   */
+  name?: string
+  /**
    * 剥离不注入的环境变量名（3.3=A 防御性白名单外剥离；S3 应用到 spawn env）。
    * 缺省=不剥离（VM 内 shell 环境原样为准）。
    */
@@ -90,6 +95,14 @@ export type ServerFrame =
    * 【S3 产生 / S4 消费→onExit 桥接】
    */
   | { type: 'task.exit'; taskId: string; exitCode: number }
+  /**
+   * claude hook 事件转发（v2.0.2 推送服务器侧化）：claude 的 HTTP hook 直 POST
+   * 到 server（稳定本机口，不再经客户端 SSH forwardIn——客户端离线不再
+   * ECONNREFUSED），server 收下后经此帧转发给在线客户端（客户端回放进本地
+   * task-activity 接收端做 epoch 校验/活动裁决/排序 touch；离线即丢弃，无损）。
+   * 【S3 产生 / S4 消费→pipe 回本机 hook 接收端】
+   */
+  | { type: 'hook.event'; taskId: string; event: string; epoch: number }
   /**
    * server 日志（M8）：仅脱敏元数据（启动/升级/异常摘要）——终端内容不落盘
    * 不经此帧（8.1=A）。【S3 产生 / S4 桥接为 RemoteServerLog EVENT】

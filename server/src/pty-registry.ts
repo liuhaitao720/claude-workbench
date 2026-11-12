@@ -85,6 +85,8 @@ const RING_CAPACITY_BYTES = 8192
 
 interface Entry {
   taskId: string
+  /** v2.0.2 任务显示名（spawn req.name；服务器侧推送文案用） */
+  name?: string
   pty: PtyProcess
   /** 数据订阅（task.data 推送对象=当前 attach 的 sink） */
   sinks: Set<TaskSink>
@@ -111,6 +113,11 @@ export class TaskRegistry {
     private readonly ptySpawn: PtySpawnFn = defaultSpawn
   ) {}
 
+  /** v2.0.2：任务显示名（服务器侧推送文案；未注册=undefined） */
+  nameOf(taskId: string): string | undefined {
+    return this.entries.get(taskId)?.name
+  }
+
   /** task.spawn：不存在则创建；已存在=幂等拒绝（契约语义）。返回 pid。 */
   async spawn(req: RemoteTaskSpawnRequest): Promise<number> {
     if (this.entries.has(req.taskId) || this.spawning.has(req.taskId)) {
@@ -131,6 +138,7 @@ export class TaskRegistry {
       const now = new Date().toISOString()
       const entry: Entry = {
         taskId: req.taskId,
+        ...(req.name !== undefined && req.name !== '' ? { name: req.name } : {}),
         pty,
         sinks: new Set(),
         lifecycleSinks: new Set(),

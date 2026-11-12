@@ -363,9 +363,10 @@ export class RoutingPtyManager implements PtyBackend {
     taskId: string,
     claudeArgs: string[],
     cwd: string,
-    providerEnv?: Record<string, string>
+    providerEnv?: Record<string, string>,
+    name?: string
   ): Promise<void> {
-    await this.backendFor(taskId).spawnClaude(taskId, claudeArgs, cwd, providerEnv)
+    await this.backendFor(taskId).spawnClaude(taskId, claudeArgs, cwd, providerEnv, name)
   }
 
   spawn(
@@ -661,6 +662,9 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       notify.onActivityEvent(e)
       return
     }
+    // v2.0.2 推送服务器侧化：server ≥0.1.1 时 webhook 由 server 就地推送
+    // （VM 侧 ~/.cwb/notify.json + VM 网络直达；客户端离线照常）——客户端不再重复推
+    if (remotePty.serverPushesNotifyFor(cid)) return
     const cached = remoteNotifyCache.get(cid)
     if (cached !== undefined && Date.now() - cached.at < REMOTE_NOTIFY_CACHE_TTL_MS) {
       notify.onActivityEvent(e, cached.cfg ?? { url: '', enabled: false, channel: 'generic' })
@@ -696,7 +700,9 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     taskId: string,
     env?: Record<string, string>
   ): Promise<string> {
-    const hookPort = await remotePty.hookPortFor(connectionId)
+    // v2.0.2（用户指令：推送服务器侧化）：hooks 直 POST 到 server 本机口
+    // （≥0.1.1；旧 server 自动回退 SSH forwardIn 转发口）
+    const urlBase = await remotePty.hookUrlBaseFor(connectionId)
     const prep = await connection.exec(
       connectionId,
       `h=$(printf %s "$HOME"); mkdir -p "$h/${REMOTE_SETTINGS_DIR}" && printf %s "$h"`
@@ -707,7 +713,7 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     const path = `${home}/${REMOTE_SETTINGS_DIR}/${taskId}.json`
     const sftp = await connection.sftp(connectionId)
     return activity.buildSettings(taskId, {
-      urlBase: `http://127.0.0.1:${hookPort}`,
+      urlBase,
       sink: { path, write: (content) => sftp.writeFile(path, content) },
       ...(env !== undefined ? { env } : {})
     })
@@ -960,7 +966,9 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
             skipPermissions: opts.skipPermissions,
             settingsPath
           }),
-          cwd
+          cwd,
+          undefined,
+          name // v2.0.2：任务名随 spawn 上行（服务器侧 webhook 推送文案）
         )
       } else {
         // settings 写盘入 try：失败与 spawn 失败同路径清理 worktree/states（评审 #5）

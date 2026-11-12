@@ -3,7 +3,7 @@ import type { RemoteServerLogEvent } from '../shared/types'
 import type { ClientFrame } from '../shared/remote-protocol'
 import type { PtyBackend, PtyBackendCallbacks } from './pty-backend'
 import type { ConnectionManager } from './ssh/connection-manager'
-import { ServerClient, type ServerClientEvents, type ServerTransport } from './server-client'
+import { ServerClient, CWB_SERVER_PORT, type ServerClientEvents, type ServerTransport } from './server-client'
 
 /**
  * 远程 PTY 后端（S4，PtyBackend 的 Remote 实现）+ 多连接枢纽（RemotePtyHub）。
@@ -80,6 +80,11 @@ export interface RemotePtyManagerOptions {
   connectTimeoutMs?: number
   requestTimeoutMs?: number
   /**
+   * v2.0.2 hooks 回放落点（hub 透传本机 task-activity 接收端；server 转发的
+   * hook.event 帧经此 POST 回放。缺省=null=丢弃——本地/旧 server 无回放）。
+   */
+  hookSink?: () => Promise<{ host: string; port: number } | null>
+  /**
    * v2.0.1（用户实测「重启后首开远程任务无上下文」根因修复）：本连接下记录为
    * running 的任务 id（组合根注入——tasks.json 归一后仍 running 的远程任务）。
    * reconcile 对账时除已知注册表外，**主动认领**这些任务的 server 存活实例
@@ -125,9 +130,10 @@ export class RemotePtyManager implements PtyBackend {
     taskId: string,
     claudeArgs: string[],
     cwd: string,
-    _providerEnv?: Record<string, string>
+    _providerEnv?: Record<string, string>,
+    name?: string
   ): Promise<void> {
-    await this.spawnOrAttach(taskId, [this.claudeBin, ...claudeArgs], cwd)
+    await this.spawnOrAttach(taskId, [this.claudeBin, ...claudeArgs], cwd, name)
   }
 
   /** 通用 spawn（argv[0]=可执行文件）；异步失败经 onServerLog 降级（接口为 void） */
@@ -229,11 +235,31 @@ export class RemotePtyManager implements PtyBackend {
         if (known) this.opts.callbacks.onExit(taskId)
       },
       onLog: (level, message) => this.log(level, message),
+      // v2.0.2 hook 回放（推送服务器侧化）：server 转发的 hook 事件回放进本机
+      // task-activity 接收端——epoch 校验/活动裁决/排序 touch 全走既有链路；
+      // 回放失败静默（server 侧已 200，丢一帧活动信号可接受）
+      onHookEvent: (taskId, event, epoch) => {
+        void this.relayHookEvent(taskId, event, epoch)
+      },
       onClosed: () => {
         // WS 断开（server 主动/网络）：标记 detached——重连由 ConnectionManager
         // 状态机驱动（scheduleReconcile），注册表保留维持 running 语义
         for (const entry of this.tasks.values()) entry.attached = false
       }
+    }
+  }
+
+  /** hook.event 帧 → 本机接收端 HTTP POST（经既有 epoch/任务校验） */
+  private async relayHookEvent(taskId: string, event: string, epoch: number): Promise<void> {
+    try {
+      const sink = this.opts.hookSink !== undefined ? await this.opts.hookSink() : null
+      if (sink === null) return
+      await fetch(
+        `http://${sink.host}:${sink.port}/hook/${encodeURIComponent(event)}?e=${epoch}&t=${encodeURIComponent(taskId)}`,
+        { method: 'POST', body: '{}', signal: AbortSignal.timeout(2_000) }
+      )
+    } catch {
+      // 接收端未就绪/超时——静默（hook 是旁路信号）
     }
   }
 
@@ -264,7 +290,12 @@ export class RemotePtyManager implements PtyBackend {
    * 后的 resume/客户端重启恢复）→ task.attach 恢复现场；否则 task.spawn（背靠背
    * task.attach 建立 sink）+ 回执缓存 pid。
    */
-  private async spawnOrAttach(taskId: string, argv: string[], cwd: string): Promise<void> {
+  private async spawnOrAttach(
+    taskId: string,
+    argv: string[],
+    cwd: string,
+    name?: string
+  ): Promise<void> {
     if (this.tasks.has(taskId)) throw new Error(`PTY already running for task ${taskId}`)
     if (this.spawning.has(taskId)) throw new Error(`PTY spawn in progress for task ${taskId}`)
     this.spawning.add(taskId)
@@ -297,7 +328,9 @@ export class RemotePtyManager implements PtyBackend {
           cols: size.cols,
           rows: size.rows,
           ...(settingsPath !== undefined ? { settingsPath } : {}),
-          envDenylist: [...REMOTE_ENV_DENYLIST]
+          envDenylist: [...REMOTE_ENV_DENYLIST],
+          // v2.0.2：任务名上行（服务器侧 webhook 推送文案；旧 server 忽略多余字段）
+          ...(name !== undefined && name !== '' ? { name } : {})
         }
       })
       // spawn→attach 背靠背（契约注释）：server 侧 spawn 不自动挂 sink，须显式 attach
@@ -424,7 +457,23 @@ export interface RemotePtyHubOptions {
   requestTimeoutMs?: number
   /** hooks 远端口选择器（缺省随机动态口；测试钉住用） */
   hookPortPicker?: () => number
+  /** 传输工厂透传（v2.0.2 测试注入；缺省=每 manager 自建 ServerClient） */
+  transportFactory?: (events: ServerClientEvents) => ServerTransport
 }
+
+/** server 版本比较（a≥b；点分数字逐段） */
+export function versionAtLeast(a: string, b: string): boolean {
+  const pa = a.split('.').map((x) => Number(x) || 0)
+  const pb = b.split('.').map((x) => Number(x) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d !== 0) return d > 0
+  }
+  return true
+}
+
+/** hooks 服务器侧直收的最低 server 版本（/hook 路由 + hook.event 转发 + 侧推送） */
+const SERVER_HOOK_MIN_VERSION = '0.1.1'
 
 export class RemotePtyHub {
   private readonly opts: RemotePtyHubOptions
@@ -432,6 +481,8 @@ export class RemotePtyHub {
   private readonly hookPorts = new Map<string, number>()
   /** hookPortFor 并发去重（多任务并发 spawn 各自触发接线时只登记一个口） */
   private readonly hookPortInFlight = new Map<string, Promise<number>>()
+  /** v2.0.2 server 版本缓存（connectionId → version；hook URL 基址/推送门控） */
+  private readonly serverVersions = new Map<string, string>()
 
   constructor(opts: RemotePtyHubOptions) {
     this.opts = opts
@@ -450,6 +501,14 @@ export class RemotePtyHub {
         ...(this.opts.claudeBin !== undefined ? { claudeBin: this.opts.claudeBin } : {}),
         ...(this.opts.runningTaskIdsOf !== undefined
           ? { runningTaskIds: () => this.opts.runningTaskIdsOf!(connectionId) }
+          : {}),
+        // v2.0.2：hook 回放落点透传（server 侧 hook 接收的客户端消费端）
+        ...(this.opts.hookSink !== undefined
+          ? { hookSink: () => this.opts.hookSink!() }
+          : {}),
+        // v2.0.2：传输工厂透传（测试注入 FakeTransport——server.version/hook 回放）
+        ...(this.opts.transportFactory !== undefined
+          ? { transportFactory: this.opts.transportFactory }
           : {}),
         ...(this.opts.connectTimeoutMs !== undefined
           ? { connectTimeoutMs: this.opts.connectTimeoutMs }
@@ -484,6 +543,43 @@ export class RemotePtyHub {
    * realPort 被丢弃），真实 sshd 会拒流入站——自选动态口语义等价且两端可对账。
    * 每连接一个口（S2 重连自动重放注册）；绑定失败（VM 侧占用）换口重试。
    */
+  /**
+   * v2.0.2 hooks URL 基址（推送服务器侧化）：server ≥0.1.1 → server 本机 HTTP 口
+   * （claude 直 POST 到 VM 侧 server——客户端离线不再 ECONNREFUSED）；旧 server →
+   * 回退 SSH forwardIn 转发口（原行为）。版本查询失败也回退（保守）。
+   */
+  async hookUrlBaseFor(connectionId: string): Promise<string> {
+    const version = await this.serverVersionOf(connectionId)
+    if (version !== null && versionAtLeast(version, SERVER_HOOK_MIN_VERSION)) {
+      return `http://127.0.0.1:${CWB_SERVER_PORT}`
+    }
+    return `http://127.0.0.1:${await this.hookPortFor(connectionId)}`
+  }
+
+  /** server ≥0.1.1=webhook 由 server 侧推送（客户端不再重复推远程任务） */
+  serverPushesNotifyFor(connectionId: string): boolean {
+    const v = this.serverVersions.get(connectionId)
+    return v !== undefined && versionAtLeast(v, SERVER_HOOK_MIN_VERSION)
+  }
+
+  /** server 版本（缓存；失败=null=未知→按旧 server 回退） */
+  private async serverVersionOf(connectionId: string): Promise<string | null> {
+    const cached = this.serverVersions.get(connectionId)
+    if (cached !== undefined) return cached
+    try {
+      const m = this.managerFor(connectionId)
+      const payload = await m.request<{ version?: unknown }>({ type: 'server.version' })
+      const v = payload?.version
+      if (typeof v === 'string' && v !== '') {
+        this.serverVersions.set(connectionId, v)
+        return v
+      }
+    } catch {
+      // 版本查询失败——按未知处理（回退 forwardIn）
+    }
+    return null
+  }
+
   async hookPortFor(connectionId: string): Promise<number> {
     const cached = this.hookPorts.get(connectionId)
     if (cached !== undefined) return cached

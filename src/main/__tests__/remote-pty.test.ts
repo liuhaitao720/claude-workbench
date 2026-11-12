@@ -31,6 +31,8 @@ class FakeTransport implements ServerTransport {
   connected = false
   /** type → payload（task.list 用）；缺省回执 {ok:true} 的 payload=undefined */
   listPayload: Array<Record<string, unknown>> = []
+  /** v2.0.2 server.version 回执（缺省 0.1.1=支持 hook 服务器侧直收） */
+  versionPayload: string = '0.1.1'
   /** connect() 行为（缺省成功） */
   connectImpl: () => Promise<void> = async () => {
     this.connected = true
@@ -54,6 +56,7 @@ class FakeTransport implements ServerTransport {
     this.sent.push(frame)
     if (frame.type === 'task.list') return this.listPayload as T
     if (frame.type === 'task.spawn') return { taskId: frame.req.taskId, pid: 4242 } as T
+    if (frame.type === 'server.version') return { version: this.versionPayload } as T
     return undefined as T
   }
 
@@ -82,6 +85,9 @@ class FakeTransport implements ServerTransport {
         return
       case 'conn.closed':
         this.events.onClosed(frame.reason)
+        return
+      case 'hook.event':
+        this.events.onHookEvent?.(frame.taskId, frame.event, frame.epoch)
         return
       default:
         return
@@ -414,5 +420,86 @@ describe('S4 hooks 转发口（2.0.2 稳定优先口——客户端重启后保�
     })
     await expect(hub2.hookPortFor('c3')).resolves.toBe(34_567)
     hub2.disposeAll()
+  })
+})
+
+describe('v2.0.2 推送服务器侧化（hook URL 基址门控 + hook.event 回放）', () => {
+  function makeHookHub(
+    conn: FakeConnection,
+    o: { version?: string; sink?: { host: string; port: number } | null } = {}
+  ): { hub: RemotePtyHub; transport: FakeTransport } {
+    const transport = new FakeTransport()
+    if (o.version !== undefined) transport.versionPayload = o.version
+    const hub = new RemotePtyHub({
+      connection: conn.asManager(),
+      callbacks: { onData: () => {}, onExit: () => {} },
+      onServerLog: () => {},
+      hookSink: async () => o.sink ?? null,
+      transportFactory: (events) => {
+        transport.bind(events)
+        return transport
+      }
+    })
+    return { hub, transport }
+  }
+
+  it('hookUrlBaseFor：server ≥0.1.1 → server 本机口；旧 server → 回退 forwardIn 口；serverPushesNotifyFor 同门控', async () => {
+    const conn = new FakeConnection()
+    const { hub } = makeHookHub(conn, { version: '0.1.1' })
+    await expect(hub.hookUrlBaseFor('c1')).resolves.toBe('http://127.0.0.1:17717')
+    expect(hub.serverPushesNotifyFor('c1')).toBe(true)
+    hub.disposeAll()
+
+    const old = makeHookHub(new FakeConnection(), { version: '0.1.0' })
+    await expect(old.hub.hookUrlBaseFor('c2')).resolves.toBe('http://127.0.0.1:31280')
+    expect(old.hub.serverPushesNotifyFor('c2')).toBe(false)
+    old.hub.disposeAll()
+
+    // 版本未知（查询失败）→ 回退 forwardIn + 不门控推送
+    const fail = new FakeTransport()
+    fail.connectImpl = async () => {
+      throw new Error('unreachable')
+    }
+    const hubF = new RemotePtyHub({
+      connection: new FakeConnection().asManager(),
+      callbacks: { onData: () => {}, onExit: () => {} },
+      onServerLog: () => {},
+      transportFactory: (events) => {
+        fail.bind(events)
+        return fail
+      }
+    })
+    await expect(hubF.hookUrlBaseFor('c3')).resolves.toBe('http://127.0.0.1:31280')
+    expect(hubF.serverPushesNotifyFor('c3')).toBe(false)
+    hubF.disposeAll()
+  })
+
+  it('hook.event 帧 → 回放进本机接收端（epoch 原样）；sink=null 静默丢弃', async () => {
+    // 真实 http 接收端（收 hook POST 即 200 并记录）
+    const received: string[] = []
+    const sinkServer = require('node:http').createServer((req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
+      received.push(String(req.url))
+      res.statusCode = 200
+      res.end()
+    })
+    await new Promise<void>((r) => sinkServer.listen(0, '127.0.0.1', r))
+    const sinkPort = (sinkServer.address() as { port: number }).port
+
+    const { hub, transport } = makeHookHub(new FakeConnection(), {
+      sink: { host: '127.0.0.1', port: sinkPort }
+    })
+    // 先触发 manager 创建（ensureTransport 绑定事件回调——server.version 顺带缓存）
+    await hub.hookUrlBaseFor('c1')
+    transport.connected = true
+    transport.emit({
+      type: 'hook.event',
+      taskId: 'th-1',
+      event: 'UserPromptSubmit',
+      epoch: 7
+    } as ServerFrame)
+    await new Promise((r) => setTimeout(r, 200))
+    expect(received[0]).toBe('/hook/UserPromptSubmit?e=7&t=th-1')
+    hub.disposeAll()
+    sinkServer.close()
   })
 })

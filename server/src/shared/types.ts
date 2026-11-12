@@ -148,6 +148,95 @@ export interface NotifyConfig {
   channel: 'wecom' | 'dingtalk' | 'generic'
 }
 
+/** v2.0 远程文件条目（FilesPanel 列表） */
+export interface RemoteFileEntry {
+  name: string
+  isDir: boolean
+  size: number
+  /** epoch ms；取不到=0 */
+  mtimeMs: number
+}
+
+/** v2.0 传输条目（传输条/队列） */
+export interface TransferItem {
+  id: string
+  direction: 'upload' | 'download'
+  name: string
+  status: 'queued' | 'active' | 'done' | 'error' | 'canceled'
+  transferredBytes: number
+  totalBytes: number
+  error?: string
+  finishedAt?: number
+}
+
+/** v2.0 文件浏览结果（FilesList） */
+export interface FilesBrowseResult {
+  ok: boolean
+  path?: string
+  entries?: RemoteFileEntry[]
+  error?: string
+}
+
+// ── v2.0.2 git diff 审查（主区审查模式）──────────────────────────────
+
+/** 审查文件条目（DiffList）：状态字母与 git status --porcelain 同源 */
+export interface DiffFileEntry {
+  /** 仓库相对路径（重命名=新路径） */
+  path: string
+  /** M=修改 A=新增 D=删除 R=重命名 U=未跟踪 */
+  status: 'M' | 'A' | 'D' | 'R' | 'U'
+  /** 重命名时的原路径 */
+  oldPath?: string
+  /** +行数（未跟踪/二进制未知为 undefined） */
+  add?: number
+  /** −行数 */
+  del?: number
+}
+
+/** 单行 diff：type 决定着色；旧/新行号按行型各有一侧 */
+export interface DiffLine {
+  type: 'ctx' | 'add' | 'del'
+  oldNo?: number
+  newNo?: number
+  text: string
+}
+
+/** 修改点（hunk）：@@ 头 + 行序列 */
+export interface DiffHunk {
+  /** @@ -a,b +c,d @@ 上下文（含函数名截取） */
+  header: string
+  lines: DiffLine[]
+}
+
+/** 单文件 diff 详情（DiffFile） */
+export interface DiffFileDetail {
+  path: string
+  status: DiffFileEntry['status']
+  /** 二进制文件无 hunks（占位提示由 UI 展示） */
+  binary: boolean
+  /** 超 2MB/4000 行截断（提示由 UI 展示） */
+  truncated: boolean
+  hunks: DiffHunk[]
+}
+
+/** DiffList 结果：HEAD 基线的工作区改动清单 */
+export interface DiffListResult {
+  /** 'HEAD'（V1 固定；基线选择留作扩展） */
+  base: 'HEAD'
+  files: DiffFileEntry[]
+}
+
+/** 任务结束审查提示事件（main→renderer；每项目 10 分钟节流一次） */
+export interface ReviewHintEvent {
+  projectId: string
+  /** 审查目标目录（worktree 任务=worktree 路径，否则项目根） */
+  cwd: string
+  /** 改动文件数（含未跟踪） */
+  files: number
+  add?: number
+  del?: number
+}
+
 /** 应用更新说明条目【v1.1.0：main 解析仓库 CHANGELOG.md → 设置中心展示】 */
 export interface AppChangelogEntry {
   version: string
@@ -236,6 +325,16 @@ export interface ConnectionRecord {
    * （1.4=A：Electron safeStorage 加密存 userData，凭据不落明文不入仓库）。
    * 仅 S2 connections-store 读写；renderer 经 saveConnection 传入后不回读展示。
    */
+  /**
+   * 一次性明文 password（saveConnection 单程传递专用）：
+   * authMethod='password' 时=SSH 密码，'key' 时=可选私钥口令。
+   * 仅 main 侧 parseConnectionInput 读取并即刻 safeStorage 加密，绝不进任何
+   * 持久化/日志/回传（list()/get() 输出与 store 内部档案均不含本字段）。
+   * 注意：把明文放进 passwordEncrypted 会被 main 视为既有密文原样传入而在
+   * save 合并时丢弃（历史 bug：新建密码认证连接保存必失败——密码认证必须
+   * 提供密码）。
+   */
+  password?: string
   passwordEncrypted?: string
   /**
    * TOFU 首连确认后锁定的 host key 指纹（1.5=A）；后续指纹变更阻断+告警（S2）。
@@ -342,6 +441,17 @@ export interface AppSettings {
    * 供 main 侧的托盘菜单与退出确认框取文案。缺省='zh'。
    */
   language?: 'zh' | 'en'
+  /* ── v2.0 远程文件管理（下载落位；确认单：目录/方式/按连接分档）────── */
+  /** 下载根目录（空串=默认「系统下载目录/SSH Workbench」） */
+  downloadDir?: string
+  /** direct=直接存入（同名自动重命名）；ask=每次弹保存框。缺省 direct */
+  downloadMode?: 'direct' | 'ask'
+  /** 按连接分子目录（缺省 true） */
+  downloadPerConnection?: boolean
+  /** v2.0 文件面板 per-connection 目录记忆（cid → 远端路径） */
+  filesPanelPath?: Record<string, string>
+  /** v2.0.1 侧栏作用域：'all' | 'local' | 连接 id（连接删除后消费点归一回 all） */
+  sidebarScope?: string
   /**
    * 自动升级（v1.2.1，缺省 true）：启动静默检查 → 有新版本后台下载校验 →
    * 运行中的任务全部结束后自动退出替换重启（有任务在跑时不打断）。
@@ -514,11 +624,11 @@ export interface CWBApi {
 
   // ── skills（3，v0.5③）──────────────────────
   /** 全部 skill（用户级+项目级；项目级需先有项目记录） */
-  listSkills(): Promise<SkillInfo[]>
+  listSkills(cid?: string): Promise<SkillInfo[]>
   /** 导入本地 skill 文件夹（复制到目标 scope；同名冲突报错） */
-  importSkillFolder(fromDir: string, target: { scope: 'user' | 'project'; projectId?: string }): Promise<SkillInfo>
+  importSkillFolder(fromDir: string, target: { scope: 'user' | 'project'; projectId?: string }, cid?: string): Promise<SkillInfo>
   /** 移除 skill（回收站 shell.trashItem；main 做 realpath 归属校验） */
-  removeSkill(skill: SkillInfo): Promise<void>
+  removeSkill(skill: SkillInfo, cid?: string): Promise<void>
 
   // ── cli 执行（3，v0.5③）────────────────────
   /**
@@ -534,11 +644,11 @@ export interface CWBApi {
 
   // ── claude 版本/更新/安装（3，v0.5⑤）───────
   /** 当前 claude CLI 版本+实际路径（version='' 表示未安装） */
-  getClaudeVersionInfo(): Promise<{ version: string; path: string }>
+  getClaudeVersionInfo(cid?: string): Promise<{ version: string; path: string }>
   /** 检查更新（npm registry 对比；无 node 环境 degraded=true） */
-  checkClaudeUpdate(): Promise<{ current: string; latest: string; upToDate: boolean; degraded?: boolean }>
+  checkClaudeUpdate(cid?: string): Promise<{ current: string; latest: string; upToDate: boolean; degraded?: boolean }>
   /** 下载安装 claude CLI（固定模板：native=官方安装器 / npm=npm install -g；输出走 onCliOutput） */
-  installClaudeCli(method: 'native' | 'npm'): Promise<{ commandId: string }>
+  installClaudeCli(method: 'native' | 'npm', cid?: string): Promise<{ commandId: string }>
 
   // ── 应用设置（2，v0.9）─────────────────────
   /** 读取 main 侧应用设置（关闭行为/自启） */
@@ -587,55 +697,86 @@ export interface CWBApi {
 
   // ── Skill 市场（3，v1.2.0）─────────────────
   /** 从本机已配置 marketplace 目录搜索 skill（空 query = 按安装量排序的推荐列表） */
-  searchSkillMarket(query: string, marketplace?: string, limit?: number): Promise<SkillMarketEntry[]>
+  searchSkillMarket(query: string, marketplace?: string, limit?: number, cid?: string): Promise<SkillMarketEntry[]>
   /** 已配置的 marketplace 概要（名称 + 条目数；用于过滤器） */
-  listSkillMarketplaces(): Promise<SkillMarketplaceInfo[]>
+  listSkillMarketplaces(cid?: string): Promise<SkillMarketplaceInfo[]>
   /**
    * 安装市场 skill：`claude plugin install <name>@<marketplace> -y`
    * （经 CLI 受控模板执行；返回 commandId 供弹窗挂 onCliOutput 展示进度）
    */
   installMarketSkill(
-    installId: string
+    installId: string,
+    cid?: string
   ): Promise<{ ok: boolean; commandId?: string; error?: string }>
   /** 刷新所有 marketplace 目录（`claude plugin marketplace update`，走 CLI 网络/凭据策略） */
-  refreshSkillMarket(): Promise<{ ok: boolean; commandId?: string; error?: string }>
+  refreshSkillMarket(cid?: string): Promise<{ ok: boolean; commandId?: string; error?: string }>
   /**
    * v1.2.1 启用/停用插件（`claude plugin enable|disable <id> -s user`）。
    * pluginId 必须来自已安装记录（main 侧白名单校验），否则直接返回错误不启动进程。
    */
   setSkillPluginEnabled(
     pluginId: string,
-    enabled: boolean
+    enabled: boolean,
+    cid?: string
   ): Promise<{ ok: boolean; commandId?: string; error?: string }>
 
   // ── webhook 通知（3，v0.5④N）───────────────
   /** 读取通知配置（默认 {url:'', enabled:false}） */
-  getNotifyConfig(): Promise<NotifyConfig>
+  getNotifyConfig(cid?: string): Promise<NotifyConfig>
+  /** v2.0.1 通知留痕（"没收到推送"自诊）：最近 8 次推送尝试 + 本机开关态 */
+  getNotifyTrail(): Promise<{
+    trail: Array<{ at: string; taskId: string; status: string; detail?: string }>
+    localEnabled: boolean
+  }>
+  onNotifyTrail(cb: (e: { at: string; taskId: string; status: string; detail?: string }) => void): () => void
   /** 保存 webhook 配置 */
-  setNotifyWebhook(url: string, enabled: boolean): Promise<NotifyConfig>
+  setNotifyWebhook(url: string, enabled: boolean, cid?: string): Promise<NotifyConfig>
   /** 立即推送测试消息 */
-  sendTestNotify(): Promise<{ ok: boolean; error?: string }>
+  sendTestNotify(cid?: string): Promise<{ ok: boolean; error?: string }>
 
   // ── 模型服务 provider（5，v1.4）─────────────
   /** 全部 provider 档案 + 默认 id（设置中心「模型服务」与新建任务选择的数据源） */
-  listProviders(): Promise<ProviderRegistryState>
+  listProviders(cid?: string): Promise<ProviderRegistryState>
   /**
    * 新增/编辑 provider（id 空串=新增）；main 侧校验（名称/baseUrl 非空、format 合法、
    * baseUrl 为 http(s)）拒绝抛带原因 Error。返回保存后记录（含分配的 id）。
    */
-  saveProvider(provider: ProviderConfig): Promise<ProviderConfig>
+  saveProvider(provider: ProviderConfig, cid?: string): Promise<ProviderConfig>
   /**
    * 删除 provider（引用它的任务不级联清理——回退默认链）；被删者恰为默认时默认清空。
    * 不存在返回错误。
    */
-  removeProvider(id: string): Promise<void>
+  removeProvider(id: string, cid?: string): Promise<void>
   /** 设默认 provider（id 空串=取消默认）；不存在返回错误 */
-  setDefaultProvider(id: string): Promise<void>
+  setDefaultProvider(id: string, cid?: string): Promise<void>
   /**
    * v1.4 模型列表探测：GET {baseUrl}/v1/models（Anthropic/OpenAI 同形响应 {data:[{id}]}）；
    * provider 配了代理时走代理出口。失败返回 ok:false + error（网络/鉴权）。
    */
-  probeProviderModels(id: string): Promise<{ ok: boolean; models?: string[]; error?: string }>
+  probeProviderModels(id: string, cid?: string): Promise<{ ok: boolean; models?: string[]; error?: string }>
+  /** v1.7.0 provider 跨作用域复制（源/目标：{kind:'local'} 或 {kind:'remote',id:连接id}；源侧重分配 id） */
+  copyProvider(source: { kind: 'local' } | { kind: 'remote'; id: string }, target: { kind: 'local' } | { kind: 'remote'; id: string }, providerId: string): Promise<ProviderConfig>
+  /* ── v2.0 远程文件管理 ──────────────────────────────────────────── */
+  /** 目录清单（缺省=远端 home；realpath 解析后返回） */
+  listRemoteFiles(cid: string, path?: string): Promise<FilesBrowseResult>
+  mkdirRemote(cid: string, path: string): Promise<void>
+  renameRemote(cid: string, from: string, to: string): Promise<void>
+  /** 删除（v2.0.1 用户指令：直接删除不进回收站）：文件=unlink；目录=递归 rm -rf */
+  deleteRemote(cid: string, path: string, isDir: boolean): Promise<void>
+  /** 小文本文件双击本机打开（文本扩展白名单 + <10MB；返回本机临时路径） */
+  peekRemoteFile(cid: string, remotePath: string): Promise<string>
+  /** 本机选择上传源（多选；files=true 含文件 / dirs=true 含目录） */
+  pickLocalForUpload(files: boolean, dirs: boolean): Promise<string[] | null>
+  /** 上传入队（冲突按 policy；返回条目与冲突清单——skip 由调用方对冲突项 cancel） */
+  uploadRemoteFiles(cid: string, localPaths: string[], remoteDir: string, policy: 'overwrite' | 'skip' | 'rename'): Promise<{ items: TransferItem[]; conflicts: Array<{ remotePath: string; renameTo?: string }> }>
+  /** 下载（main 按下载设置解析落位；ask 模式弹保存框，取消返回 null） */
+  downloadRemoteFile(cid: string, remotePath: string, suggestedName?: string): Promise<TransferItem | null>
+  /** 传输清单（跨连接合并，新→旧） */
+  listTransfers(): Promise<TransferItem[]>
+  cancelTransfer(id: string): Promise<void>
+  retryTransfer(id: string): Promise<void>
+  /** 传输进度订阅（节流 ~100ms；disposer 模式） */
+  onTransfersProgress(cb: (items: TransferItem[]) => void): () => void
   /**
    * v1.4 任务级 provider/model 事后修改（照 setTaskSkipPermissions 第 17 法先例）：
    * 仅元数据，下次 spawn/resume 生效；undefined/空串=清除该项（回退默认链）；
@@ -694,8 +835,26 @@ export interface CWBApi {
     connectionId: string,
     patch: Partial<RemoteProxyConfig>
   ): Promise<RemoteProxyConfig>
+  /** VM 侧代理启动（v1.6.1：server 帧 proxy.start；返回启动后状态） */
+  startRemoteProxy(connectionId: string): Promise<RemoteProxyStatus>
+  /** VM 侧代理停止（v1.6.1：server 帧 proxy.stop） */
+  stopRemoteProxy(connectionId: string): Promise<RemoteProxyStatus>
 
   // ── smoke（1，测试专用）──────────────────────
   /** S4 冒烟回执：renderer 收到 PTY 数据后回报 main */
+  /** v2.0 拖拽文件 → 本机绝对路径（webUtils；Electron 44 File.path 已废） */
+  getPathForFile(file: File): string | undefined
+  /** v2.0.1 本机路径系统打开（目录=资源管理器定位；存在性 main 侧守门） */
+  openLocalPath(target: string): Promise<{ ok: boolean; error?: string }>
+  // ── v2.0.2 git diff 审查 ──────────────────────────
+  /**
+   * 工作区改动清单（HEAD 基线）：cwd 缺省=项目根，worktree 任务传 worktree 路径；
+   * 远程项目经连接 exec 执行同一 git 命令。
+   */
+  listDiff(projectId: string, cwd?: string): Promise<DiffListResult>
+  /** 单文件 diff 详情（U3 统一 diff；binary/truncated 防御位；status 自清单透传） */
+  diffFile(projectId: string, cwd: string, path: string, status: DiffFileEntry['status']): Promise<DiffFileDetail>
+  /** 任务结束审查提示（每项目 10 分钟节流；files=0 不推） */
+  onReviewHint(cb: (e: ReviewHintEvent) => void): Unsubscribe
   reportSmoke(payload: string): void
 }

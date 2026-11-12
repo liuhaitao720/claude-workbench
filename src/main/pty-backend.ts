@@ -29,7 +29,9 @@ export interface PtyBackend {
     taskId: string,
     claudeArgs: string[],
     cwd: string,
-    providerEnv?: Record<string, string>
+    providerEnv?: Record<string, string>,
+    /** v2.0.2 任务显示名（Remote 上行 server——服务器侧推送文案；Local 忽略） */
+    name?: string
   ): Promise<void>
   /** 通用 PTY spawn（Local：node-pty 直起；Remote：S4 经协议下发） */
   spawn(

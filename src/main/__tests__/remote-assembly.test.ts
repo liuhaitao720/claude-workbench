@@ -308,23 +308,23 @@ describe('S4 L2.5 A1/A5：真实 cwb-server + ServerClient 直连装配', () => 
     await waitFor(() => mockConn.forwardOutCalls.length > 0, 5_000, 'forwardOut called')
     expect(mockConn.forwardOutCalls[0]).toEqual({ host: '127.0.0.1', port: 17_717 })
 
-    // hooks 反向转发已接线（动态远端口入 settings URL）
-    expect(mockConn.forwardInPorts.length).toBeGreaterThan(0)
-    const hookPort = mockConn.forwardInPorts[0]!
+    // v2.0.2 推送服务器侧化：server ≥0.1.1 → hooks 直 POST server 本机口，
+    // 不再接 SSH forwardIn（客户端离线不 ECONNREFUSED）
+    expect(mockConn.forwardInPorts.length).toBe(0)
 
     // PtyData 事件回流 renderer 通道面（BrowserWindow mock = 通道面）：字节>0
     await waitFor(() => ptyBytes(task.id).includes('A1-OK'), 20_000, 'PtyData A1-OK')
     const bytes = ptyBytes(task.id)
     expect(Buffer.byteLength(bytes, 'utf8')).toBeGreaterThan(0)
 
-    // settings 全链断言：SFTP 写远端 + URL base=forwardIn 端口 + epoch 顺序（e=1）
+    // settings 全链断言：SFTP 写远端 + URL base=server 本机口（17717）+ epoch 顺序（e=1）
     const settingsPath = `${vmHome}/.cwb-server/task-settings/${task.id}.json`
     const content = mockConn.remoteFiles.get(settingsPath)
     expect(content).toBeDefined()
     const urls = Array.from((JSON.parse(content!) as { hooks: Record<string, unknown> }).hooks[
       'Stop'
     ] as Array<{ hooks: Array<{ url: string }> }>)[0]!.hooks[0]!.url
-    expect(urls).toBe(`http://127.0.0.1:${hookPort}/hook/Stop?e=1&t=${task.id}`)
+    expect(urls).toBe(`http://127.0.0.1:17717/hook/Stop?e=1&t=${task.id}`)
     // argv 携带 --settings <远端路径>（shim 回显取证）
     await waitFor(() => ptyBytes(task.id).includes(settingsPath), 10_000, 'argv echoes settings path')
 

@@ -20,6 +20,7 @@ import type { ClientFrame, ServerFrame } from './shared/remote-protocol'
 import { TaskRegistry, type TaskSink } from './pty-registry'
 import { createRemoteProxy } from './proxy-core'
 import { ConfigStore } from './config-store'
+import { ServerNotifier } from './notify'
 
 /** server 版本（package.json 单一事实源；server.version 帧与 S7 升级比对共用） */
 export const VERSION: string = pkg.version
@@ -51,6 +52,8 @@ export interface CwbServerOptions {
   proxyPreferPort?: number
   /** 元数据日志出口（缺省=stderr 镜像；server.log 帧由 broadcastLog 主动发） */
   log?: LogFn
+  /** v2.0.2 webhook 配置定位 HOME（缺省=process.env.HOME；测试注入临时目录） */
+  notifyHome?: string
 }
 
 export const DEFAULT_PORT = 17_717
@@ -66,6 +69,8 @@ export class CwbServer {
   readonly proxy: ReturnType<typeof createRemoteProxy>
   /** 元数据日志出口 */
   readonly log: LogFn
+  /** v2.0.2 服务器侧 webhook 推送器（测试直用） */
+  readonly notifier: ServerNotifier
   private shuttingDown = false
   private boundPort: number | undefined
 
@@ -89,13 +94,57 @@ export class CwbServer {
       onTaskSpawn: (taskId, pid) => this.log('info', `task spawned (${taskId}, pid ${pid})`),
       onTaskExit: (taskId, exitCode) => this.log('info', `task exited (${taskId}, code ${exitCode})`)
     })
-    this.http = createServer((_req, res) => {
+    // v2.0.2 服务器侧 webhook 推送（用户指令：推送+URL 全落服务器端）——
+    // hook 直达 server 后由 server 读 ~/.cwb/notify.json 就地推送；客户端离线照常
+    this.notifier = new ServerNotifier({
+      home: opts.notifyHome ?? process.env['HOME'] ?? '/root',
+      taskNameOf: (taskId) => this.registry.nameOf(taskId),
+      log: (level, message) => this.log(level, message)
+    })
+    this.http = createServer((req, res) => {
+      // v2.0.2 hook 接收口（稳定本机口——客户端 SSH forwardIn 不再承载 hooks，
+      // 客户端离线不再 ECONNREFUSED）：POST /hook/<Event>?t=<taskId>&e=<epoch>
+      // → 转发 hook.event 帧给在线客户端 + 服务器侧推送。一律 200 空体（不干扰
+      // claude 授权流、不触发重试——与客户端接收端同语义）。
+      if (req.method === 'POST' && /^\/hook\/[A-Za-z]+$/.test((req.url ?? '').split('?')[0] ?? '')) {
+        this.handleHookPost(req, res)
+        return
+      }
       // WS 升级由 wss 接管；这里兜非升级 HTTP（本机健康探活最小应答）
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(`{"ok":true,"server":"cwb-server","version":"${VERSION}"}\n`)
     })
     this.wss = new WebSocketServer({ server: this.http })
     this.wss.on('connection', (ws) => this.handleConnection(ws))
+  }
+
+  /** hook POST：URL 解析 → 丢弃 body → 帧转发（在线客户端）+ 服务器侧推送 */
+  private handleHookPost(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): void {
+    const url = req.url ?? ''
+    const event = url.slice('/hook/'.length).split('?')[0] ?? ''
+    let query: URLSearchParams
+    try {
+      query = new URL(url, 'http://127.0.0.1').searchParams
+    } catch {
+      res.statusCode = 200
+      res.end()
+      return
+    }
+    const taskId = query.get('t') ?? ''
+    const eRaw = query.get('e')
+    // body 丢弃（hook payload 不消费；连接即刻收口防悬挂）
+    req.resume()
+    res.statusCode = 200
+    res.end()
+    if (taskId === '' || eRaw === null) return
+    const epoch = Number(eRaw)
+    if (!Number.isInteger(epoch)) return
+    // 转发给全部在线客户端（单客户端假设；epoch/任务校验由客户端接收端做）
+    for (const ws of this.wss?.clients ?? []) {
+      this.send(ws, { type: 'hook.event', taskId, event, epoch })
+    }
+    // 服务器侧推送（旁路——吞错不阻塞）
+    this.notifier.onHookEvent(taskId, event)
   }
 
   /** 监听（返回实际端口——port=0 时为 OS 动态分配） */

@@ -54,6 +54,8 @@ function assertSpawnRequest(v: unknown): asserts v is RemoteTaskSpawnRequest {
     throw new FrameDecodeError('field req.cols/rows: out of range')
   }
   if (v['settingsPath'] !== undefined) expect(v, 'settingsPath', str)
+  // v2.0.2 任务显示名（服务器侧推送文案用；缺省不附）
+  if (v['name'] !== undefined) expect(v, 'name', str)
   if (v['envDenylist'] !== undefined) {
     expect(v, 'envDenylist', Array.isArray)
     for (const n of v['envDenylist'] as unknown[]) {
@@ -131,6 +133,12 @@ function assertServerFrame(frame: ServerFrame): void {
     case 'task.exit':
       expect(frame, 'taskId', str)
       expect(frame, 'exitCode', num)
+      break
+    case 'hook.event':
+      // v2.0.2 hook 转发（服务器侧接收口 → 在线客户端）
+      expect(frame, 'taskId', str)
+      expect(frame, 'event', str)
+      expect(frame, 'epoch', num)
       break
     case 'server.log':
       expect(frame, 'level', (v) => v === 'info' || v === 'warn' || v === 'error')

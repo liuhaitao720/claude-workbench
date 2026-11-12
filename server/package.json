@@ -1,6 +1,6 @@
 {
   "name": "claude-workbench-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "cwb-server —— VM 侧任务 PTY 宿主与协议服务端（SSH 远程模式 S3 实现：WS 帧协议/PTY 注册表+保活/re-attach 重绘/远程代理）",
   "private": true,
   "scripts": {

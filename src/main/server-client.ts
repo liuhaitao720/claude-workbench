@@ -37,6 +37,12 @@ export interface ServerClientEvents {
   onExit: (taskId: string, exitCode: number) => void
   /** server.log 帧（脱敏元数据，M8/8.1=A） */
   onLog: (level: 'info' | 'warn' | 'error', message: string) => void
+  /**
+   * v2.0.2 hook.event 帧（推送服务器侧化）：claude hook 直 POST 到 server，
+   * server 转发给在线客户端——回放进本机 task-activity 接收端。缺省忽略
+   * （事件为可选——旧 server 不发，本地/测试可不接）。
+   */
+  onHookEvent?: (taskId: string, event: string, epoch: number) => void
   /** 连接关闭（WS 意外断开或 server 主动 conn.closed；reason=脱敏摘要） */
   onClosed: (reason?: string) => void
 }
@@ -221,6 +227,9 @@ export class ServerClient implements ServerTransport {
       case 'task.exit':
         this.opts.onExit(f['taskId'] as string, f['exitCode'] as number)
         return
+      case 'hook.event':
+        this.opts.onHookEvent?.(f['taskId'] as string, f['event'] as string, f['epoch'] as number)
+        return
       case 'server.log':
         this.opts.onLog(f['level'] as 'info' | 'warn' | 'error', f['message'] as string)
         return
@@ -262,6 +271,13 @@ export function isValidServerFrame(v: unknown): v is ServerFrame {
       return typeof f['taskId'] === 'string' && typeof f['chunk'] === 'string'
     case 'task.exit':
       return typeof f['taskId'] === 'string' && typeof f['exitCode'] === 'number'
+    case 'hook.event':
+      return (
+        typeof f['taskId'] === 'string' &&
+        typeof f['event'] === 'string' &&
+        typeof f['epoch'] === 'number' &&
+        Number.isInteger(f['epoch'])
+      )
     case 'server.log':
       return (
         (f['level'] === 'info' || f['level'] === 'warn' || f['level'] === 'error') &&
