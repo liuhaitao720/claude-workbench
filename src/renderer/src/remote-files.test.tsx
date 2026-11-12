@@ -164,6 +164,54 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
     expect(calls).toBeGreaterThanOrEqual(2)
   })
 
+  it('多选+直删：Ctrl 点选 2 行 → 工具栏删除（带计数）→ confirm 一次 → deleteRemote 逐项 rm -rf', async () => {
+    const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
+    vi.mocked(api.listRemoteFiles).mockResolvedValue({
+      ok: true,
+      path: '/home/dev',
+      entries: [
+        { name: 'a.txt', isDir: false, size: 10, mtimeMs: 0 },
+        { name: 'b.md', isDir: false, size: 20, mtimeMs: 0 },
+        { name: 'docs', isDir: true, size: 0, mtimeMs: 0 }
+      ]
+    })
+    render(<App />)
+    const panel = await openPanel(api)
+    const row = (n: string) => panel.querySelector(`[data-file-name="${n}"]`) as HTMLElement
+    fireEvent.click(row('a.txt'))
+    fireEvent.click(row('b.md'), { ctrlKey: true })
+    const delBtn = await waitFor(() => {
+      const b = within(panel).getByTestId('btn-delete-selected') as HTMLButtonElement
+      expect(b.disabled).toBe(false)
+      return b
+    })
+    expect(delBtn.textContent).toContain('2')
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    fireEvent.click(delBtn)
+    await waitFor(() => expect(api.deleteRemote).toHaveBeenCalledTimes(2))
+    expect(api.deleteRemote).toHaveBeenCalledWith('c1', '/home/dev/a.txt', false)
+    expect(api.deleteRemote).toHaveBeenCalledWith('c1', '/home/dev/b.md', false)
+  })
+
+  it('双击小文本文件 → peekRemoteFile（本机打开）；大文件/未知扩展 → 走下载', async () => {
+    const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
+    vi.mocked(api.listRemoteFiles).mockResolvedValue({
+      ok: true,
+      path: '/home/dev',
+      entries: [
+        { name: 'readme.md', isDir: false, size: 2048, mtimeMs: 0 },
+        { name: 'huge.bin', isDir: false, size: 20 * 1024 * 1024, mtimeMs: 0 }
+      ]
+    })
+    render(<App />)
+    const panel = await openPanel(api)
+    fireEvent.doubleClick(panel.querySelector('[data-file-name="readme.md"]') as HTMLElement)
+    await waitFor(() => expect(api.peekRemoteFile).toHaveBeenCalledWith('c1', '/home/dev/readme.md'))
+    expect(api.downloadRemoteFile).not.toHaveBeenCalled()
+    fireEvent.doubleClick(panel.querySelector('[data-file-name="huge.bin"]') as HTMLElement)
+    await waitFor(() => expect(api.downloadRemoteFile).toHaveBeenCalledWith('c1', '/home/dev/huge.bin', 'huge.bin'))
+  })
+
   it('面板目录记忆：uiSettings.filesPanelPath 持久化（setAppSettings 携带路径表）', async () => {
     const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
     vi.mocked(api.listRemoteFiles).mockResolvedValue({

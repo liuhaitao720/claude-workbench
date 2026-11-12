@@ -2823,3 +2823,7 @@ button {
 
 .sb-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dot-gray); flex: none; }
 .sb-chip-dot[data-state='connected'] { background: var(--ok-dot); }
+
+/* v2.0.1 文件行多选选中态 */
+.files-row.sel { background: var(--bg-sel); }
+.files-row.sel .files-name { color: var(--text-max); }

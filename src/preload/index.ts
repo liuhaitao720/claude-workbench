@@ -195,6 +195,9 @@ const api: CWBApi = {
     ipcRenderer.invoke(IpcChannels.FilesRename, cid, from, to) as Promise<void>,
   deleteRemote: (cid, path, isDir) =>
     ipcRenderer.invoke(IpcChannels.FilesDelete, cid, path, isDir) as Promise<void>,
+  /** v2.0.1 小文本双击本机打开（<10MB 白名单扩展；main 下载临时目录+系统打开） */
+  peekRemoteFile: (cid, remotePath) =>
+    ipcRenderer.invoke(IpcChannels.FilesPeek, cid, remotePath) as Promise<string>,
   pickLocalForUpload: (files, dirs) =>
     ipcRenderer.invoke(IpcChannels.FilesPickUpload, files, dirs) as Promise<string[] | null>,
   uploadRemoteFiles: (cid, localPaths, remoteDir, policy) =>

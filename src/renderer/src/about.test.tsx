@@ -48,24 +48,23 @@ async function openAbout(): Promise<ReturnType<typeof within>> {
 }
 
 describe('关于并入设置中心（v1.2.2：侧栏只留 Skills / 设置）', () => {
-  it('侧栏头部只有 Skills / 设置两个图标按钮（无关于入口；v1.2.2 图标为内联 SVG）', async () => {
+  it('侧栏头部只剩设置一个图标按钮（v2.0.1 Skills 按用户指令移除；无关于入口）', async () => {
     await renderApp()
     const header = document.querySelector('.sidebar-header') as HTMLElement
     const group = header.querySelector('.sidebar-icon-group') as HTMLElement
     const buttons = Array.from(group.querySelectorAll('button')) as HTMLElement[]
-    expect(buttons.map((b) => b.dataset.icon)).toEqual(['skills', 'settings'])
+    expect(buttons.map((b) => b.dataset.icon)).toEqual(['settings']) // v2.0.1：skills 移除
     // SVG 真实渲染（常用线型图标：拼图 / 齿轮）
-    expect(buttons[0]!.querySelector('svg')).not.toBeNull()
-    expect(buttons[1]!.querySelector('svg')).not.toBeNull()
+    expect(buttons[0]!.querySelector('svg')).not.toBeNull() // ⚙ 内联 SVG
     expect(screen.queryByRole('button', { name: /关于 SSH Workbench/ })).toBeNull()
   })
 
-  it('折叠态 rail 底部同样没有 ⓘ（只留 🧩 ⚙）', async () => {
+  it('折叠态 rail 底部同样没有 ⓘ（v2.0.1 起只剩 ⚙）', async () => {
     await renderApp()
     fireEvent.keyDown(window, { key: 'b', ctrlKey: true }) // 折叠走 Ctrl+B
     const rail = document.querySelector('.sidebar-rail') as HTMLElement
     expect(within(rail).queryByTitle(/关于/)).toBeNull()
-    expect(within(rail).getByTitle('Skills 管理')).toBeDefined()
+    expect(within(rail).queryByTitle('Skills 管理')).toBeNull() // v2.0.1：skills 移除
     expect(within(rail).getByTitle('设置')).toBeDefined()
   })
 

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, net, session, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
+import { closeSync, existsSync, mkdirSync, openSync, writeSync } from 'node:fs'
 import { EVENT_CHANNELS, IpcChannels } from '../shared/ipc-channels'
 import { translate } from '../shared/i18n'
 import type {
@@ -1321,23 +1322,53 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   })
 
   ipcMain.handle(IpcChannels.FilesDelete, async (_e, cid: unknown, path: unknown, isDir: unknown) => {
-    // 删除红线：目录 → VM trash mv（~/.cwb/.trash/<name>-<ts>，可找回——确认单）；
-    // 文件 → unlink。路径经 posixQuote 硬化（remote-skills 同法）
+    // v2.0.1（用户指令）：直接删除不进回收站——文件=unlink；目录=递归 rm -rf
+    // （路径 posixQuote 硬化；确认弹窗在 renderer 多选层统一出）
     const c = asCid(cid)
     if (c === undefined || typeof path !== 'string' || path === '') {
       throw new Error('files: invalid delete args')
     }
     if (isDir === true) {
-      const r = await ctx.connection.exec(
-        c,
-        `h=$(printf %s "$HOME"); mkdir -p "$h/.cwb/.trash" && mv ${posixQuote(path)} "$h/.cwb/.trash/$(basename ${posixQuote(path)})-$(date +%Y%m%d-%H%M%S)" && printf moved`
-      )
-      if (r.code !== 0 || !r.stdout.includes('moved')) {
+      const r = await ctx.connection.exec(c, `rm -rf ${posixQuote(path)} && printf removed`)
+      if (r.code !== 0 || !r.stdout.includes('removed')) {
         throw new Error(r.stderr.trim() !== '' ? r.stderr.trim() : `remote delete failed (exit ${r.code})`)
       }
       return
     }
     await (await ctx.connection.sftp(c)).unlinkFile!(path)
+  })
+
+  // v2.0.1（用户指令，参考 FinalShell）：小文本文件双击本机打开——下载到临时
+  // 目录（ssh-workbench-peek/，同名带序防叠）+ shell.openPath 系统默认程序。
+  // 文本判定=扩展名白名单（10MB 上限在 renderer 预判，main 侧再守一道）。
+  ipcMain.handle(IpcChannels.FilesPeek, async (_e, cid: unknown, remotePath: unknown) => {
+    const c = asCid(cid)
+    if (c === undefined || typeof remotePath !== 'string' || remotePath === '') {
+      throw new Error('files: invalid peek args')
+    }
+    const sftp = await ctx.connection.sftp(c)
+    const st = await sftp.statFile!(remotePath)
+    if (!st.exists || st.isDir) throw new Error('files: peek target is not a file')
+    if (st.size > 10 * 1024 * 1024) throw new Error('files: peek size limit (10MB)')
+    const name = remotePath.split('/').pop() ?? 'peek.txt'
+    const dir = join(app.getPath('temp'), 'ssh-workbench-peek')
+    mkdirSync(dir, { recursive: true })
+    let target = join(dir, name)
+    for (let i = 1; existsSync(target); i++) target = join(dir, `${name} (${i})`)
+    const CHUNK = 1024 * 1024
+    const out = openSync(target, 'w')
+    try {
+      for (let off = 0; off < st.size; off += CHUNK) {
+        const len = Math.min(CHUNK, st.size - off)
+        const buf = await sftp.readRange!(remotePath, off, len)
+        if (buf.length === 0) break
+        writeSync(out, buf)
+      }
+    } finally {
+      closeSync(out)
+    }
+    await shell.openPath(target)
+    return target
   })
 
   ipcMain.handle(IpcChannels.FilesPickUpload, async (_e, files: unknown, dirs: unknown) => {

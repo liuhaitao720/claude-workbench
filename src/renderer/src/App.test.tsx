@@ -32,7 +32,7 @@ describe('App（布局与侧栏）', () => {
     expect(screen.queryByRole('button', { name: /^v1\./ })).toBeNull()
     // Skills / 设置 两个图标按钮（@title 与 aria-label 同名，读屏可达）；ⓘ 已删
     const header = document.querySelector('.sidebar-header') as HTMLElement
-    expect(within(header).getByRole('button', { name: 'Skills' })).toBeDefined()
+    // v2.0.1（用户指令）：头部 Skills 按钮移除——入口只剩设置中心
     expect(within(header).getByRole('button', { name: '设置' })).toBeDefined()
     expect(within(header).queryByRole('button', { name: /关于 SSH Workbench/ })).toBeNull()
   })

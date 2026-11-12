@@ -66,9 +66,9 @@ async function renderApp(skills: SkillInfo[] = []): Promise<CwbApiMock> {
   return api
 }
 
-/** v1.7.0：Skills 管理自独立弹窗移植进设置中心——侧栏按钮现开设置并直达 Skills 分类 */
+/** v2.0.1：头部/rail 的 Skills 按钮已删（用户指令——入口收敛设置中心）——经设置进入 */
 async function openSkills(): Promise<ReturnType<typeof within>> {
-  fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
+  fireEvent.click(screen.getAllByRole('button', { name: '设置' })[0] as HTMLElement)
   const dialog = await screen.findByRole('dialog', { name: '设置' })
   await within(dialog).findByRole('button', { name: 'Skills' })
   fireEvent.click(within(dialog).getByRole('button', { name: 'Skills' }))
@@ -94,19 +94,14 @@ const groupTitles = (): string[] =>
   Array.from(document.querySelectorAll('.skill-group-title')).map((el) => el.textContent ?? '')
 
 describe('入口与列表', () => {
-  it('侧栏「Skills」按钮 + 折叠态 rail skills 图标（v1.2.2 内联 SVG）均开设置 Skills 分类', async () => {
+  it('v2.0.1 Skills 入口收敛设置中心（头部/rail 按钮已删——用户指令）：经设置直达分类', async () => {
     await renderApp()
+    // 头部与 rail 均无 Skills 按钮了
+    expect(screen.queryByRole('button', { name: 'Skills' })).toBeNull()
+    const rail = document.querySelector('.sidebar-rail') as HTMLElement
+    expect(rail.querySelector('button[data-icon="skills"]')).toBeNull()
     await openSkills()
     expect(screen.getByTestId('skills-section')).toBeDefined()
-
-    // rail 折叠态入口（SVG 拼图图标，无文本——data-icon 锚点）
-    fireEvent.click(screen.getAllByRole('button', { name: '关闭' })[0] as HTMLElement)
-    await waitFor(() => expect(screen.queryByTestId('skills-section')).toBeNull())
-    fireEvent.keyDown(window, { key: 'b', ctrlKey: true }) // v0.5.1：顶部 ☰ 移除
-    const rail = document.querySelector('.sidebar-rail') as HTMLElement
-    expect(rail.querySelector('button[data-icon="skills"] svg')).not.toBeNull()
-    fireEvent.click(within(rail).getByTitle('Skills 管理'))
-    expect(await screen.findByTestId('skills-section')).toBeDefined()
   })
 
   it('listSkills 按生效方式分组：默认生效组头；行=名称+描述+版本/作者+来源标签', async () => {
@@ -453,7 +448,7 @@ describe('v1.2.0 在线搜索与安装', () => {
     useLanguageStore.setState({ language: 'en' })
     const api = await renderApp()
     vi.mocked(api.searchSkillMarket).mockResolvedValue([])
-    fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Settings' })[0] as HTMLElement)
     // v1.7.0：Skills 移植进设置——英文弹窗名为 Settings，Skills 分类内找页签
     const dialog = await screen.findByRole('dialog', { name: 'Settings' })
     await within(dialog).findByRole('button', { name: 'Skills' })

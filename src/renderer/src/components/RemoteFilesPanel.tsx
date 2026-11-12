@@ -42,12 +42,28 @@ interface PanelState {
   error: string
 }
 
+/** v2.0.1 文本扩展白名单（FinalShell 同类语义；无扩展名视为文本——conf/log 类常态） */
+const TEXT_EXTS = new Set([
+  'txt','md','markdown','json','jsonc','json5','log','csv','tsv','xml','yml','yaml','toml','ini','conf','cfg','env','properties',
+  'ts','tsx','js','jsx','mjs','cjs','py','rb','go','rs','java','kt','swift','c','h','cpp','hpp','cs','php','sh','bash','zsh','fish','ps1','bat','cmd',
+  'html','htm','css','scss','less','sql','gitignore','dockerfile','makefile','dockerignore','editorconfig','npmrc','nvmrc','lock'
+])
+const PEEK_MAX_BYTES = 10 * 1024 * 1024
+function isPeekable(f: RemoteFileEntry): boolean {
+  if (f.isDir || f.size > PEEK_MAX_BYTES) return false
+  const dot = f.name.lastIndexOf('.')
+  const ext = dot > 0 ? f.name.slice(dot + 1).toLowerCase() : ''
+  return ext === '' || TEXT_EXTS.has(ext)
+}
+
 export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
   const t = useI18n()
   const connections = useAppStore((s) => s.connections)
   const [st, setSt] = useState<PanelState>({ path: '', entries: [], loading: true, error: '' })
   /** 浏览历史（后退用；进目录/跳面包屑即压栈） */
   const historyRef = useRef<string[]>([])
+  /** v2.0.1 多选（FinalShell 语义）：单击选中/取消；Ctrl 单击增减；点空白清空 */
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [renaming, setRenaming] = useState<{ from: string; value: string } | null>(null)
   const [conflict, setConflict] = useState<{ files: string[]; apply: (policy: 'overwrite' | 'skip' | 'rename') => void } | null>(null)
   const connName = connections.find((c) => c.id === connectionId)?.name ?? ''
@@ -66,6 +82,7 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
             historyRef.current.push(st.path)
           }
           setSt({ path: r.path, entries: r.entries ?? [], loading: false, error: '' })
+          setSelected(new Set())
         })
         .catch((err: unknown) => setSt((s) => ({ ...s, loading: false, error: errMsg(err) })))
     },
@@ -177,6 +194,26 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
     }
   }
 
+  /** v2.0.1 多选直删（用户指令：不进回收站）；一次确认列出数量与名字样例 */
+  const removeSelected = async (): Promise<void> => {
+    const targets = st.entries.filter((f) => selected.has(f.name))
+    if (targets.length === 0) return
+    const sample = targets.slice(0, 3).map((f) => f.name).join('、')
+    const suffix = targets.length > 3 ? ` …等 ${targets.length} 项` : ''
+    if (!window.confirm(t('files.deleteMultiConfirm', { n: String(targets.length), names: `${sample}${suffix}` }))) {
+      return
+    }
+    try {
+      for (const f of targets) {
+        await window.cwb.deleteRemote(connectionId, `${st.path === '/' ? '' : st.path}/${f.name}`, f.isDir)
+      }
+      setSelected(new Set())
+      load(st.path, false)
+    } catch (err) {
+      setSt((s) => ({ ...s, error: errMsg(err) }))
+    }
+  }
+
   const submitRename = async (): Promise<void> => {
     if (renaming === null) return
     const to = renaming.value.trim()
@@ -256,6 +293,16 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
         <button type="button" className="btn small" onClick={() => void mkdir()}>
           ＋
         </button>
+        <button
+          type="button"
+          className="btn small danger"
+          disabled={selected.size === 0}
+          title={t('files.deleteSelected')}
+          data-testid="btn-delete-selected"
+          onClick={() => void removeSelected()}
+        >
+          🗑 {selected.size > 0 ? `(${selected.size})` : ''}
+        </button>
         <span style={{ flex: 1 }} />
         <button type="button" className="btn small primary" onClick={() => void pickAndUpload(true, true)}>
           ⬆ {t('files.upload')}
@@ -270,9 +317,34 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
         {st.entries.map((f) => (
           <div
             key={f.name}
-            className={`files-row${f.isDir ? ' dir' : ''}`}
+            className={`files-row${f.isDir ? ' dir' : ''}${selected.has(f.name) ? ' sel' : ''}`}
             data-file-name={f.name}
-            onDoubleClick={() => (f.isDir ? into(f.name) : download(f))}
+            data-selected={selected.has(f.name) ? '1' : undefined}
+            onClick={(e) =>
+              setSelected((prev) => {
+                if (e.ctrlKey || e.metaKey) {
+                  const n = new Set(prev)
+                  if (n.has(f.name)) n.delete(f.name)
+                  else n.add(f.name)
+                  return n
+                }
+                return prev.has(f.name) && prev.size === 1 ? new Set() : new Set([f.name])
+              })
+            }
+            onDoubleClick={() => {
+              if (f.isDir) {
+                into(f.name)
+                return
+              }
+              // v2.0.1（参考 FinalShell）：小文本双击本机打开；其余走下载
+              if (isPeekable(f)) {
+                void window.cwb
+                  .peekRemoteFile(connectionId, `${st.path === '/' ? '' : st.path}/${f.name}`)
+                  .catch((err: unknown) => setSt((s2) => ({ ...s2, error: errMsg(err) })))
+                return
+              }
+              download(f)
+            }}
           >
             <span className="files-ico">{f.isDir ? '📁' : fileIcon(f.name)}</span>
             {renaming?.from === f.name ? (

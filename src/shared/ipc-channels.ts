@@ -86,6 +86,7 @@ const HANDLE = {
   FilesRename: 'cwb:files:rename',
   FilesDelete: 'cwb:files:delete',
   FilesPickUpload: 'cwb:files:pick-upload',
+  FilesPeek: 'cwb:files:peek',
   FilesUpload: 'cwb:files:upload',
   FilesDownload: 'cwb:files:download',
   TransfersList: 'cwb:transfers:list',

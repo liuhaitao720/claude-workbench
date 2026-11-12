@@ -381,6 +381,7 @@ export function installCwbMock(
     mkdirRemote: vi.fn(async () => undefined),
     renameRemote: vi.fn(async () => undefined),
     deleteRemote: vi.fn(async () => undefined),
+    peekRemoteFile: vi.fn(async () => '/tmp/peek.txt'),
     pickLocalForUpload: vi.fn(async () => null),
     uploadRemoteFiles: vi.fn(async () => ({ items: [], conflicts: [] })),
     downloadRemoteFile: vi.fn(async () => null),

@@ -695,8 +695,10 @@ export interface CWBApi {
   listRemoteFiles(cid: string, path?: string): Promise<FilesBrowseResult>
   mkdirRemote(cid: string, path: string): Promise<void>
   renameRemote(cid: string, from: string, to: string): Promise<void>
-  /** 删除：文件=unlink；目录=VM trash mv（~/.cwb/.trash——可找回） */
+  /** 删除（v2.0.1 用户指令：直接删除不进回收站）：文件=unlink；目录=递归 rm -rf */
   deleteRemote(cid: string, path: string, isDir: boolean): Promise<void>
+  /** 小文本文件双击本机打开（文本扩展白名单 + <10MB；返回本机临时路径） */
+  peekRemoteFile(cid: string, remotePath: string): Promise<string>
   /** 本机选择上传源（多选；files=true 含文件 / dirs=true 含目录） */
   pickLocalForUpload(files: boolean, dirs: boolean): Promise<string[] | null>
   /** 上传入队（冲突按 policy；返回条目与冲突清单——skip 由调用方对冲突项 cancel） */

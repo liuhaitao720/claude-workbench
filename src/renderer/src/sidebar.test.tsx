@@ -4,7 +4,6 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { App } from './App'
 import { installCwbMock, makeConnection, makeProject, makeTask } from './test-helpers'
 import { useAppStore } from './store'
-import { useAppStore } from './store'
 
 /** S6 新功能域：搜索过滤（A）/ 时间分组+最近区块（C）/ 图标栏折叠（D）/ 快捷键（F） */
 
@@ -369,7 +368,7 @@ describe('设置入口（v1.2.2：Skills / 设置两个 SVG 图标按钮）', ()
   const pg = makeProject({ id: 'pg', name: 'GitProj' })
   const runner = makeTask({ id: 'tr', projectId: 'pg', name: 'runner', status: 'running' })
 
-  it('展开态：版本号后依次 skills/settings 两个图标按钮（无关于入口）；点 ⚙ 开设置弹窗', async () => {
+  it('展开态：版本号后只剩设置图标按钮（v2.0.1 skills 移除）；点 ⚙ 开设置弹窗', async () => {
     await renderApp([pg], [runner])
     const header = document.querySelector('.sidebar-header') as HTMLElement
     expect(header.querySelector('.version-text')?.textContent).toContain('v2.0.0')
@@ -377,26 +376,25 @@ describe('设置入口（v1.2.2：Skills / 设置两个 SVG 图标按钮）', ()
     const group = header.querySelector('.sidebar-icon-group') as HTMLElement
     expect(group).not.toBeNull()
     const buttons = Array.from(group.querySelectorAll('button')) as HTMLElement[]
-    expect(buttons.map((b) => b.dataset.icon)).toEqual(['skills', 'settings'])
+    expect(buttons.map((b) => b.dataset.icon)).toEqual(['settings']) // v2.0.1：skills 移除
     // SVG 线型图标真实渲染（非空 emoji 占位）
-    expect(buttons[0]!.querySelector('svg')).not.toBeNull()
-    expect(buttons[1]!.querySelector('svg')).not.toBeNull()
+    expect(buttons[0]!.querySelector('svg')).not.toBeNull() // ⚙ 内联 SVG
 
     const settingsBtn = within(group).getByRole('button', { name: '设置' })
     fireEvent.click(settingsBtn)
     expect(await screen.findByRole('dialog', { name: '设置' })).toBeDefined()
   })
 
-  it('折叠态 rail ⚙ 紧跟 🧩，其后无关于入口；点击开设置弹窗', async () => {
+  it('折叠态 rail 只剩 ⚙（🧩 已删）；点击开设置弹窗', async () => {
     await renderApp([pg], [runner])
     fireEvent.keyDown(window, { key: 'b', ctrlKey: true }) // 折叠
     const rail = document.querySelector('.sidebar-rail') as HTMLElement
     const gear = within(rail).getByTitle('设置')
-    // 顺序：settings 紧跟 skills 之后；rail 里不再有关于入口
+    // v2.0.1：skills 已删——rail 无 skills 图标；不再有关于入口
     const btns = Array.from(rail.querySelectorAll('.rail-btn')) as HTMLElement[]
     const idx = btns.indexOf(gear)
-    expect(idx).toBeGreaterThan(0)
-    expect(btns[idx - 1].dataset.icon).toBe('skills')
+    expect(idx).toBeGreaterThanOrEqual(0)
+    expect(btns.map((b) => b.dataset.icon)).not.toContain('skills')
     expect(btns.map((b) => b.dataset.icon)).not.toContain('about')
     expect(gear.querySelector('svg')).not.toBeNull()
 
