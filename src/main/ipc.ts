@@ -24,6 +24,7 @@ import type {
   TaskRecord
 } from '../shared/types'
 import { getDiffFile, getDiffList, localGitRunner, remoteGitRunner } from './git-diff'
+import type { SshShellSession } from './ssh/connection-manager'
 import { checkClaudeUpdate, fetchClaudeChangelog, getClaudeVersionInfo, installClaudeCli } from './claude-version'
 import { AppUpdater } from './app-updater'
 import {
@@ -1535,6 +1536,73 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       return getDiffFile(runner, path, status)
     }
   )
+
+  // ── v2.1.0 SSH 纯终端（不启 claude CLI——裸 shell，不建任务/不写 tasks.json）──
+  // 每连接至多一个会话（渲染层单槽）；重开=先关旧。会话输出 broadcast SshData；
+  // 结束（远端退出/断连/本地关）broadcast SshClosed 并清表。断连由 ssh2 通道自身
+  // 关闭驱动 onClose——连接层无需额外清理钩子。
+  const sshShells = new Map<string, SshShellSession>()
+  const closeSshShellOf = (connectionId: string): void => {
+    const session = sshShells.get(connectionId)
+    if (session === undefined) return
+    sshShells.delete(connectionId) // 先删——session.close() 触发的 onClose 见 map 未持有即不广播
+    try {
+      session.close()
+    } catch {
+      // 已死通道 close 抛错可忽略
+    }
+  }
+  /**
+   * F6（评审）：同 cid open 串行化——在途 open 完成前的新 open 排队，杜绝
+   * 「双活会话」与被抛弃 open 的孤儿落地（孤儿至多活到下一次 open/断连）。
+   */
+  const sshOpenChain = new Map<string, Promise<void>>()
+  ipcMain.handle(IpcChannels.SshShellOpen, async (_e, cid: unknown) => {
+    const c = asCid(cid)
+    if (c === undefined) return { ok: false, error: 'no connection' }
+    // F6：per-cid 串行（在途 open 排队）——同 cid 双 open 交错必产生双活会话
+    const prev = sshOpenChain.get(c) ?? Promise.resolve()
+    const run = prev.catch(() => {}).then(async () => {
+      if (ctx.connection.shell === undefined) {
+        throw new Error('shell unsupported by connection manager')
+      }
+      closeSshShellOf(c) // 重开=新会话（本地关——不广播 SshClosed，见 closeSshShellOf 注）
+      const session = await ctx.connection.shell(c)
+      sshShells.set(c, session)
+      session.onData((chunk) => broadcast(IpcChannels.SshData, { connectionId: c, data: chunk }))
+      // F1：仅自然死亡（远端退出/断连）广播——map 仍持有=非本地关（本地关先删 map）
+      session.onClose(() => {
+        if (sshShells.get(c) === session) {
+          sshShells.delete(c)
+          broadcast(IpcChannels.SshClosed, { connectionId: c })
+        }
+      })
+    })
+    sshOpenChain.set(
+      c,
+      run.finally(() => {
+        if (sshOpenChain.get(c) === run) sshOpenChain.delete(c)
+      })
+    )
+    try {
+      await run
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+  ipcMain.on(IpcChannels.SshShellWrite, (_e, cid: string, data: string) => {
+    if (typeof cid !== 'string' || typeof data !== 'string') return
+    sshShells.get(cid)?.write(data)
+  })
+  ipcMain.on(IpcChannels.SshShellResize, (_e, cid: string, cols: number, rows: number) => {
+    if (typeof cid !== 'string' || typeof cols !== 'number' || typeof rows !== 'number') return
+    sshShells.get(cid)?.resize(cols, rows)
+  })
+  ipcMain.handle(IpcChannels.SshShellClose, (_e, cid: unknown) => {
+    const c = asCid(cid)
+    if (c !== undefined) closeSshShellOf(c)
+  })
 
   // v0.9 S13 会话导入（addProject 已自动调用；此为项目菜单手动触发/重扫入口）
   ipcMain.handle(IpcChannels.TasksImportFromSessions, (_e, projectId: string) =>

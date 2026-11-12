@@ -20,6 +20,14 @@ function isFilesPanelPath(v: unknown): v is Record<string, string> {
   return Object.values(v).every((x) => typeof x === 'string')
 }
 
+/** v2.1.0 SSH 分栏比例形状校验：Record<cid, number>（0.2–0.75 外的脏值丢弃整键） */
+function isSshSplit(v: unknown): v is Record<string, number> {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false
+  return Object.values(v).every(
+    (x) => typeof x === 'number' && Number.isFinite(x) && x >= 0.2 && x <= 0.75
+  )
+}
+
 /** serverNodesCollapsed 形状校验：Record<string, boolean>（连接档案 id → 折叠态） */
 function isServerNodesCollapsed(v: unknown): v is Record<string, boolean> {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false
@@ -66,6 +74,8 @@ export class AppSettingsStore {
             : {}),
           // v2.0 文件面板目录记忆（Record<cid, string>——同 serverNodesCollapsed 容错口径）
           ...(isFilesPanelPath(rec['filesPanelPath']) ? { filesPanelPath: { ...rec['filesPanelPath'] } } : {}),
+          // v2.1.0 SSH 纯终端分栏比例（F5 评审：白名单补键——此前写了读不回，重启即丢）
+          ...(isSshSplit(rec['sshSplit']) ? { sshSplit: { ...rec['sshSplit'] } } : {}),
           // v2.0.1 侧栏作用域（字符串窄集——非法值落 all 由消费点归一，此处只保结构）
           ...(typeof rec['sidebarScope'] === 'string' ? { sidebarScope: rec['sidebarScope'] } : {}),
           // v2.0 下载落位三键（缺省不落键=现行为：direct + 默认目录 + 按连接分档）

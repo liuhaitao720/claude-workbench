@@ -226,6 +226,17 @@ export interface DiffListResult {
   files: DiffFileEntry[]
 }
 
+/** v2.1.0 SSH 纯终端输出流事件（ssh2 shell → xterm） */
+export interface SshDataEvent {
+  connectionId: string
+  data: string
+}
+
+/** v2.1.0 SSH 纯终端会话结束事件（远端退出/断连/本地关闭） */
+export interface SshClosedEvent {
+  connectionId: string
+}
+
 /** 任务结束审查提示事件（main→renderer；每项目 10 分钟节流一次） */
 export interface ReviewHintEvent {
   projectId: string
@@ -450,6 +461,8 @@ export interface AppSettings {
   downloadPerConnection?: boolean
   /** v2.0 文件面板 per-connection 目录记忆（cid → 远端路径） */
   filesPanelPath?: Record<string, string>
+  /** v2.1.0 SSH 纯终端分栏比例（connectionId → 上半占比 0.2–0.75） */
+  sshSplit?: Record<string, number>
   /** v2.0.1 侧栏作用域：'all' | 'local' | 连接 id（连接删除后消费点归一回 all） */
   sidebarScope?: string
   /**
@@ -856,5 +869,18 @@ export interface CWBApi {
   diffFile(projectId: string, cwd: string, path: string, status: DiffFileEntry['status']): Promise<DiffFileDetail>
   /** 任务结束审查提示（每项目 10 分钟节流；files=0 不推） */
   onReviewHint(cb: (e: ReviewHintEvent) => void): Unsubscribe
+  // ── v2.1.0 SSH 纯终端（不启 claude CLI）─────────────────────────
+  /** 打开裸 shell（同连接重开=先关旧会话）；输出经 onSshData 流回 */
+  openSshShell(connectionId: string): Promise<{ ok: boolean; error?: string }>
+  /** 键入透传（SEND 面，无往返） */
+  writeSshShell(connectionId: string, data: string): void
+  /** 栅格同步 */
+  resizeSshShell(connectionId: string, cols: number, rows: number): void
+  /** 关闭会话（幂等） */
+  closeSshShell(connectionId: string): Promise<void>
+  /** shell 输出流订阅（disposer 模式） */
+  onSshData(cb: (e: SshDataEvent) => void): Unsubscribe
+  /** 会话结束订阅 */
+  onSshClosed(cb: (e: SshClosedEvent) => void): Unsubscribe
   reportSmoke(payload: string): void
 }

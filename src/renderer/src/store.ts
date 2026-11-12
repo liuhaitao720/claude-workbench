@@ -13,6 +13,8 @@ import type {
   RemoveTaskOptions,
   RemoteServerLogEvent,
   ReviewHintEvent,
+  SshClosedEvent,
+  SshDataEvent,
   TaskActivityEvent,
   TaskRecord
 } from '../../shared/types'
@@ -120,6 +122,8 @@ export interface SidebarPrefs {
   serverNodesCollapsed?: Record<string, boolean>
   /** v2.0 文件面板 per-connection 目录记忆 */
   filesPanelPath?: Record<string, string>
+  /** v2.1.0 SSH 纯终端 per-connection 分栏比例 */
+  sshSplit?: Record<string, number>
 }
 
 /** v2.0.1 侧栏作用域（用户确认原型 design/sidebar-scope-v2.html）：
@@ -177,6 +181,53 @@ export function isTaskInputFrozen(taskId: string): boolean {
   if (!task) return false
   const entry = connectionStateOfTask(s, task)
   return entry !== undefined && entry.state !== 'connected'
+}
+
+// ── v2.1.0 SSH 纯终端数据流（照 taskDataPending 缓冲先例——openSshShell 的
+// 首包输出可能先于组件订阅到达，缓冲之；订阅时先冲放）──────────────────
+const sshDataListeners = new Map<string, Set<(data: string) => void>>()
+const sshDataPending = new Map<string, string[]>()
+const SSH_DATA_PENDING_CAP = 800_000
+
+export function subscribeSshData(
+  connectionId: string,
+  cb: (data: string) => void
+): () => void {
+  let set = sshDataListeners.get(connectionId)
+  if (!set) {
+    set = new Set()
+    sshDataListeners.set(connectionId, set)
+  }
+  set.add(cb)
+  const pending = sshDataPending.get(connectionId)
+  if (pending !== undefined && pending.length > 0) {
+    sshDataPending.delete(connectionId)
+    for (const d of pending) cb(d)
+  }
+  return () => {
+    const s = sshDataListeners.get(connectionId)
+    if (!s) return
+    s.delete(cb)
+    if (s.size === 0) sshDataListeners.delete(connectionId)
+  }
+}
+
+/** 清待放缓冲（关闭/换连接时） */
+export function discardSshData(connectionId: string): void {
+  sshDataPending.delete(connectionId)
+}
+
+export function emitSshData(e: SshDataEvent): void {
+  const set = sshDataListeners.get(e.connectionId)
+  if (set !== undefined && set.size > 0) {
+    for (const cb of set) cb(e.data)
+    return
+  }
+  const arr = sshDataPending.get(e.connectionId) ?? []
+  arr.push(e.data)
+  let size = arr.reduce((n, x) => n + x.length, 0)
+  while (size > SSH_DATA_PENDING_CAP && arr.length > 1) size -= arr.shift()!.length
+  sshDataPending.set(e.connectionId, arr)
 }
 
 /**
@@ -333,6 +384,20 @@ interface AppState {
   refreshReview: () => Promise<void>
   /** 关闭审查提示 toast */
   dismissReviewHint: () => void
+
+  // ── v2.1.0 SSH 纯终端（不启 claude CLI——裸 shell + 文件面板分栏）────────
+  /** SSH 控制台目标连接（null=未开；单槽——TabBar 虚拟 tab「SSH」） */
+  sshConsoleCid: string | null
+  /** SSH 控制台是否前台（false=任务/审查可见；三方互斥互切） */
+  sshActive: boolean
+  /** 当前 SSH 会话已结束（远端 exit/断连）——冻结层给重开按钮 */
+  sshSessionDead: boolean
+  /** 打开/切换 SSH 控制台（换连接=关旧开新 shell） */
+  openSshConsole: (connectionId: string) => Promise<void>
+  /** 关闭 SSH 控制台（断 shell，虚拟 tab 移除） */
+  closeSshConsole: () => void
+  /** 激活 SSH 控制台前台（虚拟 tab 点击 / Ctrl+Shift+S） */
+  activateSshConsole: () => void
   /**
    * TOFU 首连待确认（connectFlow 的 hostKeyConfirm 信号触发——main 侧 ConnectionsConnect
    * 以 [cwb:host-key-confirm] token 前缀标记；设置页「测试连接」路径已有同等确认 UI，
@@ -502,7 +567,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
           sidebarWidth:
             typeof s.sidebarWidth === 'number' ? clampSidebarWidth(s.sidebarWidth) : undefined,
           sidebarCollapsedPersist: s.sidebarCollapsedPersist === true,
-          serverNodesCollapsed: s.serverNodesCollapsed ?? {}
+          serverNodesCollapsed: s.serverNodesCollapsed ?? {},
+        ...(s.sshSplit !== undefined ? { sshSplit: s.sshSplit } : {})
         },
         // v2.0.1 侧栏作用域恢复（合法域集校验在消费点——此处存原值，连接后载入时归一）
         ...(typeof s.sidebarScope === 'string' ? { sidebarScope: s.sidebarScope } : {})
@@ -543,6 +609,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
       projects = get().projects
     }
     void get().loadConnectionsFlow()
+    // v2.1.0 F4：SSH 台目标连接被删 → 先断 shell 会话再清台（级联对齐 reviewGone）
+    if (get().sshConsoleCid === id) void window.cwb.closeSshShell(id).catch(() => {})
     set((s) => {
       const ids = new Set(projects.map((p) => p.id))
       const tasks = s.tasks.filter((t) => ids.has(t.projectId))
@@ -555,6 +623,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
       delete nodesCollapsed[id]
       // v2.0.2：审查目标项目随级联消失 → 审查视图一并关闭
       const reviewGone = s.reviewState !== null && !ids.has(s.reviewState.projectId)
+      // v2.1.0 F4（评审）：SSH 控制台目标连接被删 → 台一并关（防空名 tab+死按钮）
+      const sshGone = s.sshConsoleCid === id
       return {
         projects,
         tasks,
@@ -563,6 +633,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         connectionStates,
         uiSettings: { ...s.uiSettings, serverNodesCollapsed: nodesCollapsed },
         ...(reviewGone ? { reviewState: null, reviewActive: false } : {}),
+        ...(sshGone ? { sshConsoleCid: null, sshActive: false, sshSessionDead: false } : {}),
         selectedProjectId:
           s.selectedProjectId !== null && ids.has(s.selectedProjectId)
             ? s.selectedProjectId
@@ -660,6 +731,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const seq = ++reviewSeq
     set({
       reviewActive: true,
+      sshActive: false, // v2.1.0：三方互斥
+
       reviewState: {
         projectId,
         cwd: target,
@@ -693,7 +766,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   activateReview: () => {
-    if (get().reviewState !== null) set({ reviewActive: true })
+    if (get().reviewState !== null) set({ reviewActive: true, sshActive: false })
   },
 
   selectReviewFile: async (path) => {
@@ -756,6 +829,56 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   dismissReviewHint: () => set({ reviewHint: null }),
+
+  // ── v2.1.0 SSH 纯终端 ──────────────────────────────────────────────
+  openSshConsole: async (connectionId) => {
+    if (get().connections.every((c) => c.id !== connectionId)) return
+    const cur = get().sshConsoleCid
+    if (cur === connectionId) {
+      // 会话死后台重开（冻结层「重开」也走这里——open=后端关旧建新）
+      if (get().sshSessionDead) {
+        set({ sshActive: true, reviewActive: false, sshSessionDead: false })
+        void window.cwb.closeSshShell(connectionId).catch(() => {})
+        try {
+          await window.cwb.openSshShell(connectionId)
+        } catch {
+          /* 失败留冻结层 */
+        }
+        return
+      }
+      set({ sshActive: true, reviewActive: false })
+      return
+    }
+    // 换连接=关旧会话（后端每连接单会话，open 自会重开；显式关防旧输出串流）
+    if (cur !== null) void window.cwb.closeSshShell(cur)
+    discardSshData(connectionId)
+    set({ sshConsoleCid: connectionId, sshActive: true, reviewActive: false, sshSessionDead: false })
+    try {
+      const r = await window.cwb.openSshShell(connectionId)
+      // F2（评审）：失败落 dead 态——冻结层给出「重开会话」恢复入口（此前仅
+      // console.error，连上但无 shell=键入黑洞且无任何按钮）
+      if (!r.ok && get().sshConsoleCid === connectionId) {
+        console.error('[cwb] openSshShell failed:', r.error)
+        set({ sshSessionDead: true })
+      }
+    } catch (err) {
+      console.error('[cwb] openSshShell failed:', err)
+      if (get().sshConsoleCid === connectionId) set({ sshSessionDead: true })
+    }
+  },
+
+  closeSshConsole: () => {
+    const cur = get().sshConsoleCid
+    set({ sshConsoleCid: null, sshActive: false })
+    if (cur !== null) {
+      discardSshData(cur)
+      void window.cwb.closeSshShell(cur)
+    }
+  },
+
+  activateSshConsole: () => {
+    if (get().sshConsoleCid !== null) set({ sshActive: true, reviewActive: false })
+  },
 
   applyConnectionState: (e) => {
     const prev = get().connectionStates[e.connectionId]
@@ -908,7 +1031,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
       tasks: upsertTask(s.tasks, task),
       openTaskIds: s.openTaskIds.includes(task.id) ? s.openTaskIds : [...s.openTaskIds, task.id],
       activeTaskId: task.id,
-      reviewActive: false // v2.0.2：新建任务即切到终端
+      reviewActive: false, // v2.0.2：新建任务即切到终端
+      sshActive: false // v2.1.0：三方互斥
     }))
   },
 
@@ -996,6 +1120,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   reviewState: null,
   reviewActive: false,
   reviewHint: null,
+  sshConsoleCid: null,
+  sshActive: false,
+  sshSessionDead: false,
 
   reloadProviders: async () => {
     try {
@@ -1010,7 +1137,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
       openTaskIds: s.openTaskIds.includes(taskId) ? s.openTaskIds : [...s.openTaskIds, taskId],
       activeTaskId: taskId,
       // v2.0.2：开/切任务 tab = 用户回终端——审查视图退后台（不销毁，虚拟 tab 留存）
-      reviewActive: false
+      // v2.1.0：SSH 控制台同语义（三方互斥互切）
+      reviewActive: false,
+      sshActive: false
     })),
 
   openTaskAutoResume: (taskId) => {
@@ -1035,8 +1164,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   closeTab: (taskId) => closeTabIn(set, taskId),
 
-  setActive: (taskId) =>
-    set({ activeTaskId: taskId, reviewActive: false }),
+  setActive: (taskId) => set({ activeTaskId: taskId, reviewActive: false, sshActive: false }),
 
   applyTaskUpdate: (t) => {
     const before = get()
@@ -1138,6 +1266,16 @@ export function initListeners(): () => void {
   const offReviewHint = window.cwb.onReviewHint?.((e) => {
     useAppStore.setState({ reviewHint: e })
   })
+  // v2.1.0 SSH 纯终端：输出流经 emitSshData（缓冲/冲放）；会话结束关台
+  const offSshData = window.cwb.onSshData?.((e) => emitSshData(e))
+  const offSshClosed = window.cwb.onSshClosed?.((e: SshClosedEvent) => {
+    const s = useAppStore.getState()
+    if (s.sshConsoleCid === e.connectionId) {
+      // 会话死但台还开着——留台显示「会话已结束/重开」态，不清 sshConsoleCid
+      discardSshData(e.connectionId)
+      useAppStore.setState({ sshSessionDead: true })
+    }
+  })
   return () => {
     offPty()
     offTask()
@@ -1145,5 +1283,7 @@ export function initListeners(): () => void {
     offConnState()
     offServerLog()
     offReviewHint?.()
+    offSshData?.()
+    offSshClosed?.()
   }
 }

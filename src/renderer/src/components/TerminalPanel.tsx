@@ -11,6 +11,7 @@ import { isFontFamily, isFontInstalled, loadFontFamily, persistFontFamily } from
 import { terminalThemeFor } from '../theme'
 import { SidebarMenu } from './SidebarMenu'
 import { DiffReview } from './DiffReview'
+import { SshConsoleView } from './SshConsoleView'
 import type { EffectiveTheme } from '../theme'
 import { connectionStateOfTask, isTaskInputFrozen, subscribeTaskData, useAppStore } from '../store'
 import { useI18n } from '../i18n'
@@ -726,6 +727,9 @@ export function TerminalPanel() {
   // 搜索栏状态不因切换丢失；PTY 字节继续写入隐藏实例（回切原样）。
   const reviewActive = useAppStore((s) => s.reviewActive)
   const reviewState = useAppStore((s) => s.reviewState)
+  // v2.1.0 SSH 纯终端：sshActive 时 SSH 控制台占前台（三方互斥——任务/审查退后台）
+  const sshActive = useAppStore((s) => s.sshActive)
+  const sshConsoleCid = useAppStore((s) => s.sshConsoleCid)
   /** v0.5.3 终端主题联动：effectiveTheme/termFollowsTheme 任一变化 → 遍历缓存
    *  逐实例换 theme（v1.0.8 起 applyTermTheme 同步 composition-view 主题变量；
    *  xterm 自动重绘，无需 fit；新建实例在创建路径取当前值） */
@@ -748,10 +752,14 @@ export function TerminalPanel() {
 
   return (
     <div className="terminal-panel">
-      {/* v2.0.2 审查前台：终端常驻但隐藏（不卸载） */}
+      {/* v2.0.2 审查前台 / v2.1.0 SSH 前台：终端常驻但隐藏（不卸载） */}
       <div
         className="terminal-hosts"
-        style={reviewActive && reviewState !== null ? { display: 'none' as const } : undefined}
+        style={
+          ((reviewActive && reviewState !== null) || (sshActive && sshConsoleCid !== null))
+            ? { display: 'none' as const }
+            : undefined
+        }
       >
         {openTasks.length === 0 ? (
           /* 零项目时提示由主区 empty-hint 承担（A3），此处不再叠加一句误导文案 */
@@ -766,6 +774,14 @@ export function TerminalPanel() {
         )}
       </div>
       {reviewActive && reviewState !== null && <DiffReview />}
+      {sshConsoleCid !== null && (
+        <div
+          className="ssh-console-host"
+          style={sshActive ? undefined : { display: 'none' as const }}
+        >
+          <SshConsoleView connectionId={sshConsoleCid} />
+        </div>
+      )}
     </div>
   )
 }

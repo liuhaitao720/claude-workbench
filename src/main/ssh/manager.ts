@@ -11,7 +11,8 @@ import { ConnectionsStore } from '../connections-store'
 import type {
   ConnectionManager,
   SftpSession,
-  SshExecResult
+  SshExecResult,
+  SshShellSession
 } from './connection-manager'
 import { openSshClient, type OpenedSshClient, type SshClientTuning } from './client-core'
 import { ConnectionError, isFatalConnectionError, mapSshError } from './errors'
@@ -144,6 +145,24 @@ export class RealConnectionManager implements ConnectionManager {
         ? `cd ${posixQuote(opts.cwd)} && ${command}`
         : command
     return execOnClient(entry.client!, full, this.language())
+  }
+
+  /** v2.1.0 SSH 纯终端：既有连接上开裸 shell 通道（每次调用=新会话；调用方管生命周期） */
+  async shell(connectionId: string): Promise<SshShellSession> {
+    await this.connect(connectionId) // 懒连接（2.5=a；已连接幂等返回）
+    const entry = this.requireLiveEntry(connectionId)
+    return new Promise<RealSshShellSession>((resolve, reject) => {
+      entry.client!.shell(
+        { term: 'xterm-256color', cols: 80, rows: 24 },
+        (err, stream) => {
+          if (err != null) {
+            reject(new Error(sanitize(err.message)))
+            return
+          }
+          resolve(new RealSshShellSession(stream))
+        }
+      )
+    })
   }
 
   async sftp(connectionId: string): Promise<SftpSession> {
@@ -827,4 +846,68 @@ function statMtimeMs(st: { mtime?: number; mtimeMs?: number }): number {
   if (typeof st.mtimeMs === 'number') return st.mtimeMs
   if (typeof st.mtime === 'number') return st.mtime * 1000
   return 0
+}
+
+/**
+ * v2.1.0 SSH 纯终端 shell 会话（ssh2 Channel 适配 SshShellSession 契约）。
+ * resize 走 Channel#setWindow（PTY 窗口）；close 幂等；onClose 单次触发
+ * （远端 exit / 连接断开 / 本地 close 三源合一）。
+ */
+class RealSshShellSession implements SshShellSession {
+  private readonly dataCbs = new Set<(chunk: string) => void>()
+  private readonly closeCbs = new Set<() => void>()
+  /** 首个 onData 注册前的早期输出（open→订阅竞态窗——1.7.5 回放竞态同款；冲放式） */
+  private readonly earlyData: string[] = []
+  private closed = false
+
+  constructor(private readonly stream: Channel) {
+    stream.on('data', (chunk: Buffer) => {
+      const text = chunk.toString('utf8')
+      if (this.dataCbs.size === 0) {
+        this.earlyData.push(text)
+        return
+      }
+      for (const cb of this.dataCbs) cb(text)
+    })
+    const onceClose = (): void => {
+      if (this.closed) return
+      this.closed = true
+      for (const cb of this.closeCbs) cb()
+    }
+    stream.on('close', onceClose)
+    stream.on('exit', onceClose) // shell 退出（exit/exit-status）
+    stream.on('error', onceClose)
+  }
+
+  write(data: string): void {
+    if (this.closed) return
+    this.stream.write(data)
+  }
+
+  resize(cols: number, rows: number): void {
+    if (this.closed) return
+    if (cols < 2 || cols > 1000 || rows < 2 || rows > 1000) return
+    this.stream.setWindow(rows, cols, 0, 0)
+  }
+
+  close(): void {
+    if (this.closed) return
+    this.closed = true
+    this.stream.close()
+    for (const cb of this.closeCbs) cb()
+  }
+
+  onData(cb: (chunk: string) => void): void {
+    this.dataCbs.add(cb)
+    // 冲放早期缓冲（注册即补齐 open 以来的输出）
+    if (this.earlyData.length > 0) {
+      const buffered = [...this.earlyData]
+      this.earlyData.length = 0
+      for (const d of buffered) cb(d)
+    }
+  }
+
+  onClose(cb: () => void): void {
+    this.closeCbs.add(cb)
+  }
 }

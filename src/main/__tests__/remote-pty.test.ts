@@ -434,7 +434,9 @@ describe('v2.0.2 推送服务器侧化（hook URL 基址门控 + hook.event 回�
       connection: conn.asManager(),
       callbacks: { onData: () => {}, onExit: () => {} },
       onServerLog: () => {},
-      hookSink: async () => o.sink ?? null,
+      ...(o.sink !== undefined
+        ? { hookSink: async () => o.sink as { host: string; port: number } }
+        : {}),
       transportFactory: (events) => {
         transport.bind(events)
         return transport

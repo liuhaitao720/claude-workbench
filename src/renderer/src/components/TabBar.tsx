@@ -26,6 +26,12 @@ export function TabBar() {
   const activateReview = useAppStore((s) => s.activateReview)
   const closeReview = useAppStore((s) => s.closeReview)
   const projects = useAppStore((s) => s.projects)
+  // v2.1.0 SSH 纯终端虚拟 tab（单槽；三方互斥互切——openTask/setActive 落 sshActive=false）
+  const sshConsoleCid = useAppStore((s) => s.sshConsoleCid)
+  const sshActive = useAppStore((s) => s.sshActive)
+  const connections = useAppStore((s) => s.connections)
+  const activateSshConsole = useAppStore((s) => s.activateSshConsole)
+  const closeSshConsole = useAppStore((s) => s.closeSshConsole)
   const listRef = useRef<HTMLDivElement>(null)
 
   /**
@@ -43,7 +49,9 @@ export function TabBar() {
     if (t) openTasks.push(t)
   }
 
-  if (openTasks.length === 0) return null
+  // v2.1.0 F3（评审）：零任务但开着虚拟 tab（审查/SSH）时 tab 栏仍渲染——
+  // SSH 纯终端的主打场景就是「不建任务」，此前整栏早退=无 tab 可切/无 × 可关
+  if (openTasks.length === 0 && reviewState === null && sshConsoleCid === null) return null
 
   const activeIdx = openTasks.findIndex((t) => t.id === activeTaskId)
 
@@ -69,10 +77,14 @@ export function TabBar() {
         <div
           key={t.id}
           role="tab"
-          aria-selected={t.id === activeTaskId && !reviewActive}
-          className={t.id === activeTaskId && !reviewActive ? 'tab active' : 'tab'}
+          aria-selected={t.id === activeTaskId && !reviewActive && !sshActive}
+          className={t.id === activeTaskId && !reviewActive && !sshActive ? 'tab active' : 'tab'}
           data-task-id={t.id}
-          tabIndex={!reviewActive && (t.id === activeTaskId || (activeIdx === -1 && i === 0)) ? 0 : -1}
+          tabIndex={
+            !reviewActive && !sshActive && (t.id === activeTaskId || (activeIdx === -1 && i === 0))
+              ? 0
+              : -1
+          }
           onClick={() => setActive(t.id)}
           onKeyDown={(e) => onTabKeyDown(e, i)}
         >
@@ -96,10 +108,10 @@ export function TabBar() {
       {reviewState !== null && (
         <div
           role="tab"
-          aria-selected={reviewActive}
-          className={reviewActive ? 'tab review-tab active' : 'tab review-tab'}
+          aria-selected={reviewActive && !sshActive}
+          className={reviewActive && !sshActive ? 'tab review-tab active' : 'tab review-tab'}
           data-testid="review-tab"
-          tabIndex={reviewActive || openTasks.length === 0 ? 0 : -1}
+          tabIndex={reviewActive || (openTasks.length === 0 && sshConsoleCid === null) ? 0 : -1}
           onClick={() => activateReview()}
           onKeyDown={(e) => onTabKeyDown(e, openTasks.length)}
           title={reviewState.cwd}
@@ -120,6 +132,44 @@ export function TabBar() {
             onClick={(e) => {
               e.stopPropagation()
               closeReview()
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
+      {/* v2.1.0 SSH 纯终端虚拟 tab：▣ 图标 + 连接名；× 关台断 shell
+          （Esc 不关——shell 按键须直通远端）；三方互斥互切 */}
+      {sshConsoleCid !== null && (
+        <div
+          role="tab"
+          aria-selected={sshActive}
+          className={sshActive ? 'tab ssh-tab active' : 'tab ssh-tab'}
+          data-testid="ssh-tab"
+          tabIndex={sshActive || (openTasks.length === 0 && reviewState === null) ? 0 : -1}
+          onClick={() => activateSshConsole()}
+          onKeyDown={(e) => onTabKeyDown(e, openTasks.length + (reviewState !== null ? 1 : 0))}
+          title={
+            connections.find((c) => c.id === sshConsoleCid)
+              ? `${connections.find((c) => c.id === sshConsoleCid)!.user}@${connections.find((c) => c.id === sshConsoleCid)!.host}`
+              : ''
+          }
+        >
+          <span className="ssh-tab-icon" aria-hidden="true">
+            ▣
+          </span>
+          <span className="tab-name">
+            {tr('ssh.tabLabel', {
+              name: connections.find((c) => c.id === sshConsoleCid)?.name ?? ''
+            })}
+          </span>
+          <button
+            type="button"
+            className="tab-close"
+            title={tr('ssh.railToggleTitle')}
+            onClick={(e) => {
+              e.stopPropagation()
+              closeSshConsole()
             }}
           >
             ×

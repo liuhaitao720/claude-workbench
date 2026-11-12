@@ -19,6 +19,8 @@ import type {
   RemoteServerLogEvent,
   ReviewHintEvent,
   SftpBrowseResult,
+  SshClosedEvent,
+  SshDataEvent,
   SkillInfo,
   SkillMarketEntry,
   SkillMarketplaceInfo,
@@ -297,6 +299,30 @@ const api: CWBApi = {
     const listener = (_e: Electron.IpcRendererEvent, hint: ReviewHintEvent): void => cb(hint)
     ipcRenderer.on(IpcChannels.ReviewHint, listener)
     return () => ipcRenderer.removeListener(IpcChannels.ReviewHint, listener)
+  },
+  // v2.1.0 SSH 纯终端
+  openSshShell: (connectionId) =>
+    ipcRenderer.invoke(IpcChannels.SshShellOpen, connectionId) as Promise<{
+      ok: boolean
+      error?: string
+    }>,
+  writeSshShell: (connectionId, data) => {
+    void ipcRenderer.send(IpcChannels.SshShellWrite, connectionId, data)
+  },
+  resizeSshShell: (connectionId, cols, rows) => {
+    void ipcRenderer.send(IpcChannels.SshShellResize, connectionId, cols, rows)
+  },
+  closeSshShell: (connectionId) =>
+    ipcRenderer.invoke(IpcChannels.SshShellClose, connectionId) as Promise<void>,
+  onSshData: (cb) => {
+    const listener = (_e: Electron.IpcRendererEvent, ev: SshDataEvent): void => cb(ev)
+    ipcRenderer.on(IpcChannels.SshData, listener)
+    return () => ipcRenderer.removeListener(IpcChannels.SshData, listener)
+  },
+  onSshClosed: (cb) => {
+    const listener = (_e: Electron.IpcRendererEvent, ev: SshClosedEvent): void => cb(ev)
+    ipcRenderer.on(IpcChannels.SshClosed, listener)
+    return () => ipcRenderer.removeListener(IpcChannels.SshClosed, listener)
   },
   reportSmoke: (payload) => {
     void ipcRenderer.send(IpcChannels.SmokeReport, payload)

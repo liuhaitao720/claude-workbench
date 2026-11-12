@@ -73,7 +73,7 @@ describe('关于并入设置中心（v1.2.2：侧栏只留 Skills / 设置）', 
     const s = await openAbout()
     expect(s.getByRole('button', { name: /^关于/ }).getAttribute('aria-current')).toBe('true')
     expect(s.getByText('SSH Workbench')).toBeDefined()
-    expect(s.getByText(/版本 v2\.0\.2/)).toBeDefined()
+    expect(s.getByText(/版本 v2\.1\.0/)).toBeDefined()
     expect(s.getByText('作者 Liu Haitao')).toBeDefined()
     expect(s.getByText('MIT')).toBeDefined() // 许可证链接锚点
     // v1.2.2：应用更新并进来（左栏不再有单独的「应用更新」导航项）
@@ -84,9 +84,9 @@ describe('关于并入设置中心（v1.2.2：侧栏只留 Skills / 设置）', 
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
   })
 
-  it('侧栏显示 v2.0.2 纯文本版本号（不可点）', async () => {
+  it('侧栏显示 v2.1.0 纯文本版本号（不可点）', async () => {
     await renderApp()
-    expect(document.querySelector('.version-text')?.textContent).toContain('v2.0.2')
+    expect(document.querySelector('.version-text')?.textContent).toContain('v2.1.0')
     expect(screen.queryByRole('button', { name: /^v1\./ })).toBeNull()
   })
 
@@ -98,11 +98,11 @@ describe('关于并入设置中心（v1.2.2：侧栏只留 Skills / 设置）', 
     expect(s.getByRole('button', { name: /^通用/ }).getAttribute('aria-current')).toBe('true')
 
     fireEvent.click(s.getByRole('button', { name: /^关于/ }))
-    expect(s.getByText(/版本 v2\.0\.2/)).toBeDefined()
+    expect(s.getByText(/版本 v2\.1\.0/)).toBeDefined()
     expect(s.getByRole('button', { name: /^关于/ }).getAttribute('aria-current')).toBe('true')
 
     fireEvent.click(s.getByRole('button', { name: /^通用/ }))
-    expect(s.queryByText(/版本 v2\.0\.2/)).toBeNull() // 关于分类内容随切换卸载
+    expect(s.queryByText(/版本 v2\.1\.0/)).toBeNull() // 关于分类内容随切换卸载
     expect(s.getByRole('radiogroup', { name: '界面主题' })).toBeDefined()
   })
 

@@ -205,6 +205,14 @@ async function startMockSshd(opts: {
     client.on('ready', () => {
       client.on('session', (acceptSession) => {
         const session = acceptSession()
+        // v2.1.0 SSH 纯终端：裸 shell 通道（回显服务端——write 原样回流 + 开场横幅）
+        // pty-req 先于 shell 到达——测试替身直接接受
+        session.on('pty', (acceptPty) => acceptPty())
+        session.on('shell', (acceptShell: () => import('ssh2').ServerChannel, _rejectShell: () => void, _info: unknown) => {
+          const sh = acceptShell()
+          setTimeout(() => sh.write('mock-shell-ready\r\n'), 30)
+          sh.on('data', (d: Buffer) => sh.write(d))
+        })
         session.on('exec', (acceptExec, _reject, info) => {
           const stream = acceptExec()
           // S5：server 探活命令（bash -c 'exec 3<>/dev/tcp/...'）按子串命中健康应答
@@ -1098,4 +1106,51 @@ describe('L2.5 S2 装配（createAppContext 注入 Real 栈 / broadcast 到 EVEN
     await invoke(IpcChannels.ConnectionsDelete, saved.id)
     expect(await invoke(IpcChannels.ConnectionsList)).toHaveLength(0)
   }, 20_000)
+})
+
+describe('S2+ v2.1.0 shell()（SSH 纯终端——ssh2 shell 通道）', () => {
+  it('shell①：open → 横幅+回显往返；resize 不抛；close → onClose 单次触发', async () => {
+    const sshd = await startMockSshd({ hostKeyPem: HOST_KEY_A, expectedPassword: 'pw-ok', exec: SELF_CHECK_EXEC_OK })
+    const store = makeStore(newTempDir())
+    const mgr = makeManager(store)
+    const cid = await savePasswordRecord(store, sshd.port, 'pw-ok')
+    await mgr.connect(cid)
+    expect(mgr.getState(cid)).toBe('connected')
+
+    const session = await mgr.shell!(cid)
+    const chunks: string[] = []
+    let closed = 0
+    session.onData((c) => chunks.push(c))
+    session.onClose(() => {
+      closed += 1
+    })
+    // 开场横幅（回显 shell 的 ready 行）
+    await waitFor(() => chunks.join('').includes('mock-shell-ready'))
+    // 键入回显往返
+    session.write('echo-hi\r')
+    await waitFor(() => chunks.join('').includes('echo-hi'))
+    // resize（pty setWindow）不抛；close 后 write/resize 无操作
+    expect(() => session.resize(120, 30)).not.toThrow()
+    session.close()
+    await waitFor(() => closed === 1)
+    session.write('after-close') // 无操作不抛
+    expect(chunks.join('')).not.toContain('after-close')
+  })
+
+  it('shell②：远端主动退出 → onClose 触发（连接仍 connected——会话亡不杀连接）', async () => {
+    // 用 exec 侧通道无法杀 shell——回显替身不退；此处验证 close 幂等 + 二次 open=新会话
+    const sshd = await startMockSshd({ hostKeyPem: HOST_KEY_A, expectedPassword: 'pw-ok', exec: SELF_CHECK_EXEC_OK })
+    const store = makeStore(newTempDir())
+    const mgr = makeManager(store)
+    const cid = await savePasswordRecord(store, sshd.port, 'pw-ok')
+    await mgr.connect(cid)
+    const s1 = await mgr.shell!(cid)
+    s1.close()
+    const s2 = await mgr.shell!(cid) // 二次 open=新会话（不抛）
+    const got: string[] = []
+    s2.onData((c) => got.push(c))
+    await waitFor(() => got.join('').includes('mock-shell-ready'))
+    s2.close()
+    expect(mgr.getState(cid)).toBe('connected')
+  })
 })

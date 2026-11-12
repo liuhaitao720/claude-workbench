@@ -15,6 +15,8 @@ import type { ConnectionTestResult,
   RemoteServerLogEvent,
   ReviewHintEvent,
   SkillInfo,
+  SshClosedEvent,
+  SshDataEvent,
   SkillMarketEntry,
   SkillMarketplaceInfo,
   TaskActivityEvent,
@@ -137,6 +139,9 @@ export type CwbApiMock = Omit<CWBApi, 'addProject' | 'testConnection'> & {
  *  S6：connections/appSettings 同理预置（侧栏分组树与持久化键消费）。 */
 const transfersProgressCbs: Array<(items: TransferItem[]) => void> = []
 const notifyTrailCbs: Array<(e: never) => void> = []
+/** v2.1.0 SSH 纯终端回调捕获 */
+const sshDataCallbacks: Array<(e: SshDataEvent) => void> = []
+const sshClosedCallbacks: Array<(e: SshClosedEvent) => void> = []
 
 export function installCwbMock(
   opts: {
@@ -415,6 +420,19 @@ export function installCwbMock(
       hunks: []
     })),
     onReviewHint: vi.fn((_cb: (e: ReviewHintEvent) => void) => () => {}),
+    // v2.1.0 SSH 纯终端（回调捕获数组同先例；默认 open 成功）
+    openSshShell: vi.fn(async () => ({ ok: true })),
+    writeSshShell: vi.fn(),
+    resizeSshShell: vi.fn(),
+    closeSshShell: vi.fn(async () => {}),
+    onSshData: vi.fn((cb: (e: SshDataEvent) => void) => {
+      sshDataCallbacks.push(cb)
+      return () => {}
+    }),
+    onSshClosed: vi.fn((cb: (e: SshClosedEvent) => void) => {
+      sshClosedCallbacks.push(cb)
+      return () => {}
+    }),
     reportSmoke: vi.fn()
   }
 

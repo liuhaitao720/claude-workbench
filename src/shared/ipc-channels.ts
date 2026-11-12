@@ -96,12 +96,18 @@ const HANDLE = {
   TransferRetry: 'cwb:transfer:retry',
   // ── v2.0.2 git diff 审查（主区审查模式）─────────────────────────
   DiffList: 'cwb:diff:list',
-  DiffFile: 'cwb:diff:file'
+  DiffFile: 'cwb:diff:file',
+  // ── v2.1.0 SSH 纯终端（不启 claude CLI）──────────────────────────
+  SshShellOpen: 'cwb:ssh-shell:open',
+  SshShellClose: 'cwb:ssh-shell:close'
 } as const
 
 const SEND = {
   PtyWrite: 'cwb:pty:write',
   PtyResize: 'cwb:pty:resize',
+  /** v2.1.0 SSH 纯终端键入/栅格（SEND 面——高频流不走 handle 往返） */
+  SshShellWrite: 'cwb:ssh-shell:write',
+  SshShellResize: 'cwb:ssh-shell:resize',
   SmokeReport: 'cwb:smoke:report',
   /** v0.5⑥：renderer window.close() 重定向（Electron 44 JS-close 直接销毁不走 close 事件） */
   WindowClose: 'cwb:window:close'
@@ -123,7 +129,11 @@ const EVENT = {
   /** v2.0.1 通知留痕推送（NotifyService trail → 设置 Webhook 页诊断区） */
   NotifyTrailEvent: 'cwb:event:notify-trail',
   /** v2.0.2 任务结束审查提示（markStatus 后台 git status 有改动时推送一次；renderer toast [审查]） */
-  ReviewHint: 'cwb:event:review-hint'
+  ReviewHint: 'cwb:event:review-hint',
+  /** v2.1.0 SSH 纯终端输出流（ssh2 shell 通道 → xterm） */
+  SshData: 'cwb:event:ssh-data',
+  /** v2.1.0 SSH 纯终端会话结束（远端退出/断连/本地关闭） */
+  SshClosed: 'cwb:event:ssh-closed'
 } as const
 
 export const IpcChannels = { ...HANDLE, ...SEND, ...EVENT } as const

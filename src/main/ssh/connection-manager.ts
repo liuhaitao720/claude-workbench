@@ -26,6 +26,19 @@ export interface SshExecResult {
   stderr: string
 }
 
+/**
+ * v2.1.0 SSH 纯终端 shell 会话（裸 shell——不启 claude、不建任务）。
+ * 交互流双向：write 键入 / onData 输出；resize 走 PTY setWindow；
+ * close 幂等；onClose 在远端退出/连接断开/本地 close 时触发一次。
+ */
+export interface SshShellSession {
+  write(data: string): void
+  resize(cols: number, rows: number): void
+  close(): void
+  onData(cb: (chunk: string) => void): void
+  onClose(cb: () => void): void
+}
+
 /** SFTP 子会话（S2 实现 ssh2 sftp 原语的最小面；S1 只锁形状） */
 export interface SftpSession {
   /** 目录清单（S6 注册对话框浏览器消费，3.1=C；不含 . / ..） */
@@ -133,6 +146,14 @@ export interface ConnectionManager {
     remotePort: number,
     handler: (stream: NodeJS.ReadWriteStream) => void
   ): Promise<void>
+  /**
+   * v2.1.0 SSH 纯终端（不启 claude CLI）：在既有连接上开裸 shell 通道
+   * （SSH「shell」请求，PTY 语义——server 侧分配 pty 并回显交互输出）。
+   * 每次 open 一个新会话；会话生命周期由调用方（ipc SshShell*）管理，
+   * 连接断开时所有会话流自行关闭（onClose 触发）。
+   * 可选能力（Real 实现；Stub/旧测试替身不提供——调用方 guard）。
+   */
+  shell?(connectionId: string): Promise<SshShellSession>
   /**
    * 连接状态订阅（disposer 模式）。ConnectionStateChanged 的唯一产生者=S2
    * （A2 权属定案），经 S1 的 ipc.ts broadcastConnectionState 挂钩广播。

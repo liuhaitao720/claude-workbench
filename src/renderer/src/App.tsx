@@ -82,6 +82,37 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // v2.1.0 SSH 纯终端开关：Ctrl+Shift+S（未开=打开首个已连接/首个；开着未活跃=
+  // 激活；活跃=回任务终端）。输入态不劫持（对齐 Ctrl+Shift/D 先例）
+  useEffect(() => {
+    const isTypingTarget = (e: KeyboardEvent): boolean => {
+      const el = e.target
+      if (!(el instanceof HTMLElement)) return false
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) return true
+      return el.closest('.term-host') !== null || el.closest('.ssh-term-host') !== null
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return
+      if (e.key.toLowerCase() !== 's') return
+      if (isTypingTarget(e)) return
+      e.preventDefault()
+      const s = useAppStore.getState()
+      if (s.sshConsoleCid === null) {
+        const target =
+          s.connections.find((c) => s.connectionStates[c.id]?.state === 'connected')?.id ??
+          s.connections[0]?.id
+        if (target !== undefined) void s.openSshConsole(target)
+        return
+      }
+      if (s.sshActive) {
+        if (s.activeTaskId !== null) s.setActive(s.activeTaskId)
+        else useAppStore.setState({ sshActive: false })
+      } else s.activateSshConsole()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const projects = useAppStore((s) => s.projects)
   const openTaskIds = useAppStore((s) => s.openTaskIds)
   const settingsOpen = useAppStore((s) => s.settingsOpen)
@@ -138,6 +169,25 @@ export function App() {
             用户实测「看不见进入方式」）+ 远程文件入口。任务窗口上下文优先：审查=当前
             任务的项目（worktree 任务带 worktree 目录）；文件面板=直达该任务项目工作目录 */}
         <div className="rail-stack">
+          {/* v2.1.0 SSH 纯终端入口（有连接档案即可见；目标=首个已连接，否则首个——open 内懒连接） */}
+          {connectionsForFiles.length > 0 && (
+            <button
+              type="button"
+              className="files-rail-toggle"
+              title={t('ssh.railToggleTitle')}
+              data-testid="btn-ssh-rail"
+              onClick={() => {
+                const st = useAppStore.getState()
+                const target =
+                  connectionsForFiles.find(
+                    (c) => st.connectionStates[c.id]?.state === 'connected'
+                  )?.id ?? connectionsForFiles[0]!.id
+                void st.openSshConsole(target)
+              }}
+            >
+              {t('ssh.railToggle')}
+            </button>
+          )}
           {reviewEntry !== null && (
             <button
               type="button"
