@@ -10,6 +10,7 @@ import { clampFontSize, loadFontSize, persistFontSize } from '../font-size'
 import { isFontFamily, isFontInstalled, loadFontFamily, persistFontFamily } from '../font-family'
 import { terminalThemeFor } from '../theme'
 import { SidebarMenu } from './SidebarMenu'
+import { DiffReview } from './DiffReview'
 import type { EffectiveTheme } from '../theme'
 import { connectionStateOfTask, isTaskInputFrozen, subscribeTaskData, useAppStore } from '../store'
 import { useI18n } from '../i18n'
@@ -720,6 +721,11 @@ export function TerminalPanel() {
   const activeTaskId = useAppStore((s) => s.activeTaskId)
   const projects = useAppStore((s) => s.projects)
   const searchOpen = useAppStore((s) => s.searchOpen)
+  // v2.0.2 主区审查模式：reviewActive 时审查视图占前台。终端 DOM 常驻仅
+  // display 隐藏（双态保挂载，对齐折叠 rail 先例）——xterm 实例、滚动位置、
+  // 搜索栏状态不因切换丢失；PTY 字节继续写入隐藏实例（回切原样）。
+  const reviewActive = useAppStore((s) => s.reviewActive)
+  const reviewState = useAppStore((s) => s.reviewState)
   /** v0.5.3 终端主题联动：effectiveTheme/termFollowsTheme 任一变化 → 遍历缓存
    *  逐实例换 theme（v1.0.8 起 applyTermTheme 同步 composition-view 主题变量；
    *  xterm 自动重绘，无需 fit；新建实例在创建路径取当前值） */
@@ -742,19 +748,24 @@ export function TerminalPanel() {
 
   return (
     <div className="terminal-panel">
-      {openTasks.length === 0 ? (
-        /* 零项目时提示由主区 empty-hint 承担（A3），此处不再叠加一句误导文案 */
-        projects.length > 0 && (
-          <div className="terminal-empty">{t('term.empty')}</div>
-        )
-      ) : (
-        <>
-          {openTasks.map((t) => (
-            <TerminalView key={t.id} task={t} active={t.id === activeTaskId} />
-          ))}
-          {searchOpen && <TerminalSearchBar />}
-        </>
-      )}
+      {/* v2.0.2 审查前台：终端常驻但隐藏（不卸载） */}
+      <div
+        className="terminal-hosts"
+        style={reviewActive && reviewState !== null ? { display: 'none' as const } : undefined}
+      >
+        {openTasks.length === 0 ? (
+          /* 零项目时提示由主区 empty-hint 承担（A3），此处不再叠加一句误导文案 */
+          projects.length > 0 && <div className="terminal-empty">{t('term.empty')}</div>
+        ) : (
+          <>
+            {openTasks.map((t) => (
+              <TerminalView key={t.id} task={t} active={t.id === activeTaskId} />
+            ))}
+            {searchOpen && <TerminalSearchBar />}
+          </>
+        )}
+      </div>
+      {reviewActive && reviewState !== null && <DiffReview />}
     </div>
   )
 }

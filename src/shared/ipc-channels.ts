@@ -93,7 +93,10 @@ const HANDLE = {
   FilesDownload: 'cwb:files:download',
   TransfersList: 'cwb:transfers:list',
   TransferCancel: 'cwb:transfer:cancel',
-  TransferRetry: 'cwb:transfer:retry'
+  TransferRetry: 'cwb:transfer:retry',
+  // ── v2.0.2 git diff 审查（主区审查模式）─────────────────────────
+  DiffList: 'cwb:diff:list',
+  DiffFile: 'cwb:diff:file'
 } as const
 
 const SEND = {
@@ -118,7 +121,9 @@ const EVENT = {
   /** v2.0 传输进度（FileTransferManager 节流 ~100ms；items=跨连接合并清单） */
   TransfersProgress: 'cwb:event:transfers-progress',
   /** v2.0.1 通知留痕推送（NotifyService trail → 设置 Webhook 页诊断区） */
-  NotifyTrailEvent: 'cwb:event:notify-trail'
+  NotifyTrailEvent: 'cwb:event:notify-trail',
+  /** v2.0.2 任务结束审查提示（markStatus 后台 git status 有改动时推送一次；renderer toast [审查]） */
+  ReviewHint: 'cwb:event:review-hint'
 } as const
 
 export const IpcChannels = { ...HANDLE, ...SEND, ...EVENT } as const

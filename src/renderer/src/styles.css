@@ -2841,3 +2841,189 @@ button {
 .notify-trail li { font: 11px ui-monospace,Consolas,monospace; color: var(--text-3); }
 .notify-trail li[data-status='sent'] { color: var(--ok); }
 .notify-trail li[data-status='failed'] { color: #f85149; }
+
+/* ── v2.0.2 git diff 审查（主区审查模式）────────────────────────────── */
+
+/* 终端宿主 wrapper（双态保挂载：审查前台时 display:none） */
+.terminal-hosts { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+
+/* 审查虚拟 tab（◆ 图标 + 项目名 + 改动数角标） */
+.review-tab-icon { color: var(--accent); font-size: 11px; }
+.review-tab.active .review-tab-icon { color: var(--accent); }
+.review-tab-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--bg-sel);
+  color: var(--text-2);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 审查视图布局：工具栏 / 双栏主体 / hunk 导航条 */
+.diff-review {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-app);
+}
+.diff-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-1);
+  background: var(--bg-panel);
+}
+.diff-title { color: var(--text-max); font-size: 12px; }
+.diff-summary { color: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.diff-add { color: var(--ok); }
+.diff-del { color: var(--danger-text); }
+.diff-toolbar-acts { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+
+.diff-body { display: flex; flex: 1; min-height: 0; }
+
+/* 文件列表栏（listbox；焦点环醒目——键盘模型双栏焦点决定 ↑/↓ 语义） */
+.diff-files {
+  width: 230px;
+  flex: none;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-1);
+  background: var(--bg-panel);
+  padding: 4px 0;
+  outline: none;
+}
+.diff-files.focused, .diff-view.focused { box-shadow: inset 0 0 0 2px var(--accent); }
+.diff-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+}
+.diff-file-row:hover { background: var(--bg-hover); }
+.diff-file-row.selected { background: var(--bg-sel); color: var(--text-max); }
+.diff-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-file-dir { color: var(--text-3); font-size: 10px; margin-left: 4px; }
+.diff-file-counts { font-size: 10px; font-variant-numeric: tabular-nums; flex: none; }
+/* 状态徽标：字母+颜色双编码（M 蓝 / A 绿 / D 红 / R 蓝 / ? 灰） */
+.diff-status-chip {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font: 600 10px ui-monospace,Consolas,monospace;
+  border-radius: 3px;
+}
+.diff-status-chip[data-status='M'], .diff-status-chip[data-status='R'] { color: var(--accent); }
+.diff-status-chip[data-status='A'] { color: var(--ok); }
+.diff-status-chip[data-status='D'] { color: var(--danger-text); }
+.diff-status-chip[data-status='U'] { color: var(--text-3); }
+
+/* diff 视图栏（region；横向滚动——代码行不折行） */
+.diff-view {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  outline: none;
+  display: flex;
+  flex-direction: column;
+}
+.diff-file-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-1);
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.diff-truncated { color: var(--warn-text); margin-left: 8px; }
+.diff-lines { font-size: 12px; line-height: 1.5; }
+.diff-hunk { position: relative; }
+.diff-hunk.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent);
+}
+.diff-hunk-header {
+  padding: 2px 12px;
+  color: var(--text-3);
+  background: var(--bg-panel);
+  font-size: 11px;
+  white-space: pre;
+}
+.diff-line { display: flex; white-space: pre; }
+.diff-line[data-type='add'] { background: var(--ok-bg); }
+.diff-line[data-type='del'] { background: var(--danger-bg); }
+.diff-no {
+  flex: none;
+  width: 44px;
+  text-align: right;
+  padding-right: 6px;
+  color: var(--text-3);
+  font-size: 10px;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.diff-no-old { border-right: 1px solid var(--border-1); }
+.diff-no-new { border-right: 1px solid var(--border-1); }
+.diff-sign { flex: none; width: 14px; color: var(--text-3); user-select: none; }
+.diff-line[data-type='add'] .diff-sign { color: var(--ok); }
+.diff-line[data-type='del'] .diff-sign { color: var(--danger-text); }
+.diff-text { padding-right: 16px; color: var(--text-1); }
+
+/* hunk 导航条（底部；‹ n/m › + 键盘提示） */
+.diff-hunk-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border-1);
+  background: var(--bg-panel);
+}
+.diff-hunk-count { font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.diff-hunk-hint { margin-left: auto; font-size: 10px; color: var(--text-3); }
+
+/* 空态/错误 */
+.diff-empty { padding: 24px 16px; color: var(--text-3); font-size: 12px; text-align: center; }
+.diff-error { padding: 16px; color: var(--danger-text); font-size: 12px; }
+
+/* 任务结束审查提示 toast（右下角浮层；10s 自动收起） */
+.review-hint-toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-2);
+  background: var(--bg-dialog);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  color: var(--text-1);
+}

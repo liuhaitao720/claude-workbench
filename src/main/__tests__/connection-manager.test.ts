@@ -369,14 +369,15 @@ function makeManager(store: ConnectionsStore): RealConnectionManager {
 async function savePasswordRecord(
   store: ConnectionsStore,
   port: number,
-  password: string
+  password: string,
+  user = 'vmuser'
 ): Promise<string> {
   const parsed = parseConnectionInput('zh', {
     id: '',
     name: '测试连接',
     host: '127.0.0.1',
     port,
-    user: 'vmuser',
+    user, // 2.0.2 起新增按 (user,host,port) 去重——多档案用例须各异目标
     authMethod: 'password',
     password
   })
@@ -569,6 +570,37 @@ describe('S2 connections-store（1.2/1.4：原子写 + safeStorage 密文往返�
       parseConnectionInput('en', { id: '', name: '', host: 'h', port: 22, user: 'u', authMethod: 'password' })
     ).toThrow(/Name required/)
   })
+
+  it('⑤f 新增去重（2.0.2 用户实测：1 个远程出现 2 条同目标记录）：同 user@host:port 新增被拒；不同用户/编辑不受影响', () => {
+    const dir = newTempDir()
+    const store = makeStore(dir)
+    const mk = (over: Record<string, unknown>) =>
+      parseConnectionInput('zh', {
+        id: '', name: 'vm-dev', host: '192.168.1.20', port: 22, user: 'dev',
+        authMethod: 'password', password: 'pw', ...over
+      })
+
+    const first = store.save(mk({}).record, mk({}).plainPassword)
+    // 连点/重复添加同目标 → 拒绝并点名既有档案
+    expect(() => store.save(mk({ name: 'vm-dev-2' }).record, mk({}).plainPassword)).toThrow(
+      /已存在相同 user@host:port.*vm-dev/
+    )
+    expect(store.list()).toHaveLength(1)
+
+    // 同主机不同用户名 → 合法（多账号并存）
+    const other = store.save(mk({ user: 'root' }).record, mk({}).plainPassword)
+    expect(store.list()).toHaveLength(2)
+
+    // 编辑既有档案（id 命中，目标未变）→ 不触发去重
+    const edited = store.save({ ...store.get(first.id)!, name: 'vm-dev-renamed' })
+    expect(edited.name).toBe('vm-dev-renamed')
+    expect(store.list()).toHaveLength(2)
+
+    // 非空 id 但未命中（孤儿 upsert）也按新增口径去重——防脏 id 绕过
+    expect(() =>
+      store.save({ ...mk({}).record, id: other.id + '-ghost' }, mk({}).plainPassword)
+    ).toThrow(/已存在相同/)
+  })
 })
 
 // ── L2：RealConnectionManager（ssh2.Server 本机替身）─────────────────
@@ -588,7 +620,7 @@ describe('S2 RealConnectionManager（认证/TOFU/判死/退避/转发）', () =>
     await mgr.connect(goodId)
     expect(mgr.getState(goodId)).toBe('connected')
 
-    const badId = await savePasswordRecord(store, sshd.port, 'pw-wrong')
+    const badId = await savePasswordRecord(store, sshd.port, 'pw-wrong', 'vmuser2')
     const err = await mgr.connect(badId).then(
       () => {
         throw new Error('expected auth failure')

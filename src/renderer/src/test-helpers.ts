@@ -13,6 +13,7 @@ import type { ConnectionTestResult,
   PtyDataEvent,
   RemoteProxyConfig,
   RemoteServerLogEvent,
+  ReviewHintEvent,
   SkillInfo,
   SkillMarketEntry,
   SkillMarketplaceInfo,
@@ -404,6 +405,16 @@ export function installCwbMock(
     }),
     getPathForFile: vi.fn(() => undefined),
     openLocalPath: vi.fn(async () => ({ ok: true })),
+    // v2.0.2 git diff 审查（默认空清单；用例经 vi.mocked 覆写）
+    listDiff: vi.fn(async () => ({ base: 'HEAD' as const, files: [] })),
+    diffFile: vi.fn(async () => ({
+      path: '',
+      status: 'M' as const,
+      binary: false,
+      truncated: false,
+      hunks: []
+    })),
+    onReviewHint: vi.fn((_cb: (e: ReviewHintEvent) => void) => () => {}),
     reportSmoke: vi.fn()
   }
 

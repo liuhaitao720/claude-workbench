@@ -383,6 +383,15 @@ function ProjectNode({
 
   const menuItems: MenuItemDef[] = [
     { label: t('tree.newTask'), onClick: () => onNewTask(project.id) },
+    ...(project.isGit
+      ? [
+          {
+            // v2.0.2 主区审查模式：git 项目常驻入口（打开/激活审查虚拟 tab）
+            label: t('review.openMenu'),
+            onClick: () => void useAppStore.getState().openReview(project.id)
+          }
+        ]
+      : []),
     ...(project.connectionId !== undefined
       ? [
           {

@@ -42,8 +42,17 @@ export const REMOTE_ENV_DENYLIST: readonly string[] = [
 /** hooks 反向转发远端口随机区间（IANA 动态口内避让 49152+ 常用临时段） */
 const HOOK_PORT_MIN = 20_000
 const HOOK_PORT_MAX = 45_000
-/** 远端口绑定失败（VM 侧占用）重试次数 */
-const HOOK_PORT_ATTEMPTS = 3
+/**
+ * hooks 转发稳定优先口（2.0.2 用户实测：Stop hook ECONNREFUSED）。
+ * 根因：远端口原为每次连接随机自选——客户端重启后新连接换口，VM 侧保活会话
+ * （5.9=b 断开不杀）的 settings 里钉着旧口，每轮 Stop 都撞死口。
+ * 固定优先口后：重启重连在同一口重放 forwardIn，旧会话的 hook URL 重新变活
+ * （接收端对未知 epoch/任务一律 200 静默丢弃，无副作用）；被占（罕见：同 VM
+ * 另一客户端实例）则回退随机口——退化为旧行为，仅该实例受影响。
+ */
+const HOOK_PORT_PREFERRED = 31_280
+/** 远端口绑定失败（VM 侧占用）重试次数（首次=优先口，其后随机） */
+const HOOK_PORT_ATTEMPTS = 4
 /** 默认初始栅格（与本机 PtyManager 缺省一致；resize 后按记忆尺寸复用） */
 const DEFAULT_SIZE = { cols: 80, rows: 24 }
 
@@ -491,9 +500,14 @@ export class RemotePtyHub {
     const sink = this.opts.hookSink !== undefined ? await this.opts.hookSink() : null
     let lastErr: unknown
     for (let i = 0; i < HOOK_PORT_ATTEMPTS; i++) {
-      const port = this.opts.hookPortPicker
-        ? this.opts.hookPortPicker()
-        : HOOK_PORT_MIN + Math.floor(Math.random() * (HOOK_PORT_MAX - HOOK_PORT_MIN))
+      // 首选稳定口（跨客户端重启不换——保活会话的旧 hook URL 重连后复活）；
+      // 失败回退随机口。picker 注入时维持注入语义（测试口即测试想要的行为）
+      const port =
+        i === 0 && this.opts.hookPortPicker === undefined
+          ? HOOK_PORT_PREFERRED
+          : this.opts.hookPortPicker
+            ? this.opts.hookPortPicker()
+            : HOOK_PORT_MIN + Math.floor(Math.random() * (HOOK_PORT_MAX - HOOK_PORT_MIN))
       try {
         await this.opts.connection.forwardIn(connectionId, port, (stream) =>
           this.pipeHookStream(stream, sink)

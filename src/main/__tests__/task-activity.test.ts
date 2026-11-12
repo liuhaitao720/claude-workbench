@@ -13,15 +13,18 @@ import type { TaskActivityEvent } from '../../shared/types'
 let settingsDir: string
 let clockNow: number
 let events: TaskActivityEvent[]
+let hookEvents: Array<[string, string]>
 let handle: TaskActivityHandle
 
 beforeEach(async () => {
   settingsDir = mkdtempSync(join(tmpdir(), 'cwb-task-activity-'))
   clockNow = 1_000_000
   events = []
+  hookEvents = []
   handle = startTaskActivityServer({
     settingsDir,
     onActivity: (e) => events.push(e),
+    onHookEvent: (taskId, event) => hookEvents.push([taskId, event]),
     now: () => clockNow
   })
   await handle.ready() // 端口确定后再开测（构造急启动的确定性收口）
@@ -131,6 +134,17 @@ describe('hook 事件 → 状态转换（真实 POST）', () => {
     // 当前 epoch 正常采纳
     await postHook('UserPromptSubmit', 't1', 2)
     expect(handle.current('t1')).toBe('busy')
+  })
+
+  it('onHookEvent（2.0.2 排序 touch 信号）：采纳的 hook 外送 (taskId,event)；旧 epoch/未知任务不出', async () => {
+    handle.noteSpawn('t1') // epoch 1
+    await postHook('UserPromptSubmit', 't1', 1)
+    await postHook('Stop', 't1', 1)
+    await postHook('UserPromptSubmit', 't1', 99) // 旧/错 epoch → 不出
+    expect(hookEvents).toEqual([
+      ['t1', 'UserPromptSubmit'],
+      ['t1', 'Stop']
+    ])
   })
 
   it('Stop payload background_tasks/session_crons 非空 → 记录标志但 activity 仍 idle', async () => {

@@ -8,6 +8,8 @@ import type {
   ConnectionStateChangedEvent,
   CWBApi,
   CliOutputEvent,
+  DiffFileDetail,
+  DiffListResult,
   LocalProxyStatus,
   NotifyConfig,
   ProviderConfig,
@@ -15,6 +17,7 @@ import type {
   RemoteProxyConfig,
   RemoteProxyStatus,
   RemoteServerLogEvent,
+  ReviewHintEvent,
   SftpBrowseResult,
   SkillInfo,
   SkillMarketEntry,
@@ -279,6 +282,22 @@ const api: CWBApi = {
     ipcRenderer.invoke(IpcChannels.ShellOpenPath, target) as Promise<{ ok: boolean; error?: string }>,
   getPathForFile: (file: File): string | undefined =>
     webUtils?.getPathForFile?.(file) ?? (file as File & { path?: string }).path,
+  // v2.0.2 git diff 审查
+  listDiff: (projectId, cwd) =>
+    ipcRenderer.invoke(IpcChannels.DiffList, projectId, cwd) as Promise<DiffListResult>,
+  diffFile: (projectId, cwd, path, status) =>
+    ipcRenderer.invoke(
+      IpcChannels.DiffFile,
+      projectId,
+      cwd,
+      path,
+      status
+    ) as Promise<DiffFileDetail>,
+  onReviewHint: (cb) => {
+    const listener = (_e: Electron.IpcRendererEvent, hint: ReviewHintEvent): void => cb(hint)
+    ipcRenderer.on(IpcChannels.ReviewHint, listener)
+    return () => ipcRenderer.removeListener(IpcChannels.ReviewHint, listener)
+  },
   reportSmoke: (payload) => {
     void ipcRenderer.send(IpcChannels.SmokeReport, payload)
   }

@@ -13,6 +13,7 @@ import { loadDefaultIsolation, persistDefaultIsolation } from '../default-isolat
 import { useEscapeClose } from '../hooks/useEscapeClose'
 import { useI18n } from '../i18n'
 import { ProjectTree } from './ProjectTree'
+import { RemoteProjectDialog } from './RemoteProjectDialog'
 import { focusActiveTerminal } from './TerminalPanel'
 import { TaskStatusDot } from './TaskStatusDot'
 
@@ -45,12 +46,15 @@ export function ProjectSidebar() {
   // 列表按域过滤；主操作随域（本机=打开目录 / 服务器=注册远程目录）
   const sidebarScope = useAppStore((s) => s.sidebarScope)
   const setSidebarScope = useAppStore((s) => s.setSidebarScope)
-  const registerRemoteProjectFlow = useAppStore((s) => s.registerRemoteProjectFlow)
   const activeScope = normalizeSidebarScope(sidebarScope, connections.map((c) => c.id))
   const scopeConn =
     activeScope !== 'all' && activeScope !== 'local'
       ? connections.find((c) => c.id === activeScope)
       : undefined
+  /** 远程作用域 ＋ 注册对话框（2.0.2 修复：此前直调 registerRemoteProjectFlow(id, '')
+   *  ——空路径在 main 侧 dirMissing 报错且返回值被丢弃，用户表象「点了没反应」；
+   *  与服务器节点菜单同款：先开 RemoteProjectDialog 收路径再注册） */
+  const [remoteRegisterOpen, setRemoteRegisterOpen] = useState(false)
 
   const selectProject = useAppStore((s) => s.selectProject)
   const openTaskAutoResume = useAppStore((s) => s.openTaskAutoResume)
@@ -352,7 +356,7 @@ export function ProjectSidebar() {
                   className="btn primary dir-icon-btn"
                   title={t('sidebar.registerRemote', { name: scopeConn.name })}
                   aria-label={t('sidebar.registerRemote', { name: scopeConn.name })}
-                  onClick={() => void registerRemoteProjectFlow(scopeConn.id, '')}
+                  onClick={() => setRemoteRegisterOpen(true)}
                   data-testid="btn-register-remote"
                 >
                   ＋
@@ -415,6 +419,13 @@ export function ProjectSidebar() {
               focusActiveTerminal()
             }}
             onCreated={() => setQuery('')} /* 评审 F4：过滤态创建的任务立即可见——清搜索词 */
+          />
+        )}
+        {/* 远程作用域 ＋ 注册（2.0.2 修复）：预选当前作用域连接，与服务器节点菜单同款对话框 */}
+        {remoteRegisterOpen && scopeConn !== undefined && (
+          <RemoteProjectDialog
+            presetConnectionId={scopeConn.id}
+            onClose={() => setRemoteRegisterOpen(false)}
           />
         )}
         {peek !== null && (

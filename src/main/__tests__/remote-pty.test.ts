@@ -4,6 +4,7 @@ import type { ConnectionStateChangedEvent, PtyDataEvent } from '../../shared/typ
 import type { PtyBackendCallbacks } from '../pty-backend'
 import {
   REMOTE_ENV_DENYLIST,
+  RemotePtyHub,
   RemotePtyManager,
   type RemotePtyManagerOptions
 } from '../remote-pty'
@@ -355,5 +356,63 @@ describe('S4 ServerClient 帧形状守卫 + needInstall token', () => {
     const err = needInstallError('connect ECONNREFUSED 127.0.0.1:17717')
     expect(err.message).toContain(NEED_SERVER_INSTALL_TOKEN)
     expect(/needinstall|cwb-server/i.test(err.message)).toBe(true)
+  })
+})
+
+describe('S4 hooks 转发口（2.0.2 稳定优先口——客户端重启后保活会话的旧 hook URL 复活）', () => {
+  function makeHub(mgr: ConnectionManager): RemotePtyHub {
+    return new RemotePtyHub({
+      connection: mgr,
+      callbacks: { onData: () => {}, onExit: () => {} },
+      onServerLog: () => {},
+      hookSink: async () => ({ host: '127.0.0.1', port: 1 })
+    })
+  }
+
+  it('默认首选稳定口 31280；同连接并发/重复取口只登记一次', async () => {
+    const conn = new FakeConnection()
+    const hub = makeHub(conn.asManager())
+    await expect(hub.hookPortFor('c1')).resolves.toBe(31_280)
+    await expect(hub.hookPortFor('c1')).resolves.toBe(31_280)
+    expect(conn.forwardInPorts).toEqual([31_280])
+    hub.disposeAll()
+  })
+
+  it('稳定口被 VM 占用 → 首连失败后回退随机区间（≠31280）；picker 注入时保持注入语义', async () => {
+    const attempts: number[] = []
+    const busy: ConnectionManager = {
+      connect: async () => {},
+      disconnect: async () => {},
+      getState: () => 'connected' as const,
+      exec: async () => ({ code: 0, stdout: '', stderr: '' }),
+      sftp: async () => {
+        throw new Error('not needed')
+      },
+      forwardOut: async () => 0,
+      forwardIn: async (_id: string, port: number) => {
+        attempts.push(port)
+        if (port === 31_280) throw new Error('port busy')
+      },
+      onStateChange: () => () => {},
+      onLog: () => () => {}
+    }
+    const hub = makeHub(busy)
+    const got = await hub.hookPortFor('c2')
+    expect(got).not.toBe(31_280)
+    expect(got).toBeGreaterThanOrEqual(20_000)
+    expect(got).toBeLessThan(45_000)
+    expect(attempts[0]).toBe(31_280) // 先试稳定口
+    hub.disposeAll()
+
+    const pickerConn = new FakeConnection()
+    const hub2 = new RemotePtyHub({
+      connection: pickerConn.asManager(),
+      callbacks: { onData: () => {}, onExit: () => {} },
+      onServerLog: () => {},
+      hookSink: async () => ({ host: '127.0.0.1', port: 1 }),
+      hookPortPicker: () => 34_567
+    })
+    await expect(hub2.hookPortFor('c3')).resolves.toBe(34_567)
+    hub2.disposeAll()
   })
 })

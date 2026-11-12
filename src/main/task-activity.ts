@@ -49,6 +49,12 @@ export interface TaskActivityOptions {
   settingsDir: string
   /** activity 变化外送（同值不播；ipc 侧接 broadcast cwb:event:task-activity） */
   onActivity?: (e: TaskActivityEvent) => void
+  /**
+   * 采纳的 hook 事件外送（2.0.2 任务排序根因修复：lastActiveAt 只在建/恢复/停止时
+   * 写——长跑任务持续在用却不刷新，项目树倒序键失真。ipc 侧据此节流 touch
+   * lastActiveAt，使「最近使用」真实反映用户交互；epoch 校验同 activity 口径）。
+   */
+  onHookEvent?: (taskId: string, event: string) => void
   /** 时间源（测试注入；缺省 Date.now） */
   now?: () => number
 }
@@ -301,6 +307,7 @@ export function startTaskActivityServer(opts: TaskActivityOptions): TaskActivity
       st.backgroundWork = nonEmptyArray(parsed?.['background_tasks']) || nonEmptyArray(parsed?.['session_crons'])
     }
     setActivity(st, taskId, target, 'hook')
+    opts.onHookEvent?.(taskId, event)
   }
 
   const tickTimer = setInterval(() => {

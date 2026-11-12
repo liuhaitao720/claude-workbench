@@ -177,6 +177,66 @@ export interface FilesBrowseResult {
   error?: string
 }
 
+// ── v2.0.2 git diff 审查（主区审查模式）──────────────────────────────
+
+/** 审查文件条目（DiffList）：状态字母与 git status --porcelain 同源 */
+export interface DiffFileEntry {
+  /** 仓库相对路径（重命名=新路径） */
+  path: string
+  /** M=修改 A=新增 D=删除 R=重命名 U=未跟踪 */
+  status: 'M' | 'A' | 'D' | 'R' | 'U'
+  /** 重命名时的原路径 */
+  oldPath?: string
+  /** +行数（未跟踪/二进制未知为 undefined） */
+  add?: number
+  /** −行数 */
+  del?: number
+}
+
+/** 单行 diff：type 决定着色；旧/新行号按行型各有一侧 */
+export interface DiffLine {
+  type: 'ctx' | 'add' | 'del'
+  oldNo?: number
+  newNo?: number
+  text: string
+}
+
+/** 修改点（hunk）：@@ 头 + 行序列 */
+export interface DiffHunk {
+  /** @@ -a,b +c,d @@ 上下文（含函数名截取） */
+  header: string
+  lines: DiffLine[]
+}
+
+/** 单文件 diff 详情（DiffFile） */
+export interface DiffFileDetail {
+  path: string
+  status: DiffFileEntry['status']
+  /** 二进制文件无 hunks（占位提示由 UI 展示） */
+  binary: boolean
+  /** 超 2MB/4000 行截断（提示由 UI 展示） */
+  truncated: boolean
+  hunks: DiffHunk[]
+}
+
+/** DiffList 结果：HEAD 基线的工作区改动清单 */
+export interface DiffListResult {
+  /** 'HEAD'（V1 固定；基线选择留作扩展） */
+  base: 'HEAD'
+  files: DiffFileEntry[]
+}
+
+/** 任务结束审查提示事件（main→renderer；每项目 10 分钟节流一次） */
+export interface ReviewHintEvent {
+  projectId: string
+  /** 审查目标目录（worktree 任务=worktree 路径，否则项目根） */
+  cwd: string
+  /** 改动文件数（含未跟踪） */
+  files: number
+  add?: number
+  del?: number
+}
+
 /** 应用更新说明条目【v1.1.0：main 解析仓库 CHANGELOG.md → 设置中心展示】 */
 export interface AppChangelogEntry {
   version: string
@@ -786,5 +846,15 @@ export interface CWBApi {
   getPathForFile(file: File): string | undefined
   /** v2.0.1 本机路径系统打开（目录=资源管理器定位；存在性 main 侧守门） */
   openLocalPath(target: string): Promise<{ ok: boolean; error?: string }>
+  // ── v2.0.2 git diff 审查 ──────────────────────────
+  /**
+   * 工作区改动清单（HEAD 基线）：cwd 缺省=项目根，worktree 任务传 worktree 路径；
+   * 远程项目经连接 exec 执行同一 git 命令。
+   */
+  listDiff(projectId: string, cwd?: string): Promise<DiffListResult>
+  /** 单文件 diff 详情（U3 统一 diff；binary/truncated 防御位；status 自清单透传） */
+  diffFile(projectId: string, cwd: string, path: string, status: DiffFileEntry['status']): Promise<DiffFileDetail>
+  /** 任务结束审查提示（每项目 10 分钟节流；files=0 不推） */
+  onReviewHint(cb: (e: ReviewHintEvent) => void): Unsubscribe
   reportSmoke(payload: string): void
 }

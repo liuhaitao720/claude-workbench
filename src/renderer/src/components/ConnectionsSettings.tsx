@@ -103,6 +103,8 @@ export function ConnectionsSection({
   })
   const [formError, setFormError] = useState('')
   const [savedMsg, setSavedMsg] = useState('')
+  /** 保存进行中（2.0.2：防连点双建——空 id 表单双击保存会经 IPC 各建一条档案） */
+  const [saving, setSaving] = useState(false)
   /** 测试连接结果（2.2：ok=通过；error=分级文案） */
   const [testResult, setTestResult] = useState<ConnTestResult | null>(null)
   const [testing, setTesting] = useState(false)
@@ -132,7 +134,7 @@ export function ConnectionsSection({
   }
 
   const save = async (): Promise<void> => {
-    if (form === null) return
+    if (form === null || saving) return
     const missing = validate()
     if (missing !== '') {
       setFormError(t('s6.fieldInvalid', { field: missing }))
@@ -155,7 +157,13 @@ export function ConnectionsSection({
       createdAt: editing?.createdAt ?? new Date().toISOString()
     }
     setFormError('')
-    const saved = await saveConnectionFlow(rec)
+    setSaving(true)
+    let saved: ConnectionRecord | null
+    try {
+      saved = await saveConnectionFlow(rec)
+    } finally {
+      setSaving(false)
+    }
     if (saved === null) {
       // 具体错误（「密码认证必须提供密码」等）透传展示——打包态用户无法开 DevTools
       // 看运行日志，「详见运行日志」等于没有信息
@@ -420,7 +428,7 @@ export function ConnectionsSection({
             <button
               type="button"
               className="btn primary"
-              disabled={form.name.trim() === '' || form.host.trim() === ''}
+              disabled={saving || form.name.trim() === '' || form.host.trim() === ''}
               onClick={() => void save()}
             >
               {t('common.save')}

@@ -5,11 +5,14 @@ import type {
   ConnectionRuntimeState,
   ConnectionStateChangedEvent,
   CreateTaskOptions,
+  DiffFileDetail,
+  DiffFileEntry,
   ProjectRecord,
   ProviderRegistryState,
   PtyDataEvent,
   RemoveTaskOptions,
   RemoteServerLogEvent,
+  ReviewHintEvent,
   TaskActivityEvent,
   TaskRecord
 } from '../../shared/types'
@@ -165,6 +168,25 @@ export function isTaskInputFrozen(taskId: string): boolean {
 }
 
 /**
+ * v2.0.2 审查视图状态（主区审查模式）：单槽——同一时刻只审查一个目标
+ * （projectId + cwd；worktree 任务传 worktree 路径）。文件清单/选中文件详情/
+ * 加载与错误位；hunk 导航游标归组件本地（切文件即重置）。
+ */
+export interface ReviewState {
+  projectId: string
+  /** 审查目标目录（worktree 或项目根；main 侧 DiffList/DiffFile 的 cwd 参数） */
+  cwd: string
+  files: DiffFileEntry[]
+  selectedPath: string | null
+  detail: DiffFileDetail | null
+  detailLoading: boolean
+  /** 清单加载中（打开/刷新） */
+  loading: boolean
+  /** 清单错误文案（空=无错） */
+  error: string
+}
+
+/**
  * S5 接线桩：远程项目注册。现契约 CWBApi.addProject(dir) 单参（本地注册语义）；
  * S5 将扩展可选 connectionId（契约变更走主控编译红流程）。桩期以宽签名调用——
  * mock（test-helpers）与 S5 落地后的 preload 均按 (dir, connectionId) 生效，
@@ -200,6 +222,9 @@ const SERVER_LOG_CAP = 100
 
 /** sidebarWidth 落盘去抖计时器（模块级——拖拽高频写只留最后一拍） */
 let sidebarWidthPersistTimer: number | null = null
+
+/** v2.0.2 审查流竞态序号（open/select/refresh/close 各自 ++；迟到响应按序号丢弃） */
+let reviewSeq = 0
 
 // ── app store ──────────────────────────────────────────────────────────
 
@@ -276,6 +301,26 @@ interface AppState {
   filesTargetConn: string | null
   /** server 安装/升级确认弹窗目标（connectFlow 的 needInstall 信号触发，6.7=A） */
   pendingServerInstall: { connectionId: string } | null
+
+  // ── v2.0.2 git diff 审查（主区审查模式）─────────────────────────────
+  /** 审查视图（null=未开；TabBar 虚拟「审查」tab 的数据源） */
+  reviewState: ReviewState | null
+  /** 审查视图是否处于前台（false=终端可见；tab 切换经 setActive 隐式落 false） */
+  reviewActive: boolean
+  /** 任务结束审查提示（main ReviewHint 推送；toast 消费，点开或超时清除） */
+  reviewHint: ReviewHintEvent | null
+  /** 打开/激活审查（同目标幂等激活；异目标重拉清单）。cwd 缺省=项目根 */
+  openReview: (projectId: string, cwd?: string) => Promise<void>
+  /** 关闭审查（虚拟 tab 移除；下次打开重新拉快照） */
+  closeReview: () => void
+  /** 激活审查视图（虚拟 tab 点击 / Ctrl+Shift+D） */
+  activateReview: () => void
+  /** 选中审查文件（拉取单文件 diff 详情；竞态经序号守卫） */
+  selectReviewFile: (path: string) => Promise<void>
+  /** 刷新清单（保留仍在清单内的选中文件并重拉详情） */
+  refreshReview: () => Promise<void>
+  /** 关闭审查提示 toast */
+  dismissReviewHint: () => void
   /**
    * TOFU 首连待确认（connectFlow 的 hostKeyConfirm 信号触发——main 侧 ConnectionsConnect
    * 以 [cwb:host-key-confirm] token 前缀标记；设置页「测试连接」路径已有同等确认 UI，
@@ -496,6 +541,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
       delete connectionStates[id]
       const nodesCollapsed = { ...(s.uiSettings.serverNodesCollapsed ?? {}) }
       delete nodesCollapsed[id]
+      // v2.0.2：审查目标项目随级联消失 → 审查视图一并关闭
+      const reviewGone = s.reviewState !== null && !ids.has(s.reviewState.projectId)
       return {
         projects,
         tasks,
@@ -503,6 +550,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         activityMap,
         connectionStates,
         uiSettings: { ...s.uiSettings, serverNodesCollapsed: nodesCollapsed },
+        ...(reviewGone ? { reviewState: null, reviewActive: false } : {}),
         selectedProjectId:
           s.selectedProjectId !== null && ids.has(s.selectedProjectId)
             ? s.selectedProjectId
@@ -585,6 +633,117 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }))
     return { ok: true, project }
   },
+
+  // ── v2.0.2 git diff 审查（主区审查模式）─────────────────────────────
+  openReview: async (projectId, cwd) => {
+    const project = get().projects.find((p) => p.id === projectId)
+    if (project === undefined) return
+    const target = typeof cwd === 'string' && cwd.trim() !== '' ? cwd.trim() : project.dir
+    const cur = get().reviewState
+    // 同目标幂等激活（不清状态——滚动位置/选中文件在组件里原样）
+    if (cur !== null && cur.projectId === projectId && cur.cwd === target) {
+      set({ reviewActive: true })
+      return
+    }
+    const seq = ++reviewSeq
+    set({
+      reviewActive: true,
+      reviewState: {
+        projectId,
+        cwd: target,
+        files: [],
+        selectedPath: null,
+        detail: null,
+        detailLoading: false,
+        loading: true,
+        error: ''
+      }
+    })
+    try {
+      const r = await window.cwb.listDiff(projectId, target)
+      if (seq !== reviewSeq) return // 竞态：期间已切换目标/关闭
+      set({ reviewState: { ...get().reviewState!, files: r.files, loading: false, error: '' } })
+    } catch (err) {
+      if (seq !== reviewSeq) return
+      set({
+        reviewState: {
+          ...get().reviewState!,
+          loading: false,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      })
+    }
+  },
+
+  closeReview: () => {
+    reviewSeq++
+    set({ reviewState: null, reviewActive: false })
+  },
+
+  activateReview: () => {
+    if (get().reviewState !== null) set({ reviewActive: true })
+  },
+
+  selectReviewFile: async (path) => {
+    const cur = get().reviewState
+    if (cur === null) return
+    const entry = cur.files.find((f) => f.path === path)
+    if (entry === undefined || entry.status === 'U') {
+      // 未跟踪文件无 HEAD diff——列表可选中但不拉详情
+      set({ reviewState: { ...cur, selectedPath: path, detail: null, detailLoading: false } })
+      return
+    }
+    const seq = ++reviewSeq
+    set({ reviewState: { ...cur, selectedPath: path, detail: null, detailLoading: true } })
+    try {
+      const detail = await window.cwb.diffFile(cur.projectId, cur.cwd, path, entry.status)
+      if (seq !== reviewSeq) return
+      set({ reviewState: { ...get().reviewState!, detail, detailLoading: false } })
+    } catch (err) {
+      if (seq !== reviewSeq) return
+      set({
+        reviewState: {
+          ...get().reviewState!,
+          detail: { path, status: entry.status, binary: false, truncated: false, hunks: [] },
+          detailLoading: false,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      })
+    }
+  },
+
+  refreshReview: async () => {
+    const cur = get().reviewState
+    if (cur === null) return
+    const seq = ++reviewSeq
+    set({ reviewState: { ...cur, loading: true, error: '' } })
+    try {
+      const r = await window.cwb.listDiff(cur.projectId, cur.cwd)
+      if (seq !== reviewSeq) return
+      const stillThere = cur.selectedPath !== null && r.files.some((f) => f.path === cur.selectedPath)
+      set({
+        reviewState: {
+          ...get().reviewState!,
+          files: r.files,
+          loading: false,
+          error: '',
+          ...(stillThere ? {} : { selectedPath: null, detail: null, detailLoading: false })
+        }
+      })
+      if (stillThere && cur.selectedPath !== null) await get().selectReviewFile(cur.selectedPath)
+    } catch (err) {
+      if (seq !== reviewSeq) return
+      set({
+        reviewState: {
+          ...get().reviewState!,
+          loading: false,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      })
+    }
+  },
+
+  dismissReviewHint: () => set({ reviewHint: null }),
 
   applyConnectionState: (e) => {
     const prev = get().connectionStates[e.connectionId]
@@ -699,6 +858,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const openTaskIds = s.openTaskIds.filter((tid) => tasks.some((t) => t.id === tid))
       const activityMap = { ...s.activityMap }
       for (const t of s.tasks) if (t.projectId === id) delete activityMap[t.id]
+      // v2.0.2：审查目标项目被删 → 审查视图一并关闭
+      const reviewGone = s.reviewState?.projectId === id
       return {
         projects,
         tasks,
@@ -708,7 +869,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         activeTaskId:
           s.activeTaskId && openTaskIds.includes(s.activeTaskId)
             ? s.activeTaskId
-            : (openTaskIds[openTaskIds.length - 1] ?? null)
+            : (openTaskIds[openTaskIds.length - 1] ?? null),
+        ...(reviewGone ? { reviewState: null, reviewActive: false } : {})
       }
     })
   },
@@ -733,7 +895,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set((s) => ({
       tasks: upsertTask(s.tasks, task),
       openTaskIds: s.openTaskIds.includes(task.id) ? s.openTaskIds : [...s.openTaskIds, task.id],
-      activeTaskId: task.id
+      activeTaskId: task.id,
+      reviewActive: false // v2.0.2：新建任务即切到终端
     }))
   },
 
@@ -816,6 +979,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   settingsOpenSection: 'general',
   settingsScope: 'local',
   settingsEditConnectionId: null,
+  reviewState: null,
+  reviewActive: false,
+  reviewHint: null,
 
   reloadProviders: async () => {
     try {
@@ -828,7 +994,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   openTask: (taskId) =>
     set((s) => ({
       openTaskIds: s.openTaskIds.includes(taskId) ? s.openTaskIds : [...s.openTaskIds, taskId],
-      activeTaskId: taskId
+      activeTaskId: taskId,
+      // v2.0.2：开/切任务 tab = 用户回终端——审查视图退后台（不销毁，虚拟 tab 留存）
+      reviewActive: false
     })),
 
   openTaskAutoResume: (taskId) => {
@@ -853,7 +1021,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   closeTab: (taskId) => closeTabIn(set, taskId),
 
-  setActive: (taskId) => set({ activeTaskId: taskId }),
+  setActive: (taskId) =>
+    set({ activeTaskId: taskId, reviewActive: false }),
 
   applyTaskUpdate: (t) => set((s) => ({ tasks: upsertTask(s.tasks, t) })),
 
@@ -931,11 +1100,16 @@ export function initListeners(): () => void {
   const offServerLog = window.cwb.onRemoteServerLog((e) => {
     useAppStore.getState().appendServerLog(e)
   })
+  // v2.0.2 任务结束审查提示（toast 由 ReviewHintToast 组件消费；超时/点击自清）
+  const offReviewHint = window.cwb.onReviewHint?.((e) => {
+    useAppStore.setState({ reviewHint: e })
+  })
   return () => {
     offPty()
     offTask()
     offActivity()
     offConnState()
     offServerLog()
+    offReviewHint?.()
   }
 }

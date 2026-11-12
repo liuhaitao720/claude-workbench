@@ -20,6 +20,12 @@ export function TabBar() {
   const setActive = useAppStore((s) => s.setActive)
   const closeTab = useAppStore((s) => s.closeTab)
   const stopTaskFlow = useAppStore((s) => s.stopTaskFlow)
+  // v2.0.2 审查虚拟 tab（单槽：开着才出现；点击=激活审查，×=关闭）
+  const reviewState = useAppStore((s) => s.reviewState)
+  const reviewActive = useAppStore((s) => s.reviewActive)
+  const activateReview = useAppStore((s) => s.activateReview)
+  const closeReview = useAppStore((s) => s.closeReview)
+  const projects = useAppStore((s) => s.projects)
   const listRef = useRef<HTMLDivElement>(null)
 
   /**
@@ -63,10 +69,10 @@ export function TabBar() {
         <div
           key={t.id}
           role="tab"
-          aria-selected={t.id === activeTaskId}
-          className={t.id === activeTaskId ? 'tab active' : 'tab'}
+          aria-selected={t.id === activeTaskId && !reviewActive}
+          className={t.id === activeTaskId && !reviewActive ? 'tab active' : 'tab'}
           data-task-id={t.id}
-          tabIndex={t.id === activeTaskId || (activeIdx === -1 && i === 0) ? 0 : -1}
+          tabIndex={!reviewActive && (t.id === activeTaskId || (activeIdx === -1 && i === 0)) ? 0 : -1}
           onClick={() => setActive(t.id)}
           onKeyDown={(e) => onTabKeyDown(e, i)}
         >
@@ -85,6 +91,41 @@ export function TabBar() {
           </button>
         </div>
       ))}
+      {/* v2.0.2 审查虚拟 tab：diff 图标(菱形◆) + 项目名 + 改动数角标；
+          与任务 tab 同排，roving tabindex 链尾——键盘 ←→ 可达 */}
+      {reviewState !== null && (
+        <div
+          role="tab"
+          aria-selected={reviewActive}
+          className={reviewActive ? 'tab review-tab active' : 'tab review-tab'}
+          data-testid="review-tab"
+          tabIndex={reviewActive || openTasks.length === 0 ? 0 : -1}
+          onClick={() => activateReview()}
+          onKeyDown={(e) => onTabKeyDown(e, openTasks.length)}
+          title={reviewState.cwd}
+        >
+          <span className="review-tab-icon" aria-hidden="true">
+            ◆
+          </span>
+          <span className="tab-name">
+            {tr('review.tabLabel', { name: projects.find((p) => p.id === reviewState.projectId)?.name ?? '' })}
+          </span>
+          <span className="review-tab-count" aria-label={tr('review.tabCountAria', { count: reviewState.files.length })}>
+            {reviewState.files.length}
+          </span>
+          <button
+            type="button"
+            className="tab-close"
+            title={tr('review.close')}
+            onClick={(e) => {
+              e.stopPropagation()
+              closeReview()
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
     </div>
   )
 }

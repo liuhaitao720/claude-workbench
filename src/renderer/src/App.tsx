@@ -8,6 +8,7 @@ import { SettingsDialog } from './components/SettingsDialog'
 import { ServerInstallDialog } from './components/ServerInstallDialog'
 import { ConnectErrorToast, HostKeyConfirmDialog } from './components/HostKeyConfirmDialog'
 import { RemoteFilesPanel } from './components/RemoteFilesPanel'
+import { ReviewHintToast } from './components/DiffReview'
 import { useI18n, syncLanguageToMain } from './i18n'
 
 /** ?smoke=1：--smoke 冒烟模式下 main 注入的 URL query（模块加载时解析一次，运行期不变） */
@@ -46,6 +47,39 @@ export function App() {
         useAppStore.getState().setAppUpdateInfo(info)
       })
       .catch(() => {})
+  }, [])
+
+  // v2.0.2 审查开关快捷键：Ctrl+Shift+D（未开=打开选中/git 项目审查 / 已开未活跃=
+  // 激活 / 活跃=回上一个任务终端）。焦点在输入框/终端宿主时不劫持（对齐 Ctrl+N/F/B 先例）。
+  useEffect(() => {
+    const isTypingTarget = (e: KeyboardEvent): boolean => {
+      const el = e.target
+      if (!(el instanceof HTMLElement)) return false
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) return true
+      return el.closest('.term-host') !== null
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return
+      if (e.key.toLowerCase() !== 'd') return
+      if (isTypingTarget(e)) return
+      const s = useAppStore.getState()
+      if (s.reviewState === null) {
+        const pid = s.selectedProjectId ?? s.projects.find((p) => p.isGit)?.id ?? null
+        if (pid !== null) {
+          e.preventDefault()
+          void s.openReview(pid)
+        }
+        return
+      }
+      e.preventDefault()
+      if (s.reviewActive) {
+        // 回终端：有任务切 active（setActive 落 reviewActive=false）；无任务直接收起
+        if (s.activeTaskId !== null) s.setActive(s.activeTaskId)
+        else useAppStore.setState({ reviewActive: false })
+      } else s.activateReview()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [])
 
   const projects = useAppStore((s) => s.projects)
@@ -130,6 +164,8 @@ export function App() {
       <HostKeyConfirmDialog />
       {/* 连接失败具体文案浮出（此前仅 console.error——用户侧「点了没反应」） */}
       <ConnectErrorToast />
+      {/* v2.0.2 任务结束审查提示（main ReviewHint 推送；10s 自动收起） */}
+      <ReviewHintToast />
     </div>
   )
 }

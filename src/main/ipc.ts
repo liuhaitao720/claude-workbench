@@ -9,6 +9,7 @@ import type {
   CliOutputEvent,
   ConnectionStateChangedEvent,
   CreateTaskOptions,
+  DiffFileEntry,
   NotifyConfig,
   ProjectRecord,
   ProviderConfig,
@@ -22,6 +23,7 @@ import type {
   TaskActivityEvent,
   TaskRecord
 } from '../shared/types'
+import { getDiffFile, getDiffList, localGitRunner, remoteGitRunner } from './git-diff'
 import { checkClaudeUpdate, fetchClaudeChangelog, getClaudeVersionInfo, installClaudeCli } from './claude-version'
 import { AppUpdater } from './app-updater'
 import {
@@ -444,6 +446,47 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     if (!task || task.status !== 'running') return
     const updated = tasks.upsert({ ...task, status, lastActiveAt: new Date().toISOString() })
     broadcastTaskUpdate(updated)
+    // v2.0.2 任务结束审查提示（AI 开发完成 → toast [审查]）；尽力而为失败静默
+    maybeReviewHint(task)
+  }
+
+  /** 审查提示节流钟（projectId → 上次推送时刻；10 分钟/项目一次，改动数为零不推不占额度） */
+  const reviewHintLastAt = new Map<string, number>()
+  const maybeReviewHint = (task: TaskRecord): void => {
+    void (async () => {
+      try {
+        const project = projects.get(task.projectId)
+        if (!project || !project.isGit) return
+        const now = Date.now()
+        if (now - (reviewHintLastAt.get(project.id) ?? 0) < 10 * 60_000) return
+        const cwd = task.worktreePath ?? task.cwd
+        const runner =
+          project.connectionId !== undefined
+            ? remoteGitRunner(cwd, (cmd) => connection.exec(project.connectionId!, cmd))
+            : localGitRunner(cwd)
+        const list = await getDiffList(runner)
+        if (list.files.length === 0) return
+        reviewHintLastAt.set(project.id, now)
+        let add = 0
+        let del = 0
+        let anyCount = false
+        for (const f of list.files) {
+          if (f.add !== undefined) {
+            add += f.add
+            anyCount = true
+          }
+          if (f.del !== undefined) del += f.del
+        }
+        broadcast(IpcChannels.ReviewHint, {
+          projectId: project.id,
+          cwd,
+          files: list.files.length,
+          ...(anyCount ? { add, del } : {})
+        })
+      } catch {
+        // git 不可用/远端未连——入口仍在项目菜单，提示静默失败可接受
+      }
+    })()
   }
 
   /**
@@ -530,6 +573,8 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   })
   // v1.2.1：任务停下即重试自动安装（轮询是兜底——正常情况下最后一次 stop 就续上升级）
   onTaskUpdateHook = () => appUpdate.tryAutoInstall()
+  /** 2.0.2 lastActiveAt 节流 touch 的每任务时间戳（见 onHookEvent 注释） */
+  const lastActiveTouchAt = new Map<string, number>()
   const activity = startTaskActivityServer({
     settingsDir,
     onActivity: (e) => {
@@ -538,6 +583,19 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       // 它只承载 stopped/exited 终态；推送内部吞错不阻塞状态机）。
       // v1.7.0：routeNotifyActivity 按任务归属分流本地/远程（VM ~/.cwb/notify.json）配置
       routeNotifyActivity(e)
+    },
+    // 2.0.2 任务排序根因修复：lastActiveAt 原先只在建/恢复/停止时写，长跑任务持续
+    // 在用却不刷新 → 项目树「按最近活跃倒序」的键失真（新任务压过昨恢复但在用的
+    // 老任务）。用户真实交互信号（提交提示/轮次完成等 hook）到达时节流 touch——
+    // 30s 粒度足够排序且不放大 tasks.json 写盘。
+    onHookEvent: (taskId) => {
+      const task = tasks.get(taskId)
+      if (!task || task.status !== 'running') return
+      const now = Date.now()
+      const last = lastActiveTouchAt.get(taskId) ?? 0
+      if (now - last < 30_000) return
+      lastActiveTouchAt.set(taskId, now)
+      broadcastTaskUpdate(tasks.upsert({ ...task, lastActiveAt: new Date().toISOString() }))
     }
   })
   // R8 启动孤儿清扫：settings 目录下不在 tasks.json 的文件删除（崩溃残留/spawn 失败遗留）
@@ -1438,6 +1496,37 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     if (typeof id !== 'string') return
     for (const m of fileManagers.values()) m.retry(id)
   })
+
+  // ── v2.0.2 git diff 审查（主区审查模式）────────────────────────────
+  // cwd 缺省=项目根；worktree 任务传 worktree 路径（改动在 worktree 工作区）。
+  // 远程项目经 connection.exec 执行同一 git 命令（runner 注入，命令面同本地）。
+  const diffRunnerFor = (projectId: string, cwd: string | undefined) => {
+    const project = projects.get(projectId)
+    if (!project) throw new Error(translate(mainLanguage(), 'conn.proj.dirMissing', { dir: projectId }))
+    const dir = typeof cwd === 'string' && cwd.trim() !== '' ? cwd.trim() : project.dir
+    if (project.connectionId !== undefined) {
+      return {
+        dir,
+        runner: remoteGitRunner(dir, (cmd) => ctx.connection.exec(project.connectionId!, cmd))
+      }
+    }
+    return { dir, runner: localGitRunner(dir) }
+  }
+  ipcMain.handle(IpcChannels.DiffList, (_e, projectId: string, cwd?: string) => {
+    const { runner } = diffRunnerFor(projectId, cwd)
+    return getDiffList(runner)
+  })
+  ipcMain.handle(
+    IpcChannels.DiffFile,
+    (_e, projectId: string, cwd: string, path: string, status: DiffFileEntry['status'] = 'M') => {
+      if (typeof cwd !== 'string' || typeof path !== 'string' || path === '') {
+        throw new Error('diff: invalid args')
+      }
+      const { runner } = diffRunnerFor(projectId, cwd)
+      // 状态字母由 renderer 清单带过（详情透传展示；未跟踪文件 UI 层不请求详情）
+      return getDiffFile(runner, path, status)
+    }
+  )
 
   // v0.9 S13 会话导入（addProject 已自动调用；此为项目菜单手动触发/重扫入口）
   ipcMain.handle(IpcChannels.TasksImportFromSessions, (_e, projectId: string) =>

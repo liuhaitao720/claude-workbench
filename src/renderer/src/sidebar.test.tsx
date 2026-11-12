@@ -371,7 +371,7 @@ describe('设置入口（v1.2.2：Skills / 设置两个 SVG 图标按钮）', ()
   it('展开态：版本号后只剩设置图标按钮（v2.0.1 skills 移除）；点 ⚙ 开设置弹窗', async () => {
     await renderApp([pg], [runner])
     const header = document.querySelector('.sidebar-header') as HTMLElement
-    expect(header.querySelector('.version-text')?.textContent).toContain('v2.0.1')
+    expect(header.querySelector('.version-text')?.textContent).toContain('v2.0.2')
     // 图标组紧跟版本号（DOM 顺序即视觉顺序）；data-icon=svg 图形锚点
     const group = header.querySelector('.sidebar-icon-group') as HTMLElement
     expect(group).not.toBeNull()
@@ -449,6 +449,21 @@ describe('v2.0.1 侧栏作用域过滤（用户确认原型 sidebar-scope-v2）'
     expect(screen.queryByTestId('btn-register-remote')).toBeNull()
     await waitFor(() =>
       expect(useAppStore.getState().sidebarScope).toBe('local')
+    )
+  })
+
+  it('远程作用域 ＋ → 打开注册对话框（2.0.2 修复：此前空路径直调注册被 main 拒，表象「点了没反应」）', async () => {
+    await renderScoped()
+    fireEvent.click(screen.getByTestId('sb-chip-c1'))
+    await waitFor(() => expect(screen.getByTestId('btn-register-remote')).toBeDefined())
+    fireEvent.click(screen.getByTestId('btn-register-remote'))
+    // 与服务器节点菜单同款：RemoteProjectDialog（预选当前作用域连接，收路径再注册）
+    const dialog = await screen.findByRole('dialog', { name: '新建远程项目…' })
+    expect(dialog.textContent).toContain('VM-Dev')
+    // 取消关闭；期间不发生 addProject 调用（空路径注册是 2.0.2 前的坏路径）
+    fireEvent.click(within(dialog).getByText('取消'))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '新建远程项目…' })).toBeNull()
     )
   })
 

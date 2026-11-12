@@ -53,6 +53,10 @@ export function connectionMessage(lang: Language, key: ConnectionMsgKey): string
       en: 'Local secure storage unavailable; cannot encrypt the password (never stored in plain text)'
     },
     notFound: { zh: '连接档案不存在', en: 'Connection profile not found' },
+    duplicate: {
+      zh: '已存在相同 user@host:port 的连接档案（同一目标只须一条，请直接编辑）',
+      en: 'A profile for the same user@host:port already exists (one per target; edit it instead)'
+    },
     keyUnreadable: { zh: '私钥文件不可读', en: 'Private key file unreadable' },
     credentialCorrupt: {
       zh: '凭据解密失败（系统密钥串变更或文件损坏），请重新输入密码',
@@ -66,7 +70,7 @@ export function connectionMessage(lang: Language, key: ConnectionMsgKey): string
 export type ConnectionMsgKey =
   | 'shape' | 'name' | 'host' | 'port' | 'user' | 'authMethod'
   | 'keyPath' | 'passwordRequired' | 'encryptionUnavailable' | 'notFound'
-  | 'keyUnreadable' | 'credentialCorrupt' | 'passwordEmpty'
+  | 'keyUnreadable' | 'credentialCorrupt' | 'passwordEmpty' | 'duplicate'
 
 /** 解析后的保存入参：档案 + 明文 password（undefined=保持既有密文；''=清除） */
 export interface ParsedConnectionInput {
@@ -167,9 +171,22 @@ export class ConnectionsStore {
    * passwordEncrypted 合并语义（plainPassword 形参）：
    * - undefined 且认证方式未变 → 保留既有密文（编辑流不重输密码）；
    * - '' → 清除；非空 string → safeStorage 加密后覆盖。
+   *
+   * 新增去重（2.0.2 用户实测：只配 1 个远程却出现 2 条同目标记录——新建表单连点
+   * 两次保存即产生两条空 id 档案）：新增路径（id 未命中既有档案）若已存在相同
+   * (user, host, port) 的档案则拒绝并报既有档案名；编辑既有档案不受影响。
+   * 唯一键取 (user, host, port)——同一服务器不同用户名的多条档案仍合法。
    */
   save(record: ConnectionRecord, plainPassword?: string): ConnectionRecord {
     const existing = record.id === '' ? undefined : this.get(record.id)
+    if (existing === undefined) {
+      const dup = this.load().find(
+        (c) => c.host === record.host && c.port === record.port && c.user === record.user
+      )
+      if (dup !== undefined) {
+        throw new Error(`${connectionMessage('zh', 'duplicate')}：「${dup.name}」`)
+      }
+    }
     const id = existing?.id ?? (record.id === '' ? randomUUID() : record.id)
 
     let passwordEncrypted: string | undefined
