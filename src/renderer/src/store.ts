@@ -272,6 +272,8 @@ interface AppState {
   uiSettings: SidebarPrefs
   /** v2.0.1 侧栏作用域（'all' | 'local' | 连接 id——消费点经 normalizeSidebarScope 归一） */
   sidebarScope: SidebarScope
+  /** v2.0.1 文件面板目标连接（openFilesPanel 显式指定；null=回落首个已连接） */
+  filesTargetConn: string | null
   /** server 安装/升级确认弹窗目标（connectFlow 的 needInstall 信号触发，6.7=A） */
   pendingServerInstall: { connectionId: string } | null
   /**
@@ -324,6 +326,8 @@ interface AppState {
   setSidebarCollapsed: (collapsed: boolean) => void
   /** v2.0.1 侧栏作用域切换（持久化 appSettings.sidebarScope） */
   setSidebarScope: (scope: SidebarScope) => void
+  /** v2.0.1 文件面板显式打开（绑目标连接；dir=直接定位远程目录——远程项目菜单入口） */
+  openFilesPanel: (connectionId: string, dir?: string) => void
   toggleServerNodeCollapsed: (connectionId: string) => void
   /** 关闭 server 安装确认弹窗（取消路径） */
   dismissServerInstall: () => void
@@ -633,6 +637,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
     void window.cwb.setAppSettings({ sidebarScope: scope }).catch(() => {})
   },
 
+  openFilesPanel: (connectionId, dir) => {
+    const patch: Partial<AppState> = { filesTargetConn: connectionId }
+    if (dir !== undefined && dir !== '') {
+      const cur = useAppStore.getState().uiSettings.filesPanelPath ?? {}
+      const next = { ...cur, [connectionId]: dir }
+      patch.uiSettings = { ...useAppStore.getState().uiSettings, filesPanelPath: next }
+      void window.cwb.setAppSettings({ filesPanelPath: next }).catch(() => {})
+    }
+    set(patch)
+  },
+
   setSidebarCollapsed: (collapsed) => {
     set((s) => ({ uiSettings: { ...s.uiSettings, sidebarCollapsedPersist: collapsed } }))
     window.cwb.setAppSettings({ sidebarCollapsedPersist: collapsed }).catch(() => {})
@@ -793,6 +808,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   uiSettings: {},
   /** v2.0.1 侧栏作用域（loadSidebarPrefs 从 appSettings 恢复；连接失效回退在消费点归一） */
   sidebarScope: 'all' as SidebarScope,
+  filesTargetConn: null,
   pendingServerInstall: null,
   pendingHostKeyConfirm: null,
   connectionSaveError: '',

@@ -383,6 +383,16 @@ function ProjectNode({
 
   const menuItems: MenuItemDef[] = [
     { label: t('tree.newTask'), onClick: () => onNewTask(project.id) },
+    ...(project.connectionId !== undefined
+      ? [
+          {
+            // v2.0.1（用户指令）：远程项目定位到其工作目录打开文件面板
+            label: t('tree.openInFiles'),
+            onClick: () =>
+              useAppStore.getState().openFilesPanel(project.connectionId!, project.dir)
+          }
+        ]
+      : []),
     { label: t('tree.rename'), onClick: () => setRenaming(true) },
     {
       label: t('tree.remove'),

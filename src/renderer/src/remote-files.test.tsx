@@ -53,6 +53,7 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
       connectionStates: { c1: { state: 'connected' } },
       serverLogs: [],
       uiSettings: {},
+      filesTargetConn: null,
       pendingServerInstall: null,
       settingsScope: 'local'
     })
@@ -210,6 +211,39 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
     expect(api.downloadRemoteFile).not.toHaveBeenCalled()
     fireEvent.doubleClick(panel.querySelector('[data-file-name="huge.bin"]') as HTMLElement)
     await waitFor(() => expect(api.downloadRemoteFile).toHaveBeenCalledWith('c1', '/home/dev/huge.bin', 'huge.bin'))
+  })
+
+  it('mtime 列渲染 + 选中项状态条（全量名/尺寸/完整时间）', async () => {
+    const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
+    const mtime = Date.parse('2026-11-12T09:30:00')
+    vi.mocked(api.listRemoteFiles).mockResolvedValue({
+      ok: true,
+      path: '/home/dev',
+      entries: [{ name: 'deploy.md', isDir: false, size: 219136, mtimeMs: mtime }]
+    })
+    render(<App />)
+    const panel = await openPanel(api)
+    const row = panel.querySelector('[data-file-name="deploy.md"]') as HTMLElement
+    expect(row.querySelector('.files-mtime')?.textContent).toMatch(/11-12|09:30/)
+    fireEvent.click(row)
+    const bar = await screen.findByTestId('files-statusbar')
+    expect(bar.textContent).toContain('deploy.md')
+    expect(bar.textContent).toContain('214.0 KB')
+    expect(bar.textContent).toMatch(/2026/)
+  })
+
+  it('远程项目菜单「在文件面板中打开」→ 面板自动开 + 定位项目工作目录（filesPanelPath 持久化）', async () => {
+    const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
+    vi.mocked(api.listRemoteFiles).mockResolvedValue({ ok: true, path: '/home/dev/r', entries: [] })
+    render(<App />)
+    await waitFor(() => expect(document.querySelector('li[data-project-id="pr"]')).toBeDefined())
+    fireEvent.click(within(document.querySelector('li[data-project-id="pr"]') as HTMLElement).getByRole('button', { name: '项目操作' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: '在文件面板中打开' }))
+    await waitFor(() => expect(screen.getByTestId('files-panel')).toBeDefined())
+    await waitFor(() => expect(useAppStore.getState().filesTargetConn).toBe('c1'))
+    await waitFor(() =>
+      expect(useAppStore.getState().uiSettings.filesPanelPath?.['c1']).toBe('/home/dev/r')
+    )
   })
 
   it('面板目录记忆：uiSettings.filesPanelPath 持久化（setAppSettings 携带路径表）', async () => {

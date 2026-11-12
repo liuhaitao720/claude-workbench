@@ -371,6 +371,7 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
             <span className="files-size" title={f.isDir ? undefined : `${f.size} B`}>
               {f.isDir ? '—' : fmtSize(f.size)}
             </span>
+            <span className="files-mtime">{f.mtimeMs > 0 ? fmtTime(f.mtimeMs) : ''}</span>
             <span className="files-acts">
               {!f.isDir && (
                 <button type="button" className="btn small" title={t('files.download')} onClick={() => download(f)}>
@@ -435,6 +436,20 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
           </div>
         </div>
       )}
+      {/* v2.0.1（用户实测）：选中项全量信息条——完整时间在列宽不足时的承载位 */}
+      {(() => {
+        const sel = st.entries.find((f) => selected.has(f.name))
+        if (sel === undefined) return null
+        return (
+          <p className="files-statusbar" data-testid="files-statusbar">
+            <span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {sel.name}
+            </span>
+            <span>{sel.isDir ? t('files.dirLabel') : fmtSize(sel.size)}</span>
+            <span>{sel.mtimeMs > 0 ? new Date(sel.mtimeMs).toLocaleString() : ''}</span>
+          </p>
+        )
+      })()}
       <TransferBar connName={connName} />
     </div>
   )

@@ -57,7 +57,18 @@ export function App() {
   const connectionStates = useAppStore((s) => s.connectionStates)
   const connectedConn =
     connectionsForFiles.find((c) => connectionStates[c.id]?.state === 'connected')?.id ?? null
-  const filesConnId = filesOpen && connectedConn !== null ? connectedConn : null
+  // v2.0.1：显式目标（远程项目「在文件面板中打开」）优先；目标未连接回落 null
+  const filesTargetConn = useAppStore((s) => s.filesTargetConn)
+  // 显式指定目标（含目录）即自动开面板（store 动作由项目菜单触发）
+  useEffect(() => {
+    if (filesTargetConn !== null) setFilesOpen(true)
+  }, [filesTargetConn])
+  const filesConnId =
+    filesOpen && filesTargetConn !== null && connectionStates[filesTargetConn]?.state === 'connected'
+      ? filesTargetConn
+      : filesOpen && connectedConn !== null
+        ? connectedConn
+        : null
   // S6（6.7=A）：连接流程触发 needInstall 时的 server 安装/升级确认弹窗
   const pendingServerInstall = useAppStore((s) => s.pendingServerInstall)
 
