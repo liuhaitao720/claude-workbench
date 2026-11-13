@@ -23,10 +23,12 @@ import { SidebarMenu } from './SidebarMenu'
  * v2.1.0 SSH 纯终端（不启 claude CLI）：TabBar 虚拟「SSH」tab 的前台视图。
  * 上下分栏——上=裸 shell（xterm，ssh2 shell 通道），下=复用 RemoteFilesPanel。
  *
- * - 实例缓存 `sshTermCache`（键=cid）：后台切换留存复挂；会话随台关/换连接
- *   即弃（dispose，见下 cleanup）；会话死=连接断/远端 exit——冻结层给重开按钮。
+ * - **v2.1.5 每连接一台**（用户需求：切换不同 SSH 连接=不同窗口）：每个开过的
+ *   连接各有一块常驻终端（`SshTermPane`，visibility:hidden 保持布局），切回即
+ *   原样恢复（会话与回滚都在，shell 不被关掉）；关台（TabBar ×）/删连接才 dispose。
+ * - 会话死=连接断/远端 exit——该台冻结层给「重开」按钮（死态按连接记）。
  * - 分栏比例按连接记忆（uiSettings.sshSplit[cid]，clamp 0.2–0.75）；分隔条
- *   拖拽/双击复位 0.5/键盘 ↑↓ 40px 步进（WCAG 2.2 dragging-alternative）。
+ *   拖拽/双击复位 0.5/键盘 ↑↓ 步进（WCAG 2.2 dragging-alternative）。
  * - Esc/Ctrl+D 等全部直通 shell——UI 不拦截任何终端按键（与审查视图不同）。
  */
 const sshTermCache = new Map<string, Terminal>()
@@ -41,14 +43,16 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
   const t = useI18n()
   const connections = useAppStore((s) => s.connections)
   const connEntry = useAppStore((s) => s.connectionStates[connectionId])
-  const sessionDead = useAppStore((s) => s.sshSessionDead)
+  const sessionDead = useAppStore(
+    (s) => s.sshDeadCids.includes(connectionId) || s.sshSessionDead
+  )
   const openSshConsole = useAppStore((s) => s.openSshConsole)
   const connectFlow = useAppStore((s) => s.connectFlow)
   const uiSplit = useAppStore((s) => s.uiSettings.sshSplit?.[connectionId])
   const sshFollowEnabled = useAppStore((s) => s.sshFollowEnabled)
   const setSshFollowEnabled = useAppStore((s) => s.setSshFollowEnabled)
+  const openCids = useAppStore((s) => s.sshOpenCids)
   const hostRef = useRef<HTMLDivElement>(null)
-  const termHostRef = useRef<HTMLDivElement>(null)
   /** 拖拽中的即时值（null=用持久值） */
   const [dragSplit, setDragSplit] = useState<number | null>(null)
   /** v2.1.3 Shift+右键菜单锚点（普通右键=智能复制/粘贴——对齐开发终端） */
@@ -58,158 +62,10 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
   const connState = connEntry?.state ?? 'offline'
   const conn: ConnectionRecord | undefined = connections.find((c) => c.id === connectionId)
   const frozen = connState !== 'connected' || sessionDead
+  // 台账：已开过的连接各留一台；当前连接尚未入册时（首帧）补上
+  const panes = openCids.includes(connectionId) ? openCids : [...openCids, connectionId]
 
-  // xterm 实例生命周期（cid 变化=换连接→旧实例留在缓存，新实例懒建）
-  useEffect(() => {
-    const host = termHostRef.current
-    if (!host) return
-    let term = sshTermCache.get(connectionId)
-    if (term === undefined) {
-      term = new Terminal({
-        allowProposedApi: true,
-        fontFamily: loadFontFamily(),
-        fontSize: loadFontSize(),
-        lineHeight: 1.2,
-        letterSpacing: 0,
-        cursorBlink: true,
-        convertEol: false,
-        scrollback: 8000,
-        // v2.1.3 对齐 TerminalView：CJK 保真（宽字形缩放/ConPTY 补行启发按平台）
-        rescaleOverlappingGlyphs: true,
-        windowsPty:
-          (window as unknown as { cwb?: { platform?: string } }).cwb?.platform === 'win32'
-            ? { backend: 'conpty' }
-            : undefined,
-        linkHandler: {
-          activate: (_e, uri) => {
-            void window.cwb.openExternal(uri)
-          }
-        },
-        theme: terminalThemeFor(termThemeNow())
-      })
-      const fit = new FitAddon()
-      term.loadAddon(fit)
-      term.loadAddon(new Unicode11Addon())
-      term.unicode.activeVersion = '11'
-      term.loadAddon(
-        new WebLinksAddon((_e, uri) => {
-          void window.cwb.openExternal(uri)
-        })
-      )
-      sshTermCache.set(connectionId, term)
-      sshFitCache.set(connectionId, fit)
-      // v2.1.3（用户需求）：交互对齐开发终端——粘贴三键/智能 Ctrl+C 复制/
-      // 恒复制键/字号 Ctrl+=/-（Shift+Enter 搜索等 claude 专属项不移植）
-      term.attachCustomKeyEventHandler((ev) => {
-        if (ev.type !== 'keydown') return true
-        const t = sshTermCache.get(connectionId)
-        if (t === undefined) return true
-        if (
-          (ev.ctrlKey && !ev.altKey && !ev.metaKey && ev.key.toLowerCase() === 'v') ||
-          (ev.shiftKey && !ev.ctrlKey && !ev.altKey && ev.key === 'Insert')
-        ) {
-          void navigator.clipboard
-            .readText()
-            .then((text) => {
-              if (text !== '' && sshTermCache.get(connectionId) === t) t.paste(text)
-            })
-            .catch(() => {})
-          return false
-        }
-        const isCopyKey =
-          (ev.ctrlKey && ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'c') ||
-          (ev.ctrlKey && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'c' && t.hasSelection()) ||
-          (ev.ctrlKey && !ev.shiftKey && !ev.altKey && ev.key === 'Insert')
-        if (isCopyKey) {
-          const sel = t.getSelection()
-          if (sel !== '') {
-            void navigator.clipboard.writeText(sel).catch(() => {})
-            return false
-          }
-          return true
-        }
-        if (!ev.ctrlKey || ev.metaKey || ev.altKey) return true
-        if (ev.key === '=' || ev.key === '+') {
-          changeFontSize(1)
-          return false
-        }
-        if (ev.key === '-' || ev.key === '_') {
-          changeFontSize(-1)
-          return false
-        }
-        return true
-      })
-      term.onData((d) => window.cwb.writeSshShell(connectionId, d))
-      // v2.1.1 目录跟随：PROMPT_COMMAND 注入的 OSC 7（file://host/path）——
-      // 解析出 cwd，跟随开启时导航文件面板
-      term.parser.registerOscHandler(7, (data) => {
-        try {
-          const path = decodeURIComponent(new URL(`file://x${data.split(';')[1] ?? ''}`).pathname)
-          if (path !== '' && path !== '/') {
-            const st = useAppStore.getState()
-            if (st.sshFollowEnabled && st.sshConsoleCid === connectionId) {
-              const cur = st.sshFollowDir
-              if (cur === null || cur.path !== path || cur.connectionId !== connectionId) {
-                st.setSshFollowDir(connectionId, path)
-              }
-            }
-          }
-        } catch {
-          /* 非法 URI 忽略 */
-        }
-        return false // 不渲染进终端
-      })
-      term.open(host)
-      // v2.1.3：WebGL 渲染器（失败/丢上下文静默回落 DOM——对齐 TerminalView）
-      try {
-        const webgl = new WebglAddon()
-        webgl.onContextLoss(() => webgl.dispose())
-        term.loadAddon(webgl)
-      } catch {
-        // jsdom/无 GPU——DOM 渲染器
-      }
-      applyTermTheme(term, termThemeNow())
-    } else {
-      term.open(host) // 复挂（隐藏期间 DOM 常驻则此路径少走；防御双挂载场景）
-    }
-    const fit = sshFitCache.get(connectionId)
-    const raf = (): void => {
-      fit?.fit()
-      const r = term
-      if (r !== undefined) window.cwb.resizeSshShell(connectionId, r.cols, r.rows)
-    }
-    requestAnimationFrame(raf)
-    // 订阅 shell 输出（先冲放缓冲——openSshShell 首包竞态防护，1.7.5 先例）
-    const off = subscribeSshData(connectionId, (d) => sshTermCache.get(connectionId)?.write(d))
-    const observer = new ResizeObserver(() => {
-      try {
-        fit?.fit()
-        const r = sshTermCache.get(connectionId)
-        if (r !== undefined) window.cwb.resizeSshShell(connectionId, r.cols, r.rows)
-      } catch {
-        // fit 对不可见宿主可能抛错——忽略
-      }
-    })
-    observer.observe(host)
-    return () => {
-      off()
-      observer.disconnect()
-      // 会话随台关/换连接即弃——dispose 防 DOM 复挂错位（shell 早已重建，scrollback 无保留意义）
-      sshTermCache.get(connectionId)?.dispose()
-      sshTermCache.delete(connectionId)
-      sshFitCache.delete(connectionId)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 实例按 cid 生命周期管理
-  }, [connectionId])
-
-  /** v2.1.2 ③：死会话重开时清旧终端画面（新 shell 的 banner 干净进入） */
-  const prevDeadRef = useRef(sessionDead)
-  useEffect(() => {
-    if (prevDeadRef.current && !sessionDead) sshTermCache.get(connectionId)?.reset()
-    prevDeadRef.current = sessionDead
-  }, [sessionDead, connectionId])
-
-  /** 换连接下拉：openSshConsole 自带「关旧开新」语义 */
+  /** 换连接下拉：切到该连接自己的台（已开=原样恢复，未开=新建） */
   const switchConn = (cid: string): void => {
     if (cid !== connectionId) void openSshConsole(cid)
   }
@@ -297,7 +153,7 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
         </span>
       </div>
 
-      {/* 上：裸 shell（xterm）；冻结层复用 term-frozen 视觉 */}
+      {/* 上：裸 shell（每连接一台，非当前台仅隐藏不卸载）；冻结层复用 term-frozen 视觉 */}
       <div
         className="ssh-term-wrap"
         style={{ height: `${Math.round(split * 1000) / 10}%` }}
@@ -327,7 +183,9 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
           setCtxMenu({ x: e.clientX, y: e.clientY, sel: term?.getSelection() ?? '' })
         }}
       >
-        <div ref={termHostRef} className="ssh-term-host" />
+        {panes.map((cid) => (
+          <SshTermPane key={cid} cid={cid} active={cid === connectionId} />
+        ))}
         {frozen && (
           <div className="term-frozen" role="status">
             <span className="term-frozen-msg">
@@ -405,6 +263,197 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
       </div>
     </div>
   )
+}
+
+/**
+ * 单连接的终端台（v2.1.5）：实例随 panes 台账挂载/卸载——切到别的连接只是
+ * `visibility:hidden`（布局尺寸仍在，fit/回滚/会话全保留），切回即原样。
+ */
+function SshTermPane({ cid, active }: { cid: string; active: boolean }) {
+    const hostRef = useRef<HTMLDivElement>(null)
+    const termRef = useRef<Terminal | null>(null)
+    const dead = useAppStore(
+      (s) => s.sshDeadCids.includes(cid) || (s.sshConsoleCid === cid && s.sshSessionDead)
+    )
+
+    // xterm 实例生命周期（每 cid 一台，卸载即 dispose）
+    useEffect(() => {
+      const host = hostRef.current
+      if (!host) return
+      let term = sshTermCache.get(cid)
+      if (term === undefined) {
+        term = new Terminal({
+          allowProposedApi: true,
+          fontFamily: loadFontFamily(),
+          fontSize: loadFontSize(),
+          lineHeight: 1.2,
+          letterSpacing: 0,
+          cursorBlink: true,
+          convertEol: false,
+          scrollback: 8000,
+          // v2.1.3 对齐 TerminalView：CJK 保真（宽字形缩放/ConPTY 补行启发按平台）
+          rescaleOverlappingGlyphs: true,
+          windowsPty:
+            (window as unknown as { cwb?: { platform?: string } }).cwb?.platform === 'win32'
+              ? { backend: 'conpty' }
+              : undefined,
+          linkHandler: {
+            activate: (_e, uri) => {
+              void window.cwb.openExternal(uri)
+            }
+          },
+          theme: terminalThemeFor(termThemeNow())
+        })
+        const fit = new FitAddon()
+        term.loadAddon(fit)
+        term.loadAddon(new Unicode11Addon())
+        term.unicode.activeVersion = '11'
+        term.loadAddon(
+          new WebLinksAddon((_e, uri) => {
+            void window.cwb.openExternal(uri)
+          })
+        )
+        sshTermCache.set(cid, term)
+        sshFitCache.set(cid, fit)
+        // v2.1.3（用户需求）：交互对齐开发终端——粘贴三键/智能 Ctrl+C 复制/
+        // 恒复制键/字号 Ctrl+=/-（Shift+Enter 搜索等 claude 专属项不移植）
+        term.attachCustomKeyEventHandler((ev) => {
+          if (ev.type !== 'keydown') return true
+          const t = sshTermCache.get(cid)
+          if (t === undefined) return true
+          if (
+            (ev.ctrlKey && !ev.altKey && !ev.metaKey && ev.key.toLowerCase() === 'v') ||
+            (ev.shiftKey && !ev.ctrlKey && !ev.altKey && ev.key === 'Insert')
+          ) {
+            void navigator.clipboard
+              .readText()
+              .then((text) => {
+                if (text !== '' && sshTermCache.get(cid) === t) t.paste(text)
+              })
+              .catch(() => {})
+            return false
+          }
+          const isCopyKey =
+            (ev.ctrlKey && ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'c') ||
+            (ev.ctrlKey && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'c' && t.hasSelection()) ||
+            (ev.ctrlKey && !ev.shiftKey && !ev.altKey && ev.key === 'Insert')
+          if (isCopyKey) {
+            const sel = t.getSelection()
+            if (sel !== '') {
+              void navigator.clipboard.writeText(sel).catch(() => {})
+              return false
+            }
+            return true
+          }
+          if (!ev.ctrlKey || ev.metaKey || ev.altKey) return true
+          if (ev.key === '=' || ev.key === '+') {
+            changeFontSize(1)
+            return false
+          }
+          if (ev.key === '-' || ev.key === '_') {
+            changeFontSize(-1)
+            return false
+          }
+          return true
+        })
+        term.onData((d) => window.cwb.writeSshShell(cid, d))
+        // v2.1.1 目录跟随：PROMPT_COMMAND 注入的 OSC 7（file://host/path）——
+        // 解析出 cwd，跟随开启且是当前台时才导航文件面板
+        term.parser.registerOscHandler(7, (data) => {
+          try {
+            const path = decodeURIComponent(new URL(`file://x${data.split(';')[1] ?? ''}`).pathname)
+            if (path !== '' && path !== '/') {
+              const st = useAppStore.getState()
+              if (st.sshFollowEnabled && st.sshConsoleCid === cid) {
+                const cur = st.sshFollowDir
+                if (cur === null || cur.path !== path || cur.connectionId !== cid) {
+                  st.setSshFollowDir(cid, path)
+                }
+              }
+            }
+          } catch {
+            /* 非法 URI 忽略 */
+          }
+          return false // 不渲染进终端
+        })
+        // v2.1.3：WebGL 渲染器（失败/丢上下文静默回落 DOM——对齐 TerminalView）
+        term.open(host) // WebGL 渲染器须在 open 之后加载
+        try {
+          const webgl = new WebglAddon()
+          webgl.onContextLoss(() => webgl.dispose())
+          term.loadAddon(webgl)
+        } catch {
+          // jsdom/无 GPU——DOM 渲染器
+        }
+        applyTermTheme(term, termThemeNow())
+      } else {
+        term.open(host) // 防御双挂载（正常路径是缓存随台卸载即清）
+      }
+      termRef.current = term
+      const fit = sshFitCache.get(cid)
+      // 尺寸守卫：宿主不可见/零尺寸时 fit 会算出荒诞行列（并 resize 到远端 shell）
+      const syncSize = (): void => {
+        const h = hostRef.current
+        if (h === null || h.clientWidth === 0 || h.clientHeight === 0) return
+        try {
+          fit?.fit()
+          const r = sshTermCache.get(cid)
+          if (r !== undefined) window.cwb.resizeSshShell(cid, r.cols, r.rows)
+        } catch {
+          // fit 对不可见宿主可能抛错——忽略
+        }
+      }
+      requestAnimationFrame(syncSize)
+      // 订阅 shell 输出（先冲放缓冲——openSshShell 首包竞态防护，1.7.5 先例）
+      const off = subscribeSshData(cid, (d) => sshTermCache.get(cid)?.write(d))
+      const observer = new ResizeObserver(syncSize)
+      observer.observe(host)
+      return () => {
+        off()
+        observer.disconnect()
+        // 台被移除（关台/删连接）才 dispose——换连接只是隐藏，不再销毁
+        sshTermCache.get(cid)?.dispose()
+        sshTermCache.delete(cid)
+        sshFitCache.delete(cid)
+        termRef.current = null
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- 实例按 cid 生命周期管理
+    }, [cid])
+
+    // 切回该台：按当前尺寸重排（隐藏期间窗口可能变过）并接住键盘
+    useEffect(() => {
+      if (!active) return
+      const host = hostRef.current
+      const fit = sshFitCache.get(cid)
+      if (host === null || host.clientWidth === 0) return
+      try {
+        fit?.fit()
+        const r = sshTermCache.get(cid)
+        if (r !== undefined) window.cwb.resizeSshShell(cid, r.cols, r.rows)
+      } catch {
+        /* 忽略 */
+      }
+      sshTermCache.get(cid)?.focus()
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在激活切换时重排
+    }, [active, cid])
+
+    /** v2.1.2 ③：死会话重开时清旧终端画面（新 shell 的 banner 干净进入） */
+    const prevDeadRef = useRef(dead)
+    useEffect(() => {
+      if (prevDeadRef.current && !dead) sshTermCache.get(cid)?.reset()
+      prevDeadRef.current = dead
+    }, [dead, cid])
+
+    return (
+      <div
+        className="ssh-term-pane"
+        data-testid={`ssh-term-pane-${cid}`}
+        data-active={active ? 'true' : 'false'}
+        aria-hidden={!active}
+      >
+        <div ref={hostRef} className="ssh-term-host" />
+      </div>
+    )
 }
 
 function termThemeNow(): EffectiveTheme {

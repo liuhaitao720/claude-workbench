@@ -85,7 +85,7 @@ describe.skipIf(!sshPortOpen())('S7 L3：localhost sshd 全链（推送→启动
     workDir = mkdtempSync(join(tmpdir(), 'cwb-s7-l3-'))
     home = join(workDir, 'cwb-home')
 
-    // 1) 本机包（0.1.2——v2.0.2 推送服务器侧化）与真·旧版本包（0.0.9——改 version 重 bundle）
+    // 1) 本机包（0.1.3——v2.0.2 推送服务器侧化）与真·旧版本包（0.0.9——改 version 重 bundle）
     const outDir = join(workDir, 'pkg')
     const m = await buildServerPackage({ outDir: join(outDir, 'new'), quiet: true })
     newPkg = { manifest: m, tgzPath: join(outDir, 'new', m.file) }
@@ -201,13 +201,13 @@ describe.skipIf(!sshPortOpen())('S7 L3：localhost sshd 全链（推送→启动
     'install：推送→启动→探活 {ok,version}（远端目录/tgz 解包/进程/current 指针全断言）',
     async () => {
       const r = await ensureServer(manager, connectionId, opts())
-      expect(r).toEqual({ ok: true, action: 'installed', version: '0.1.2' })
+      expect(r).toEqual({ ok: true, action: 'installed', version: '0.1.3' })
 
       // 远端目录与产物
-      const vdir = `${home}/versions/0.1.2`
+      const vdir = `${home}/versions/0.1.3`
       expect(sh(`test -s ${vdir}/dist/main.cjs && test -d ${vdir}/node_modules/node-pty && echo yes`).stdout).toContain('yes')
       // current 指针
-      expect(sh(`cat ${home}/current`).stdout.trim()).toBe('0.1.2')
+      expect(sh(`cat ${home}/current`).stdout.trim()).toBe('0.1.3')
       // pid 文件 + 真实进程（ps 断言 node + server 入口）
       const pid = sh(`cat ${home}/server.pid`).stdout.trim()
       expect(pid).toMatch(/^\d+$/)
@@ -216,7 +216,7 @@ describe.skipIf(!sshPortOpen())('S7 L3：localhost sshd 全链（推送→启动
       expect(ps).toContain('dist/main.cjs')
       // HTTP 探活（直连与经 SSH 通道双证）
       const probe = await probeServerVersion(manager, connectionId, { port: serverPort })
-      expect(probe).toEqual({ ok: true, version: '0.1.2' })
+      expect(probe).toEqual({ ok: true, version: '0.1.3' })
       // 结构化阶段（S6 弹窗消费形态）
       const stages = progressLog.map((p) => p.stage)
       for (const s of ['upload', 'extract', 'start', 'health', 'done']) expect(stages).toContain(s)
@@ -229,7 +229,7 @@ describe.skipIf(!sshPortOpen())('S7 L3：localhost sshd 全链（推送→启动
     async () => {
       progressLog.length = 0
       const r = await ensureServer(manager, connectionId, opts())
-      expect(r).toEqual({ ok: true, action: 'none', version: '0.1.2' })
+      expect(r).toEqual({ ok: true, action: 'none', version: '0.1.3' })
       const stages = progressLog.map((p) => p.stage)
       expect(stages).not.toContain('upload')
       expect(stages).not.toContain('extract')
@@ -239,7 +239,7 @@ describe.skipIf(!sshPortOpen())('S7 L3：localhost sshd 全链（推送→启动
   )
 
   it(
-    '升级路径：真·旧版 0.0.9 运行 → check=needUpgrade → 升级到 0.1.2（旧进程停/新探活/旧版本清理）',
+    '升级路径：真·旧版 0.0.9 运行 → check=needUpgrade → 升级到 0.1.3（旧进程停/新探活/旧版本清理）',
     async () => {
       // 装 0.0.9（旧包）——真旧 server 起来
       const downgrade = await ensureServer(manager, connectionId, { ...opts(), localPackage: oldPkg })
@@ -248,7 +248,7 @@ describe.skipIf(!sshPortOpen())('S7 L3：localhost sshd 全链（推送→启动
 
       // check：旧版在跑 → needUpgrade（不自动升级）
       const check = await ensureServer(manager, connectionId, { ...opts(), mode: 'check' })
-      expect(check).toMatchObject({ ok: false, reason: 'needUpgrade', currentVersion: '0.0.9', expectedVersion: '0.1.2' })
+      expect(check).toMatchObject({ ok: false, reason: 'needUpgrade', currentVersion: '0.0.9', expectedVersion: '0.1.3' })
 
       // 伪造更旧版本目录（清理断言用：保留最近 2 个 → 0.0.5 应被清）
       sh(`mkdir -p ${home}/versions/0.0.5 && touch ${home}/versions/0.0.5/marker`)
@@ -257,12 +257,12 @@ describe.skipIf(!sshPortOpen())('S7 L3：localhost sshd 全链（推送→启动
       progressLog.length = 0
       const oldPid = sh(`cat ${home}/server.pid`).stdout.trim()
       const up = await ensureServer(manager, connectionId, opts())
-      expect(up).toEqual({ ok: true, action: 'upgraded', version: '0.1.2' })
+      expect(up).toEqual({ ok: true, action: 'upgraded', version: '0.1.3' })
       // 新版本探活 + 旧进程已停
-      expect(await probeServerVersion(manager, connectionId, { port: serverPort })).toEqual({ ok: true, version: '0.1.2' })
+      expect(await probeServerVersion(manager, connectionId, { port: serverPort })).toEqual({ ok: true, version: '0.1.3' })
       expect(sh(`kill -0 ${oldPid} 2>/dev/null && echo alive`).stdout).not.toContain('alive')
       // 版本目录：保留最近 2（0.1.0/0.0.9），0.0.5 清除
-      expect(sh(`ls ${home}/versions`).stdout.trim().split(/\s+/)).toEqual(['0.0.9', '0.1.2'])
+      expect(sh(`ls ${home}/versions`).stdout.trim().split(/\s+/)).toEqual(['0.0.9', '0.1.3'])
     },
     240_000
   )

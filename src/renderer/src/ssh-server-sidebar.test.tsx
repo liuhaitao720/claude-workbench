@@ -57,6 +57,8 @@ beforeEach(() => {
     sshActive: true,
     sshConsoleCid: null,
     sshSessionDead: false,
+    sshOpenCids: [],
+    sshDeadCids: [],
     sshFollowDir: null,
     reviewState: null,
     reviewActive: false,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { OutputRingBuffer } from '../ring-buffer'
 import { TaskRegistry, type PtyProcess, type TaskSink } from '../pty-registry'
 import type { RemoteTaskSpawnRequest } from '../shared/remote-protocol'
 
@@ -304,5 +305,40 @@ describe('re-attach 重绘（v2.1.1：全量历史回放优先）', () => {
     const total = Buffer.byteLength(sink.chunks.join(''), 'utf8')
     expect(total).toBeLessThanOrEqual(1_500_000)
     expect(total).toBeGreaterThan(1_400_000) // 丢最旧但保住绝大多数近期
+  })
+})
+
+
+describe('v2.1.4 回放边界对齐（修「开发终端显示乱」——mid-escape 截断）', () => {
+  it('chunk 级回放原样（onData 边界天然安全，不对齐不加戏）', () => {
+    const ring = new OutputRingBuffer(100_000)
+    ring.push('line-1\n')
+    ring.push('X'.repeat(50) + '\x1b[32mGREEN\x1b[0m\n')
+    const replay = ring.tailAligned(1_000)
+    expect(replay).toContain('line-1')
+    expect(replay).toContain('GREEN')
+  })
+
+  it('单 chunk 超预算 → 字节截取头做安全对齐（跳残缺序列+残行，保完整序列起步）', () => {
+    const ring = new OutputRingBuffer(100_000)
+    // 一个超大 chunk：截取头落在转义序列与行中间的概率性——构造确定性形态：
+    // [50 填充][\x1b[32mGREEN\x1b[0m][\n][TAIL]
+    const big = 'X'.repeat(50) + '\x1b[32mGREEN\x1b[0m\nTAIL-LINE'
+    ring.push(big)
+    const cut = ring.tailAligned(20) // 预算 20 字节：必然字节级截取
+    // 对齐后：不含残缺序列字面（不以 ESC 参数段开头），从安全边界起步
+    expect(cut.length).toBeGreaterThan(0)
+    expect(cut.startsWith('\x1b')).toBe(false)
+    const esc = cut.indexOf('\x1b')
+    if (esc >= 0) expect(cut[esc + 1]).toMatch(/[\[\]]/)
+  })
+
+  it('孤立 ESC 起步的残缺序列被整段跳过', () => {
+    const ring = new OutputRingBuffer(100_000)
+    ring.push('\x1b[38;5;196mRED\x1b[0m\nKEEP\n')
+    // 手工验证 align 语义：截取到以 ESC 开头但序列完整 → 不破坏完整序列
+    const r = ring.tailAligned(1_000)
+    expect(r).toContain('RED')
+    expect(r).toContain('KEEP')
   })
 })

@@ -34,7 +34,7 @@ async function openPanel(api: ReturnType<typeof installCwbMock>): Promise<HTMLEl
   // v2.1.1：远程文件面板只活在 SSH 终端下半区——经 SSH 竖条打开（任务上下文
   // tRun → shell cd 注入 + 面板直达 /home/dev）
   act(() => {
-    useAppStore.setState({ filesTargetConn: null, sshConsoleCid: null, sshActive: false, sshFollowDir: null })
+    useAppStore.setState({ filesTargetConn: null, sshConsoleCid: null, sshActive: false, sshFollowDir: null, sshOpenCids: [], sshDeadCids: [] })
   })
   fireEvent.click(await screen.findByRole('button', { name: 'SSH 终端' }))
   const panel = await screen.findByTestId('files-panel')
@@ -267,7 +267,7 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
     const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
     vi.mocked(api.listRemoteFiles).mockResolvedValue({ ok: true, path: '/home/dev/r', entries: [] })
     act(() => {
-      useAppStore.setState({ sshConsoleCid: null, sshActive: false, sshFollowDir: null, filesTargetConn: null })
+      useAppStore.setState({ sshConsoleCid: null, sshActive: false, sshFollowDir: null, filesTargetConn: null, sshOpenCids: [], sshDeadCids: [] })
     })
     render(<App />)
     await waitFor(() => expect(document.querySelector('li[data-project-id="pr"]')).toBeDefined())
@@ -326,6 +326,8 @@ describe('v2.0.3 文件面板任务上下文直达', () => {
         filesTargetConn: null,
         sshConsoleCid: null,
         sshActive: false,
+        sshOpenCids: [],
+        sshDeadCids: [],
         sshFollowDir: null,
         uiSettings: { ...useAppStore.getState().uiSettings, filesPanelPath: {} }
       })
@@ -366,6 +368,8 @@ describe('v2.0.2 拖拽上传修复（提示遮罩纯视觉化 + leave/drop 收�
         filesTargetConn: null,
         sshConsoleCid: null,
         sshActive: false,
+        sshOpenCids: [],
+        sshDeadCids: [],
         sshFollowDir: null
       })
     })

@@ -35,6 +35,30 @@ export class OutputRingBuffer {
   }
 
   /** 最近 ≤maxBytes 字节的输出（拼接为一个字符串；空缓冲返回 ''） */
+  /**
+   * v2.1.4（用户实测「开发终端显示乱」）：回放尾部——整块 chunk 直接用
+   * （chunk=onData 交付边界，天然不在序列中间）；仅当单 chunk 超预算走字节级
+   * 截取时，对截取头做安全对齐（跳过残缺转义序列与残行——半个 CSI/OSC 进
+   * xterm 会当字面字符渲染成整屏乱码）。
+   */
+  tailAligned(maxBytes: number): string {
+    if (this.chunks.length === 0) return ''
+    const picked: string[] = []
+    let total = 0
+    for (let i = this.chunks.length - 1; i >= 0; i--) {
+      const c = this.chunks[i]!
+      const b = byteLength(c)
+      if (total + b > maxBytes) {
+        if (total === 0) picked.unshift(alignAfterCut(tailBytes(c, maxBytes)))
+        break
+      }
+      picked.unshift(c)
+      total += b
+      if (total === maxBytes) break
+    }
+    return picked.join('')
+  }
+
   tail(maxBytes: number): string {
     if (this.chunks.length === 0) return ''
     const picked: string[] = []
@@ -82,4 +106,41 @@ function tailBytes(s: string, maxBytes: number): string {
     units += 1
   }
   return s.slice(s.length - units)
+}
+
+
+/**
+ * 字节级截取后的安全对齐：跳过残缺转义序列（孤立 \x1b 起步的 CSI/OSC）与
+ * 残行（前进到下一换行——仅当窗口内确有换行，防整块无换行时丢光）。
+ */
+function alignAfterCut(text: string): string {
+  let i = 0
+  while (i < text.length && text[i] === '\x1b') {
+    let j = i + 1
+    if (text[j] === '[') {
+      j++
+      let n = 0
+      while (j < text.length && n < 64) {
+        const c = text[j]!
+        j++
+        n++
+        if (c >= '@' && c <= '~') break
+      }
+    } else if (text[j] === ']') {
+      j++
+      let n = 0
+      while (j < text.length && n < 256) {
+        const c = text[j]!
+        j++
+        n++
+        if (c === '\x07' || (c === '\\' && text[j] === '\\')) break
+      }
+    } else {
+      j++
+    }
+    i = j
+  }
+  const nl = text.indexOf('\n', i)
+  if (nl >= 0 && nl < text.length - 1) i = nl + 1
+  return text.slice(i)
 }

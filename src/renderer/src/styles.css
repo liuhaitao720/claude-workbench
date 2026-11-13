@@ -3053,6 +3053,9 @@ button {
 .ssh-conn-select { max-width: 180px; font-size: 12px; }
 .ssh-toolbar-acts { margin-left: auto; display: flex; gap: 6px; }
 .ssh-term-wrap { position: relative; min-height: 120px; overflow: hidden; }
+/* v2.1.5 每连接一台：非当前台只隐藏（保留布局尺寸与回滚），切回即原样 */
+.ssh-term-pane { position: absolute; inset: 0; }
+.ssh-term-pane[data-active='false'] { visibility: hidden; }
 .ssh-term-host { width: 100%; height: 100%; padding: 4px; overflow: hidden; }
 .ssh-term-host .xterm { height: 100%; }
 .ssh-frozen-sub { display: flex; gap: 8px; }

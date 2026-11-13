@@ -44,7 +44,7 @@ const taskDataListeners = new Map<string, Set<TaskDataListener>>()
  * 上限对齐 xterm scrollback 量级（超限丢最旧）。
  */
 const taskDataPending = new Map<string, string[]>()
-const TASK_DATA_PENDING_CAP = 800_000
+const TASK_DATA_PENDING_CAP = 2_000_000 // v2.1.4：≥ server 回放 1.5MB（防无监听期截断丢最旧→mid-escape 乱码）
 
 export function subscribeTaskData(taskId: string, cb: TaskDataListener): () => void {
   let set = taskDataListeners.get(taskId)
@@ -243,6 +243,11 @@ function onSshDataRaw(connectionId: string, cb: (data: string) => void): () => v
 // ②整串「文本+回车」一包发出，echo 与 readline 启动交错。修法：原始订阅只看新
 // 输出；注入分三步（回车同步→文本→回车提交）；发完等 OSC 7 回执，超时重试一次。
 const sshBootstrapCancels = new Map<string, () => void>()
+/**
+ * v2.1.5：各台被「开发窗口/项目上下文」定向打开时给的目录——会话死重开时沿用
+ * （rail 裸进的台无此记录，重开也不注入脚本）。
+ */
+const sshDirIntent = new Map<string, string>()
 
 function cancelSshBootstrap(connectionId: string): void {
   sshBootstrapCancels.get(connectionId)?.()
@@ -276,17 +281,22 @@ function runBootstrapRound(connectionId: string, dir: string | undefined, allowR
     for (const t of timers) clearTimeout(t)
     off?.()
     off = undefined
-    // 分步注入：①\r 先落定到新鲜提示符（清掉半行）→ ②文本 → ③\r 提交
-    window.cwb.writeSshShell(connectionId, '\r')
+    // 分步注入：①先把行清干净（首轮 \r 落定新鲜提示符；重试轮发 Ctrl+C，
+    // 兼作卡在续行/半行输入时的脱困——否则整串会叠在旧输入后面）→ ②文本 → ③\r 提交
+    window.cwb.writeSshShell(connectionId, allowRetry ? '\r' : '\u0003')
     timers.push(
       setTimeout(() => {
-        const q = (v: string): string => v.replaceAll("'", `'\\''`)
+        // 引号纪律（v2.1.4 实测：整行不执行、界面停在 `>` 续行）：
+        // `'` → `'\''` 只在「已处于单引号串内」时成立。此前把整段 hook 一并过
+        // q()，落在非引号上下文 → bash 视作未闭合引号，cd 与钩子全不执行。
+        // 现 hook 整体用单引号包裹、内部格式串改用双引号（printf 同样解析
+        // \033/\007），内部再无单引号；只有 dir 走转义且确实处在引号串内。
+        const sq = (v: string): string => v.replaceAll("'", `'\\''`)
         const hook =
-          'export PROMPT_COMMAND=' +
-          q('printf \'\\033]7;file://%s%s\\007\' "$HOSTNAME" "$PWD"')
+          `PROMPT_COMMAND='printf "\\033]7;file://%s%s\\007" "$HOSTNAME" "$PWD"'`
         const text =
           dir !== undefined && dir.trim() !== ''
-            ? `cd '${q(dir.trim())}'; ${hook}`
+            ? `cd '${sq(dir.trim())}'; ${hook}`
             : hook
         window.cwb.writeSshShell(connectionId, text)
         timers.push(
@@ -499,6 +509,13 @@ interface AppState {
   /** 当前 SSH 会话已结束（远端 exit/断连）——冻结层给重开按钮 */
   sshSessionDead: boolean
   /**
+   * v2.1.5（用户需求：切换不同 SSH 连接=不同窗口）：本次运行中已开着的台——
+   * 每连接一个独立 shell 会话+独立终端实例（回滚保留），切回即恢复，不重开。
+   */
+  sshOpenCids: string[]
+  /** v2.1.5：各连接会话是否已结束（后台台的死态不污染当前台；sshSessionDead=当前台镜像） */
+  sshDeadCids: string[]
+  /**
    * v2.1.1 目录跟随（用户需求：shell cd 后文件面板自动进入对应目录）：
    * OSC 7 / 初始定位写入，RemoteFilesPanel 按 seq 变化导航。
    */
@@ -508,7 +525,11 @@ interface AppState {
   /** 显式定位（项目菜单/任务上下文打开 SSH 终端直达项目目录） */
   setSshFollowDir: (connectionId: string, path: string, source?: 'osc' | 'explicit') => void
   setSshFollowEnabled: (on: boolean) => void
-  /** 打开/切换 SSH 控制台（换连接=关旧开新 shell）。dir=初始目录（任务/项目上下文） */
+  /**
+   * 打开/切换 SSH 控制台。**每连接一台**（v2.1.5）：已开着的连接切回即恢复
+   * （会话与回滚都在），不关旧会话。dir=初始目录（仅开发窗口/项目上下文给）——
+   * 只有给了 dir 才注入 bootstrap（cd + OSC 7 钩子）；从竖条裸进 SSH 视图不注入。
+   */
   openSshConsole: (connectionId: string, dir?: string) => Promise<void>
   /** 关闭 SSH 控制台（断 shell，虚拟 tab 移除） */
   closeSshConsole: () => void
@@ -748,6 +769,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const reviewGone = s.reviewState !== null && !ids.has(s.reviewState.projectId)
       // v2.1.0 F4（评审）：SSH 控制台目标连接被删 → 台一并关（防空名 tab+死按钮）
       const sshGone = s.sshConsoleCid === id
+      // v2.1.5：多台下也把该连接从「已开台」清单剔除（其余台不受影响）
+      const sshOpenCids = s.sshOpenCids.filter((c) => c !== id)
+      const sshDeadCids = s.sshDeadCids.filter((c) => c !== id)
+      sshDirIntent.delete(id)
+      if (s.sshOpenCids.includes(id)) void window.cwb.closeSshShell(id)
       return {
         projects,
         tasks,
@@ -756,6 +782,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         connectionStates,
         uiSettings: { ...s.uiSettings, serverNodesCollapsed: nodesCollapsed },
         ...(reviewGone ? { reviewState: null, reviewActive: false } : {}),
+        sshOpenCids,
+        sshDeadCids,
         ...(sshGone ? { sshConsoleCid: null, sshActive: false, sshSessionDead: false } : {}),
         selectedProjectId:
           s.selectedProjectId !== null && ids.has(s.selectedProjectId)
@@ -956,13 +984,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // ── v2.1.0 SSH 纯终端 ──────────────────────────────────────────────
   openSshConsole: async (connectionId, dir) => {
     if (get().connections.every((c) => c.id !== connectionId)) return
+    const wantDir = dir !== undefined && dir.trim() !== '' ? dir.trim() : undefined
+    if (wantDir !== undefined) sshDirIntent.set(connectionId, wantDir)
     const cur = get().sshConsoleCid
     if (cur === connectionId) {
       // 会话死后台重开（冻结层「重开」也走这里——open=后端关旧建新）
       if (get().sshSessionDead) {
         cancelSshBootstrap(connectionId)
         discardSshData(connectionId) // 清死会话残留，防旧尾巴回放进新终端
-        set({ sshActive: true, reviewActive: false, sshSessionDead: false })
+        set({
+          sshActive: true,
+          reviewActive: false,
+          sshSessionDead: false,
+          sshDeadCids: get().sshDeadCids.filter((c) => c !== connectionId)
+        })
         try {
           await window.cwb.closeSshShell(connectionId)
         } catch {
@@ -970,49 +1005,96 @@ export const useAppStore = create<AppState>()((set, get) => ({
         }
         try {
           const r = await window.cwb.openSshShell(connectionId)
-          if (r.ok) injectSshBootstrapWhenReady(connectionId, dir)
+          // 重开沿用该台的目录意图（定向打开过的才注入；rail 裸进的不注入）
+          const bootDir = wantDir ?? sshDirIntent.get(connectionId)
+          if (!r.ok && get().sshConsoleCid === connectionId) {
+            set({
+              sshSessionDead: true,
+              sshDeadCids: [...new Set([...get().sshDeadCids, connectionId])]
+            })
+            return
+          }
+          if (r.ok && bootDir !== undefined) injectSshBootstrapWhenReady(connectionId, bootDir)
         } catch {
           /* 失败留冻结层 */
         }
         return
       }
+      // 从开发窗口/项目上下文再来一次：补定向（cd + 跟随钩子）；裸激活不注入
+      if (wantDir !== undefined) {
+        get().setSshFollowDir(connectionId, wantDir, 'explicit')
+        injectSshBootstrapWhenReady(connectionId, wantDir)
+      }
       set({ sshActive: true, reviewActive: false })
       return
     }
-    // 换连接=关旧会话（后端每连接单会话，open 自会重开；显式关防旧输出串流）
-    if (cur !== null) {
-      cancelSshBootstrap(cur) // 旧连接的就绪门悬空注入一并作废
-      void window.cwb.closeSshShell(cur)
+    // v2.1.5：切换=换到该连接自己的台——已在运行则直接恢复（不重开、不关旧台）
+    const opened = get().sshOpenCids
+    if (opened.includes(connectionId)) {
+      set({
+        sshConsoleCid: connectionId,
+        sshActive: true,
+        reviewActive: false,
+        sshSessionDead: get().sshDeadCids.includes(connectionId)
+      })
+      if (wantDir !== undefined) {
+        // 从开发窗口/项目上下文进入且台已在：只补 cd + 跟随钩子
+        get().setSshFollowDir(connectionId, wantDir, 'explicit')
+        if (!get().sshDeadCids.includes(connectionId))
+          injectSshBootstrapWhenReady(connectionId, wantDir)
+      }
+      return
     }
     discardSshData(connectionId)
-    set({ sshConsoleCid: connectionId, sshActive: true, reviewActive: false, sshSessionDead: false })
+    set({
+      sshConsoleCid: connectionId,
+      sshActive: true,
+      reviewActive: false,
+      sshSessionDead: false,
+      sshOpenCids: [...opened, connectionId]
+    })
     // v2.1.1 初始目录直达（任务/项目上下文）：面板先行定位
-    if (dir !== undefined && dir.trim() !== '')
-      get().setSshFollowDir(connectionId, dir.trim(), 'explicit')
+    if (wantDir !== undefined) get().setSshFollowDir(connectionId, wantDir, 'explicit')
     try {
       const r = await window.cwb.openSshShell(connectionId)
       // F2（评审）：失败落 dead 态——冻结层给出「重开会话」恢复入口（此前仅
       // console.error，连上但无 shell=键入黑洞且无任何按钮）
       if (!r.ok && get().sshConsoleCid === connectionId) {
         console.error('[cwb] openSshShell failed:', r.error)
-        set({ sshSessionDead: true })
+        set({
+          sshSessionDead: true,
+          sshDeadCids: [...new Set([...get().sshDeadCids, connectionId])]
+        })
         return
       }
-      // v2.1.2 ③ 目录跟随注入走就绪门（cd + PROMPT_COMMAND 发 OSC 7）
-      injectSshBootstrapWhenReady(connectionId, dir)
+      // v2.1.5（用户指令）：注入只服务「从开发窗口/项目上下文进入」的定向——
+      // 裸进 SSH 视图不往别人的 shell 里塞脚本（cd + PROMPT_COMMAND 均不发）
+      if (wantDir !== undefined) injectSshBootstrapWhenReady(connectionId, wantDir)
     } catch (err) {
       console.error('[cwb] openSshShell failed:', err)
-      if (get().sshConsoleCid === connectionId) set({ sshSessionDead: true })
+      if (get().sshConsoleCid === connectionId)
+        set({
+          sshSessionDead: true,
+          sshDeadCids: [...new Set([...get().sshDeadCids, connectionId])]
+        })
     }
   },
 
   closeSshConsole: () => {
-    const cur = get().sshConsoleCid
-    set({ sshConsoleCid: null, sshActive: false })
-    if (cur !== null) {
-      cancelSshBootstrap(cur)
-      discardSshData(cur)
-      void window.cwb.closeSshShell(cur)
+    // v2.1.5：一次关掉所有台（虚拟 tab × = 收工；单台关闭走后端 SshClosed 自愈）
+    const open = get().sshOpenCids
+    set({
+      sshConsoleCid: null,
+      sshActive: false,
+      sshOpenCids: [],
+      sshDeadCids: [],
+      sshSessionDead: false
+    })
+    for (const cid of open) {
+      cancelSshBootstrap(cid)
+      discardSshData(cid)
+      sshDirIntent.delete(cid)
+      void window.cwb.closeSshShell(cid)
     }
   },
 
@@ -1276,6 +1358,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   sshConsoleCid: null,
   sshActive: false,
   sshSessionDead: false,
+  sshOpenCids: [],
+  sshDeadCids: [],
   sshFollowDir: null,
   sshFollowEnabled: true,
 
@@ -1427,10 +1511,15 @@ export function initListeners(): () => void {
     // v2.1.2 ③：无条件作废该连接的就绪门（后台连接关合同样不得悬空注入）
     cancelSshBootstrap(e.connectionId)
     const s = useAppStore.getState()
+    // v2.1.5：死态按连接记（后台台的死亡不污染当前台）；台仍留在已开清单——
+    // 切回能看到最后画面 + 冻结层「重开会话」（重开走 openSshConsole 同 cid 分支）
+    const dead = [...new Set([...s.sshDeadCids, e.connectionId])]
+    discardSshData(e.connectionId)
     if (s.sshConsoleCid === e.connectionId) {
       // 会话死但台还开着——留台显示「会话已结束/重开」态，不清 sshConsoleCid
-      discardSshData(e.connectionId)
-      useAppStore.setState({ sshSessionDead: true })
+      useAppStore.setState({ sshSessionDead: true, sshDeadCids: dead })
+    } else {
+      useAppStore.setState({ sshDeadCids: dead })
     }
   })
   return () => {

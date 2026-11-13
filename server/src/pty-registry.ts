@@ -176,7 +176,7 @@ export class TaskRegistry {
     entry.sinks.add(sink)
     entry.lifecycleSinks.add(sink)
     entry.freshBytes = 0
-    const tail = entry.ring.tail(REPLAY_MAX_BYTES)
+    const tail = entry.ring.tailAligned(REPLAY_MAX_BYTES) // v2.1.4 边界对齐（防 mid-escape 乱码）
     if (tail !== '') {
       sink.onData(taskId, tail)
       return

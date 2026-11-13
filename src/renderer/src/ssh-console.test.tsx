@@ -26,6 +26,10 @@ beforeEach(() => {
     sshConsoleCid: null,
     sshActive: false,
     sshSessionDead: false,
+    // v2.1.5：已开台台账/死态按连接记——用例间必须清（否则上例的台被当成本例已开）
+    sshOpenCids: [],
+    sshDeadCids: [],
+    sshFollowDir: null,
     reviewState: null,
     reviewActive: false,
     reviewHint: null,
@@ -108,12 +112,23 @@ describe('v2.1.0 数据流与状态', () => {
     await waitFor(() =>
       expect(document.querySelector('.ssh-term-host')?.textContent).toContain('hello-ssh')
     )
-    // 换连接：关旧 + 开新
+    // v2.1.5（用户需求）：换连接=换到该连接自己的台——旧台不关（回滚/会话留存）
     const select = screen.getByRole('combobox', { name: '目标连接' }) as HTMLSelectElement
     fireEvent.change(select, { target: { value: 'c2' } })
     await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c2'))
-    expect(api.closeSshShell).toHaveBeenCalledWith('c1')
     expect(api.openSshShell).toHaveBeenCalledWith('c2')
+    expect(api.closeSshShell).not.toHaveBeenCalledWith('c1')
+    expect(useAppStore.getState().sshOpenCids).toEqual(['c1', 'c2'])
+    // 切回 c1：不再 open（原台原样恢复）；两台的终端实例都在
+    fireEvent.change(select, { target: { value: 'c1' } })
+    await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c1'))
+    expect(vi.mocked(api.openSshShell).mock.calls.filter((c) => c[0] === 'c1')).toHaveLength(1)
+    expect(document.querySelector('[data-testid="ssh-term-pane-c1"][data-active="true"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="ssh-term-pane-c2"]')).not.toBeNull()
+    // 回滚留存：切走再切回，c1 台的内容还在（不是新窗口）
+    expect(document.querySelector('[data-testid="ssh-term-pane-c1"]')?.textContent).toContain(
+      'hello-ssh'
+    )
   })
 
   it('会话结束（SshClosed）→ 冻结层「会话已结束/重开」→ 重开按钮再 open；断连态显示重连', async () => {
@@ -230,6 +245,14 @@ describe('v2.1.1 目录跟随与任务上下文直达', () => {
     )
     const boots = cdWrites()
     expect(boots[0]![1]).toContain("cd '/home/dev/r'")
+    // v2.1.4 回归（用户实测：整行不执行、界面停在 `>` 续行）：注入行必须整串
+    // 可被 shell 解析——hook 整体单引号包裹、内部只有双引号，不得出现 `'\''`
+    //（该转义只在单引号串内成立；此前把 hook 一并过 q() 落在非引号上下文，
+    // bash 当成未闭合引号）
+    expect(boots[0]![1]).toBe(
+      `cd '/home/dev/r'; PROMPT_COMMAND='printf "\\033]7;file://%s%s\\007" "$HOSTNAME" "$PWD"'`
+    )
+    expect(boots[0]![1]).not.toContain(`'\\''`)
     expect(boots[0]![1]).toContain('\\033]7;') // 字面反斜杠+033 文本
     expect(boots[0]![1]).not.toContain('\u001b') // 未嵌原始 ESC 字节
     expect(boots[0]![1].endsWith('\r')).toBe(false) // 文本体不带回车（第三步单发）
@@ -336,7 +359,7 @@ describe('v2.1.2 ③ bootstrap 就绪门（修「打开即缓冲区打印、需 
     expect(bootWrites()).toHaveLength(1)
   })
 
-  it('换连接取消：A 首拍后立即切 B → 推进定时器，A 的 bootstrap 从未发出', async () => {
+  it('换连接不撤其他台：A 首拍后切 B → A 的就绪门仍在，注入只落 A 的台（不串 B）', async () => {
     const api = await renderApp()
     fireEvent.click(screen.getByTestId('btn-ssh-rail'))
     await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c1'))
@@ -349,23 +372,46 @@ describe('v2.1.2 ③ bootstrap 就绪门（修「打开即缓冲区打印、需 
     expect(
       vi.mocked(api.writeSshShell).mock.calls.some((c) => c[0] === 'c1')
     ).toBe(false)
-    // 立即换 B：A 的就绪门应被取消
+    // 切 B：v2.1.5 每连接一台——A 的会话与就绪门都留着（不再「关旧开新」）
     const select = screen.getByRole('combobox', { name: '目标连接' }) as HTMLSelectElement
     await act(async () => {
       fireEvent.change(select, { target: { value: 'c2' } })
     })
     expect(useAppStore.getState().sshConsoleCid).toBe('c2')
     await act(async () => {}) // openSshShell(B) 已决、B 门已挂
-    expect(api.closeSshShell).toHaveBeenCalledWith('c1')
-    // 推进 10s：A 的 400ms 静默与 8s 兜底若未取消必现形——断言 A 从未注入
+    expect(api.closeSshShell).not.toHaveBeenCalledWith('c1')
+    // 推进 10s：A 的 8s 兜底照常触发——注入落在 A 自己的台；B（rail 裸进，无目录意图）从不注入
     act(() => {
       vi.advanceTimersByTime(10_000)
     })
     expect(
-      vi.mocked(api.writeSshShell).mock.calls.some(
+      vi.mocked(api.writeSshShell).mock.calls.filter(
         (c) => c[0] === 'c1' && c[1].includes('PROMPT_COMMAND')
       )
+    ).toHaveLength(1)
+    expect(
+      vi.mocked(api.writeSshShell).mock.calls.some(
+        (c) => c[0] === 'c2' && c[1].includes('PROMPT_COMMAND')
+      )
     ).toBe(false)
+  })
+})
+
+describe('v2.1.5 注入只服务「定向打开」（用户指令：不是从开发窗口来就不注入）', () => {
+  it('Ctrl+Shift+S 裸进 SSH 终端（无任务/项目上下文）→ 从不写 shell（无 cd、无 PROMPT_COMMAND）', async () => {
+    const api = await renderApp()
+    fireEvent.keyDown(window, { key: 'S', ctrlKey: true, shiftKey: true })
+    await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c1'))
+    await act(async () => {})
+    const emit = vi.mocked(api.onSshData).mock.calls[0]?.[0]
+    expect(emit).toBeDefined()
+    // 提示符拍也不该触发任何注入
+    act(() => emit!({ connectionId: 'c1', data: '\r\nuser@vm:~$ ' }))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 700))
+    })
+    expect(vi.mocked(api.writeSshShell).mock.calls).toHaveLength(0)
+    expect(useAppStore.getState().sshFollowDir).toBe(null)
   })
 })
 
