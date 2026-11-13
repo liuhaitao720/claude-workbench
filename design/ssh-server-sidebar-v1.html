@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>v2.1.2 设计稿 · SSH/开发 两视图分治（待确认）</title>
+<style>
+  :root {
+    --bg-app: #1e1f24; --bg-panel: #191a1f; --bg-dialog: #23242b; --bg-input: #14151a;
+    --bg-hover: #23242b; --bg-sel: #2b2d36; --bg-active-row: #272a35;
+    --text-max: #fff; --text-1: #ececf1; --text-2: #d7d7db; --text-3: #9a9ca6; --text-4: #9496a0;
+    --border-1: #33353d; --border-2: #26272e; --border-3: #3a3c45; --border-soft: #2b2d36;
+    --accent: #3d76b3; --accent-bg: #2f5f8f; --ok: #6ad08c; --ok-bg: #1f3d2b; --ok-border: #2c5a3d;
+    --ok-dot: #3fb950; --warn-text: #e3c66b; --warn-bg: #3a2f16; --warn-border: #5d4b1e;
+    --danger-text: #f0b0b0; --danger-bg: #4a2222; --btn-danger-bg: #6e2b2b; --btn-danger-border: #8f3a3a;
+    --dot-busy: #d29922; --dot-await: #f85149; --dot-gray: #6b6d76;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #121317; color: var(--text-1); font: 13px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; padding: 28px 20px 60px; }
+  .doc { max-width: 1160px; margin: 0 auto; }
+  .doc-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 4px; flex-wrap: wrap; }
+  .doc-head h1 { font-size: 19px; color: var(--text-max); }
+  .tag { font-size: 12px; color: var(--warn-text); border: 1px solid var(--warn-border); background: var(--warn-bg); border-radius: 4px; padding: 1px 8px; }
+  .doc-sub { color: var(--text-3); font-size: 12.5px; margin-bottom: 20px; max-width: 900px; }
+  .sec-title { font-size: 15px; color: var(--text-max); margin: 30px 0 4px; display: flex; align-items: center; gap: 8px; }
+  .sec-title .no { background: var(--accent-bg); color: #fff; border-radius: 50%; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; font-size: 12.5px; flex-shrink: 0; }
+  .sec-sub { color: var(--text-4); font-size: 12px; margin-bottom: 12px; }
+
+  /* ══ 应用画布（页面1/3 共用） ══ */
+  .app { display: flex; width: 1100px; max-width: 100%; height: 640px; background: var(--bg-app); border: 1px solid var(--border-3); border-radius: 8px; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,.5); position: relative; }
+  .app.shrink { height: 560px; }
+
+  /* 侧栏外壳 */
+  .sidebar { width: 242px; background: var(--bg-panel); border-right: 1px solid var(--border-2); display: flex; flex-direction: column; flex-shrink: 0; position: relative; }
+  .sb-header { padding: 11px 12px 6px; display: flex; align-items: center; gap: 8px; }
+  .sb-header h2 { font-size: 13px; color: var(--text-1); font-weight: 600; flex: 1; }
+  .sb-header .ver { font-size: 10.5px; color: var(--text-4); }
+  .icon-btn { width: 24px; height: 24px; border: 1px solid var(--border-1); background: transparent; color: var(--text-3); border-radius: 5px; font-size: 12.5px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+  .icon-btn:hover { background: var(--bg-hover); color: var(--text-1); }
+  .icon-btn.plus { color: var(--ok); border-color: var(--ok-border); }
+  .sb-search { margin: 4px 10px 8px; }
+  .sb-search input { width: 100%; background: var(--bg-input); border: 1px solid var(--border-1); color: var(--text-2); border-radius: 5px; padding: 5px 9px; font-size: 12px; }
+  .sb-search input::placeholder { color: var(--text-4); }
+
+  /* 服务器行 */
+  .group-title { font-size: 11px; color: var(--text-4); padding: 9px 13px 4px; letter-spacing: .4px; display: flex; align-items: center; gap: 6px; }
+  .group-title .cnt { color: var(--dot-gray); font-weight: 400; }
+  .group-title .hint { margin-left: auto; font-size: 10px; color: var(--dot-gray); max-width: 108px; text-align: right; line-height: 1.35; }
+  .srv-list { display: flex; flex-direction: column; }
+  .srv-row { display: flex; align-items: center; gap: 9px; padding: 8px 13px 8px 15px; cursor: pointer; position: relative; min-height: 44px; }
+  .srv-row:hover { background: var(--bg-hover); }
+  .srv-row.active { background: var(--bg-active-row); box-shadow: inset 2.5px 0 0 var(--accent); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .dot.on { background: var(--ok-dot); box-shadow: 0 0 5px rgba(63,185,80,.55); }
+  .dot.off { background: var(--dot-gray); }
+  .dot.busy { background: var(--dot-busy); }
+  .srv-main { flex: 1; min-width: 0; }
+  .srv-name { font-size: 12.5px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srv-row.active .srv-name { color: #fff; font-weight: 600; }
+  .srv-addr { font-size: 10.5px; color: var(--text-4); font-family: Consolas, "Cascadia Mono", monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kind-tag { font-size: 9px; color: var(--text-4); border: 1px solid var(--border-1); border-radius: 3px; padding: 0 3.5px; margin-left: 5px; vertical-align: 1px; }
+  .more-btn { opacity: 0; border: none; background: transparent; color: var(--text-3); cursor: pointer; font-size: 14px; font-weight: 700; padding: 4px 5px; border-radius: 4px; }
+  .srv-row:hover .more-btn, .srv-row.active .more-btn { opacity: 1; }
+  .more-btn:hover { background: var(--bg-sel); color: var(--text-1); }
+  .sb-footer-tip { margin: auto 14px 12px; font-size: 11px; color: var(--text-4); border: 1px dashed var(--border-1); border-radius: 6px; padding: 8px 9px; text-align: center; line-height: 1.5; }
+
+  /* ⋯ 菜单浮层 */
+  .ctx-menu { position: absolute; z-index: 30; background: var(--bg-dialog); border: 1px solid var(--border-3); border-radius: 7px; box-shadow: 0 8px 24px rgba(0,0,0,.55); padding: 4px; width: 132px; }
+  .ctx-menu.m1 { left: 152px; top: 152px; }
+  .ctx-menu.m2 { left: 152px; top: 392px; }
+  .ctx-menu .mi { padding: 6px 10px; font-size: 12px; color: var(--text-2); border-radius: 5px; cursor: pointer; }
+  .ctx-menu .mi:hover { background: var(--bg-hover); }
+  .ctx-menu .mi.danger { color: var(--danger-text); }
+  .ctx-menu .mi.danger:hover { background: var(--danger-bg); }
+  .ctx-menu .mi.sep { border-top: 1px solid var(--border-soft); margin: 3px 4px; padding: 0; cursor: default; }
+  .ctx-menu .mi.head { font-size: 10.5px; color: var(--text-4); cursor: default; padding: 4px 10px 2px; }
+  .ctx-menu .mi.head:hover { background: transparent; }
+
+  /* 主区 */
+  .main-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .tabbar { display: flex; align-items: center; background: var(--bg-panel); border-bottom: 1px solid var(--border-2); height: 36px; padding: 0 8px; gap: 2px; }
+  .tab { font-size: 12px; color: var(--text-3); padding: 6px 13px; border-radius: 7px 7px 0 0; cursor: pointer; display: flex; gap: 7px; align-items: center; }
+  .tab:hover { color: var(--text-1); }
+  .tab.active { background: var(--bg-app); color: var(--text-1); box-shadow: inset 0 -2px 0 var(--accent); }
+  .tab .x { opacity: .45; font-size: 11px; }
+
+  .ssh-toolbar { display: flex; align-items: center; gap: 10px; padding: 7px 13px; border-bottom: 1px solid var(--border-2); background: var(--bg-panel); flex-wrap: wrap; }
+  .ssh-toolbar .t { font-weight: 700; color: var(--text-2); font-size: 12px; letter-spacing: .5px; }
+  .conn-sel { background: var(--bg-input); border: 1px solid var(--border-1); color: var(--text-1); font-size: 12px; border-radius: 5px; padding: 4px 8px; }
+  .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 11.5px; color: var(--text-3); }
+  .kind-badge { font-size: 10px; color: var(--ok); border: 1px solid var(--ok-border); background: var(--ok-bg); border-radius: 3px; padding: 0 5px; }
+  .follow { font-size: 11.5px; color: var(--text-3); display: flex; gap: 5px; align-items: center; cursor: pointer; }
+  .pill { font-size: 11px; border-radius: 999px; padding: 1.5px 11px; }
+  .pill.on { color: var(--ok); background: var(--ok-bg); border: 1px solid var(--ok-border); }
+
+  .term { flex: 1; background: #101116; padding: 11px 15px; font: 12px/1.6 Consolas, "Cascadia Mono", monospace; color: #cfd3dc; overflow: hidden; }
+  .term .banner { color: #78818f; }
+  .term .p { color: #6ad08c; }
+  .term .cmd { color: #ececf1; }
+  .term .caret { color: #6ad08c; }
+
+  .splitter { height: 5px; background: var(--border-2); cursor: row-resize; }
+  .files { height: 170px; background: var(--bg-panel); border-top: 1px solid var(--border-1); display: flex; flex-direction: column; flex-shrink: 0; }
+  .files-head { display: flex; gap: 9px; align-items: center; padding: 7px 13px; border-bottom: 1px solid var(--border-2); font-size: 12px; color: var(--text-2); }
+  .files-head .path { font-family: Consolas, monospace; color: var(--text-3); font-size: 11.5px; }
+  .files-head .sync { margin-left: auto; color: var(--text-4); font-size: 11px; }
+  .file-row { display: flex; gap: 8px; padding: 4px 15px; font-size: 12px; color: var(--text-2); font-family: Consolas, monospace; }
+  .file-row:hover { background: var(--bg-hover); }
+  .file-row.sel { background: var(--bg-sel); }
+
+  /* 开发视图侧栏元素（页面3 用） */
+  .scope-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 10px 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-2); border: 1px solid var(--border-1); background: var(--bg-input); border-radius: 999px; padding: 2.5px 10px; cursor: pointer; }
+  .chip:hover { border-color: var(--border-3); }
+  .chip.on { border-color: var(--accent); background: var(--accent-bg); color: #fff; }
+  .chip .n { color: var(--text-4); font-size: 10.5px; }
+  .chip.on .n { color: #cfe0f2; }
+  .chip .kbadge { font-size: 9px; color: var(--ok); border: 1px solid var(--ok-border); border-radius: 3px; padding: 0 3.5px; }
+  .tree { padding: 2px 8px; font-size: 12.5px; color: var(--text-2); overflow: hidden; }
+  .tree .node { display: flex; align-items: center; gap: 6px; padding: 4px 7px; border-radius: 5px; cursor: pointer; }
+  .tree .node:hover { background: var(--bg-hover); }
+  .tree .caret2 { color: var(--text-4); font-size: 10px; width: 10px; }
+  .tree .grp { color: var(--text-3); font-size: 11.5px; }
+  .tree .proj { padding-left: 26px; }
+  .tree .badge-0 { font-size: 10px; color: var(--dot-gray); margin-left: auto; }
+  .removed { position: relative; }
+  .removed::after { content: ""; position: absolute; left: 5px; right: 5px; top: 50%; border-top: 1.5px solid var(--dot-await); }
+  .tag-no { font-size: 10px; color: var(--dot-await); border: 1px solid #6b2b2b; border-radius: 3px; padding: 0 4px; margin-left: 4px; white-space: nowrap; }
+
+  /* 右缘竖条 */
+  .rail { position: absolute; right: -1px; top: 41%; display: flex; flex-direction: column; gap: 6px; z-index: 20; }
+  .rail button { width: 21px; height: 46px; background: var(--bg-dialog); border: 1px solid var(--border-1); border-left: none; color: var(--text-3); font-size: 10px; writing-mode: vertical-lr; letter-spacing: 2px; border-radius: 6px 0 0 6px; cursor: pointer; }
+
+  /* 标注 */
+  .callout { position: absolute; z-index: 40; display: flex; gap: 7px; align-items: flex-start; max-width: 250px; }
+  .callout .b { min-width: 19px; height: 19px; border-radius: 50%; background: var(--dot-busy); color: #14151a; font-weight: 700; font-size: 11.5px; display: flex; align-items: center; justify-content: center; margin-top: 1px; flex-shrink: 0; }
+  .callout .txt { background: rgba(210,153,34,.10); border: 1px solid rgba(210,153,34,.45); border-radius: 7px; padding: 6px 10px; font-size: 11.5px; color: #e8d9a8; line-height: 1.55; }
+  .callout .txt b { color: #f4e3b0; }
+
+  /* ══ 页面2：对话框 ══ */
+  .modal-stage { width: 1100px; max-width: 100%; height: 560px; background: var(--bg-app); border: 1px solid var(--border-3); border-radius: 8px; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,.5); position: relative; display: flex; align-items: center; justify-content: center; }
+  .modal-stage::before { content: "SSH 视图（背景压暗）"; position: absolute; top: 10px; left: 14px; font-size: 11px; color: var(--text-4); }
+  .modal-stage .veil { position: absolute; inset: 0; background: rgba(0,0,0,.55); }
+  .modal { position: relative; width: 430px; background: var(--bg-dialog); border: 1px solid var(--border-3); border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,.55); padding: 0 0 16px; }
+  .modal-head { display: flex; align-items: center; gap: 9px; padding: 13px 16px 10px; border-bottom: 1px solid var(--border-2); margin-bottom: 4px; }
+  .modal-head h3 { font-size: 14px; color: var(--text-max); flex: 1; }
+  .modal-head .kind-badge { font-size: 10.5px; }
+  .modal-head .x { color: var(--text-4); cursor: pointer; font-size: 15px; }
+  .fgroup { margin: 10px 16px 4px; border-left: 2.5px solid var(--accent-bg); padding-left: 10px; }
+  .fgroup .gt { font-size: 11px; color: var(--text-4); letter-spacing: .5px; margin-bottom: 6px; }
+  .frow { display: flex; gap: 10px; margin-bottom: 9px; align-items: flex-start; flex-wrap: wrap; }
+  .frow .fw { flex: 1; min-width: 120px; }
+  .frow .fw.slim { flex: 0 0 84px; min-width: 84px; }
+  label.fl { display: block; font-size: 11.5px; color: var(--text-3); margin-bottom: 3px; }
+  label.fl .req { color: var(--dot-await); }
+  input.fi { width: 100%; background: var(--bg-input); border: 1px solid var(--border-1); color: var(--text-1); border-radius: 5px; padding: 5.5px 9px; font-size: 12.5px; font-family: inherit; }
+  input.fi:focus { outline: none; border-color: var(--accent); }
+  input.fi.bad { border-color: var(--dot-await); }
+  .ferr { font-size: 10.5px; color: var(--danger-text); margin-top: 3px; display: flex; gap: 4px; align-items: center; }
+  .radio-row { display: flex; gap: 16px; margin-bottom: 9px; font-size: 12.5px; color: var(--text-2); }
+  .radio-row label { display: flex; gap: 5px; align-items: center; cursor: pointer; }
+  .pw-wrap { position: relative; }
+  .pw-wrap input { padding-right: 34px; }
+  .pw-eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-4); cursor: pointer; font-size: 13px; }
+  .test-row { display: flex; align-items: center; gap: 10px; margin: 12px 16px 4px; }
+  .btn { border-radius: 6px; border: 1px solid var(--border-1); background: var(--bg-sel); color: var(--text-1); font-size: 12.5px; padding: 6px 16px; cursor: pointer; }
+  .btn:hover { background: var(--bg-sel-hover, #34363f); }
+  .btn.primary { background: var(--accent-bg); border-color: var(--accent); color: #fff; }
+  .btn.small { font-size: 12px; padding: 4.5px 13px; }
+  .test-ok { font-size: 12px; color: var(--ok); }
+  .test-ok .ms { color: var(--text-4); font-size: 11px; }
+  .modal-foot { display: flex; justify-content: flex-end; gap: 9px; margin: 14px 16px 0; }
+
+  /* ══ 页面4：设置 ══ */
+  .settings-stage { width: 1100px; max-width: 100%; height: 520px; background: var(--bg-app); border: 1px solid var(--border-3); border-radius: 8px; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,.5); position: relative; display: flex; flex-direction: column; }
+  .scope-bar { display: flex; align-items: center; gap: 6px; padding: 10px 14px; background: var(--bg-panel); border-bottom: 1px solid var(--border-2); flex-wrap: wrap; }
+  .scope-tab { display: inline-flex; flex-direction: column; gap: 1px; border: 1px solid var(--border-1); background: var(--bg-input); border-radius: 7px; padding: 4px 14px; font-size: 12px; color: var(--text-2); cursor: pointer; }
+  .scope-tab .sub { font-size: 10px; color: var(--text-4); font-family: Consolas, monospace; }
+  .scope-tab.on { border-color: var(--accent); background: var(--accent-bg); color: #fff; }
+  .scope-tab.on .sub { color: #cfe0f2; }
+  .scope-tab.add { padding: 4px 11px; color: var(--ok); }
+  .scope-src { margin-left: auto; font-size: 11px; color: var(--text-4); }
+  .st-body { flex: 1; display: flex; min-height: 0; }
+  .st-nav { width: 168px; border-right: 1px solid var(--border-2); background: var(--bg-panel); padding: 10px 7px; display: flex; flex-direction: column; gap: 2px; }
+  .st-nav .ni { font-size: 12.5px; color: var(--text-3); padding: 6.5px 11px; border-radius: 6px; cursor: pointer; }
+  .st-nav .ni:hover { background: var(--bg-hover); }
+  .st-nav .ni.on { background: var(--bg-sel); color: var(--text-1); box-shadow: inset 2px 0 0 var(--accent); }
+  .st-main { flex: 1; padding: 14px 18px; overflow: hidden; }
+  .st-main h3 { font-size: 14px; color: var(--text-max); display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
+  .st-main h3 .kind-badge { font-size: 10px; }
+  .st-main h3 .removed-radio { font-size: 10.5px; color: var(--danger-text); text-decoration: line-through; border: 1px dashed #6b2b2b; border-radius: 4px; padding: 1px 7px; font-weight: 400; }
+  .st-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; max-width: 560px; }
+
+  /* ══ 对比卡（页面3 辅助） ══ */
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px; }
+  @media (max-width: 900px) { .compare { grid-template-columns: 1fr; } }
+  .cmp-card { background: var(--bg-app); border: 1px solid var(--border-1); border-radius: 8px; padding: 13px 15px; }
+  .cmp-card h4 { font-size: 12.5px; margin-bottom: 10px; color: var(--text-2); }
+  .cmp-card h4 .st { font-size: 10.5px; padding: 1px 7px; border-radius: 4px; margin-left: 6px; font-weight: 400; }
+  .st.old { color: var(--dot-await); border: 1px solid #6b2b2b; }
+  .st.new { color: var(--ok); border: 1px solid var(--ok-border); }
+  .cmp-note { margin-top: 10px; font-size: 11.5px; color: var(--text-4); line-height: 1.65; }
+  .cmp-card .chip { margin: 0 5px 6px 0; }
+
+  /* ══ 时序图 ══ */
+  .timeline { background: var(--bg-app); border: 1px solid var(--border-1); border-radius: 8px; padding: 14px 16px; margin-top: 10px; }
+  .tl-row { display: flex; align-items: center; margin: 10px 0; gap: 0; }
+  .tl-label { width: 46px; font-size: 11.5px; color: var(--text-3); flex-shrink: 0; }
+  .tl-track { flex: 1; display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+  .seg { border-radius: 5px; padding: 4.5px 9px; font-size: 11.5px; white-space: nowrap; }
+  .seg.a { background: #2b2d36; color: var(--text-3); }
+  .seg.b { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok-border); }
+  .seg.c { background: var(--danger-bg); color: var(--danger-text); border: 1px solid #6b2b2b; }
+  .arrow { color: var(--dot-gray); font-size: 11px; padding: 0 1px; }
+  .legend { font-size: 11px; color: var(--text-4); margin-top: 8px; line-height: 1.65; }
+</style>
+</head>
+<body>
+<div class="doc">
+  <div class="doc-head">
+    <h1>v2.1.2 页面设计稿 · SSH / 开发 两视图分治</h1>
+    <span class="tag">待确认 · design/ssh-server-sidebar-v1.html</span>
+  </div>
+  <div class="doc-sub">
+    <b>SSH 视图</b>：左侧=所有保存的 SSH 连接（纯 SSH / 开发服务器两组分列，零项目元素），新建纯 SSH 仅在此视图（专用对话框）。
+    <b>开发视图</b>：与现状相同，但作用域 chips、项目树、设置作用域条三处均不显示纯 SSH 连接；连接表单 kind 单选移除（恒开发）。
+    深色主题取自应用真实 CSS 变量。可悬停交互（服务器行 / ⋯ 按钮 / 标签）。
+  </div>
+
+  <!-- ══════════ 页面 1：SSH 视图 ══════════ -->
+  <div class="sec-title"><span class="no">1</span>SSH 视图 —— 左侧＝全部 SSH 连接（两组分列，零项目元素）</div>
+  <div class="sec-sub">进入 SSH 终端 / 点击 SSH 虚拟 tab 时自动切换到本视图；回到任务·审查视图自动还原开发视图侧栏</div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sb-header">
+        <h2>SSH 服务器</h2>
+        <button class="icon-btn plus" title="新建纯 SSH 连接（kind 固定 ssh，本视图专属）">＋</button>
+        <button class="icon-btn" title="设置">⚙</button>
+      </div>
+      <div class="sb-search"><input placeholder="搜索服务器…" aria-label="搜索服务器"></div>
+
+      <div class="group-title">纯 SSH 连接 <span class="cnt">×2</span></div>
+      <div class="srv-list">
+        <div class="srv-row active" aria-current="true">
+          <span class="dot on" title="已连接"></span>
+          <div class="srv-main">
+            <div class="srv-name">跳板机</div>
+            <div class="srv-addr">root@10.0.0.5:22</div>
+          </div>
+          <button class="more-btn" title="更多操作">⋯</button>
+        </div>
+        <div class="srv-row">
+          <span class="dot off" title="离线"></span>
+          <div class="srv-main">
+            <div class="srv-name">备用机</div>
+            <div class="srv-addr">admin@10.0.0.6:22</div>
+          </div>
+          <button class="more-btn">⋯</button>
+        </div>
+      </div>
+
+      <div class="group-title">开发服务器 <span class="cnt">×2</span><span class="hint">承载远程项目<br>亦可开纯终端</span></div>
+      <div class="srv-list">
+        <div class="srv-row">
+          <span class="dot on" title="已连接"></span>
+          <div class="srv-main">
+            <div class="srv-name">dev-ubuntu<span class="kind-tag">DEV</span></div>
+            <div class="srv-addr">dev@192.168.1.20:22</div>
+          </div>
+          <button class="more-btn">⋯</button>
+        </div>
+        <div class="srv-row">
+          <span class="dot busy" title="连接中"></span>
+          <div class="srv-main">
+            <div class="srv-name">hk-server<span class="kind-tag">DEV</span></div>
+            <div class="srv-addr">ubuntu@43.10.2.7:22</div>
+          </div>
+          <button class="more-btn">⋯</button>
+        </div>
+      </div>
+
+      <div class="sb-footer-tip">点击服务器即在右侧打开它的终端<br>离线服务器会自动连接</div>
+
+      <!-- ⋯ 菜单：纯 SSH 行 -->
+      <div class="ctx-menu m1">
+        <div class="mi head">跳板机 · 纯 SSH</div>
+        <div class="mi">打开终端</div>
+        <div class="mi">断开</div>
+        <div class="mi">编辑…</div>
+        <div class="mi sep"></div>
+        <div class="mi danger">删除</div>
+      </div>
+      <!-- ⋯ 菜单：开发服务器行（编辑进设置·连接与自检） -->
+      <div class="ctx-menu m2">
+        <div class="mi head">dev-ubuntu · 开发</div>
+        <div class="mi">打开终端</div>
+        <div class="mi">断开</div>
+        <div class="mi">编辑…（设置·连接与自检）</div>
+        <div class="mi sep"></div>
+        <div class="mi danger">删除</div>
+      </div>
+    </aside>
+
+    <div class="main-area">
+      <div class="tabbar">
+        <div class="tab">🐛 修复登录超时 <span class="x">×</span></div>
+        <div class="tab">◆ 审查 12</div>
+        <div class="tab active">▣ SSH · 跳板机 <span class="x">×</span></div>
+      </div>
+      <div class="ssh-toolbar">
+        <span class="t">SSH</span>
+        <select class="conn-sel"><option>跳板机 (root@10.0.0.5) · 纯 SSH</option><option>dev-ubuntu (dev@192.168.1.20) · 开发</option></select>
+        <span class="mono">root@10.0.0.5:22</span>
+        <span class="kind-badge">SSH</span>
+        <label class="follow"><input type="checkbox" checked> 跟随目录</label>
+        <span class="pill on">connected</span>
+      </div>
+      <div class="term">
+<div class="banner">Welcome to Ubuntu 22.04.3 LTS (GNU/Linux 5.15.0-84 x86_64)
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+Last login: Fri Nov 13 09:21:07 2026 from 192.168.1.8</div>
+<span class="p">root@jump:~#</span> <span class="cmd">cd '/var/www/app'</span>
+<span class="p">root@jump:/var/www/app#</span> <span class="caret">▊</span>
+      </div>
+      <div class="splitter" title="拖拽调整上下比例 · 双击复位"></div>
+      <div class="files">
+        <div class="files-head">远程文件 <span class="path">/var/www/app</span> <span class="sync">跟随目录：OSC 7 自动同步 ↑</span></div>
+        <div class="file-row sel">📁 src/</div>
+        <div class="file-row">📁 deploy/</div>
+        <div class="file-row">📄 package.json</div>
+        <div class="file-row">📄 README.md</div>
+      </div>
+    </div>
+
+    <div class="callout" style="left:300px; top:300px;">
+      <span class="b">①</span><span class="txt"><b>左侧=纯连接列表</b>：两组分列、无项目树/最近任务/作用域 chips。＋ 仅新建纯 SSH；开发服务器的编辑仍走设置（连接与自检）。</span>
+    </div>
+    <div class="callout" style="left:700px; top:104px;">
+      <span class="b">③</span><span class="txt"><b>首屏修复</b>：通道打开后不再立即注入命令，等 shell 输出静默（MOTD 流完 / 出现提示符）再执行 <b>cd</b>——无错乱回显、无需 Ctrl+C。</span>
+    </div>
+    <div class="callout" style="left:690px; top:240px;">
+      <span class="b">④</span><span class="txt">目录跟随不变：PROMPT_COMMAND 发 OSC 7，文件面板随 cd 自动换目录（下方远程文件已位于 /var/www/app）。</span>
+    </div>
+  </div>
+
+  <!-- ══════════ 页面 2：新建/编辑纯 SSH 连接对话框 ══════════ -->
+  <div class="sec-title"><span class="no">2</span>新建 / 编辑纯 SSH 连接（SSH 视图专属对话框）</div>
+  <div class="sec-sub">＋ 与行菜单「编辑…」均弹本框；kind 固定 ssh（徽标展示，无选择器）；首次连接仍走全局 TOFU 主机指纹确认</div>
+  <div class="modal-stage">
+    <div class="veil"></div>
+    <div class="modal">
+      <div class="modal-head">
+        <h3>新建 SSH 连接</h3>
+        <span class="kind-badge" title="本对话框只创建纯 SSH 连接">SSH</span>
+        <span class="x" title="关闭">✕</span>
+      </div>
+
+      <div class="fgroup">
+        <div class="gt">连接</div>
+        <div class="frow">
+          <div class="fw">
+            <label class="fl">名称 <span class="req">*</span></label>
+            <input class="fi" value="跳板机">
+          </div>
+        </div>
+        <div class="frow">
+          <div class="fw">
+            <label class="fl">主机 <span class="req">*</span></label>
+            <input class="fi bad" value="">
+            <div class="ferr">⚠ 主机不能为空 <span style="color:var(--text-4)">(失焦后显示)</span></div>
+          </div>
+          <div class="fw slim">
+            <label class="fl">端口 <span class="req">*</span></label>
+            <input class="fi" value="22">
+          </div>
+        </div>
+        <div class="frow">
+          <div class="fw">
+            <label class="fl">用户 <span class="req">*</span></label>
+            <input class="fi" value="root">
+          </div>
+        </div>
+      </div>
+
+      <div class="fgroup">
+        <div class="gt">认证</div>
+        <div class="radio-row">
+          <label><input type="radio" name="auth" checked> SSH 密钥</label>
+          <label><input type="radio" name="auth"> 密码</label>
+        </div>
+        <div class="frow">
+          <div class="fw">
+            <label class="fl">密钥路径</label>
+            <input class="fi" value="C:\Users\me\.ssh\id_ed25519">
+          </div>
+        </div>
+        <!-- 密码认证时显示（示意切到密码态的行）：
+        <div class="frow"><div class="fw">
+          <label class="fl">密码</label>
+          <div class="pw-wrap"><input class="fi" type="password" value="123456"><button class="pw-eye">👁</button></div>
+        </div></div> -->
+        <div class="frow">
+          <div class="fw">
+            <label class="fl">密码 <span style="color:var(--text-4);font-weight:400">(选「密码」认证时显示)</span></label>
+            <div class="pw-wrap"><input class="fi" type="password" value="123456"><button class="pw-eye" title="显示/隐藏">👁</button></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="test-row">
+        <button class="btn small">测试连接</button>
+        <span class="test-ok">✔ 可连接 <span class="ms">(218ms)</span></span>
+      </div>
+
+      <div class="modal-foot">
+        <button class="btn">取消</button>
+        <button class="btn primary">保存</button>
+      </div>
+    </div>
+
+    <div class="callout" style="left:16px; top:66px;">
+      <span class="b">②</span><span class="txt"><b>纯 SSH 只在此创建</b>：字段带可见标签、失焦校验（错误贴字段）、密码 👁 切换、测试连接即时反馈。开发视图的设置表单不再有 kind 单选（见页 4）。</span>
+    </div>
+  </div>
+
+  <!-- ══════════ 页面 3：开发视图 ══════════ -->
+  <div class="sec-title"><span class="no">3</span>开发视图 —— 与现状相同，仅剔除纯 SSH（作用域 / 项目树）</div>
+  <div class="sec-sub">纯 SSH 服务器三处全不可见：作用域 chips、项目树服务器分组、设置作用域条（页 4）；旧会话停留在纯 SSH 域自动回退「全部」</div>
+  <div class="app shrink">
+    <aside class="sidebar">
+      <div class="sb-header">
+        <h2>SSH Workbench</h2><span class="ver">v2.1.2</span>
+        <span style="flex:1"></span>
+        <button class="icon-btn" title="设置">⚙</button>
+      </div>
+      <div class="scope-chips">
+        <span class="chip on">全部 <span class="n">6</span></span>
+        <span class="chip">本机 <span class="n">3</span></span>
+        <span class="chip">● dev-ubuntu <span class="n">2</span></span>
+        <span class="chip">● hk-server <span class="n">1</span></span>
+      </div>
+      <div class="sb-search"><input placeholder="📁 打开目录  ·  搜索项目…"></div>
+      <div class="tree">
+        <div class="node"><span class="caret2">▾</span> 📁 claude-workbench</div>
+        <div class="node proj">📋 流水线改造</div>
+        <div class="node grp" style="margin-top:4px"><span class="caret2">▾</span> ● dev-ubuntu</div>
+        <div class="node proj">📁 web-app</div>
+        <div class="node proj">📁 tools</div>
+        <div class="node grp" style="margin-top:4px"><span class="caret2">▾</span> ● hk-server</div>
+        <div class="node proj">📁 api-server</div>
+      </div>
+      <div class="sb-footer-tip">最近：修复登录超时 · claude-workbench · 2 分钟前</div>
+    </aside>
+
+    <div class="main-area">
+      <div class="tabbar">
+        <div class="tab active">🐛 修复登录超时 <span class="x">×</span></div>
+        <div class="tab">◆ 审查 12</div>
+      </div>
+      <div class="term" style="display:flex;align-items:center;justify-content:center;color:var(--text-4);font-family:'Segoe UI','Microsoft YaHei',sans-serif;">
+        任务终端 / 空态提示 —— 现状不变
+      </div>
+    </div>
+
+    <div class="rail"><button title="打开 SSH 视图">SSH终端</button></div>
+
+    <div class="callout" style="left:640px; top:330px;">
+      <span class="b">⑤</span><span class="txt"><b>作用域只留开发侧</b>：chips 与项目树均无「跳板机/备用机」；右缘竖条保留（进入 SSH 视图入口之一，项目菜单「在 SSH 终端中打开」也保留）。</span>
+    </div>
+  </div>
+
+  <div class="compare">
+    <div class="cmp-card">
+      <h4>作用域 chips · 改前 v2.1.1 <span class="st old">现状</span></h4>
+      <div>
+        <span class="chip on">全部 <span class="n">6</span></span>
+        <span class="chip">本机 <span class="n">3</span></span>
+        <span class="chip">● dev-ubuntu <span class="n">2</span></span>
+        <span class="chip removed">● 跳板机 <span class="kbadge">SSH</span> <span class="n">0</span></span><span class="tag-no">移除</span>
+      </div>
+      <div class="cmp-note">纯 SSH 服务器混进作用域（带 SSH 徽标、恒 0 项目）；项目树里同样有空分组。</div>
+    </div>
+    <div class="cmp-card">
+      <h4>作用域 chips · 改后 v2.1.2 <span class="st new">目标</span></h4>
+      <div>
+        <span class="chip on">全部 <span class="n">6</span></span>
+        <span class="chip">本机 <span class="n">3</span></span>
+        <span class="chip">● dev-ubuntu <span class="n">2</span></span>
+        <span class="chip">● hk-server <span class="n">1</span></span>
+      </div>
+      <div class="cmp-note">作用域=项目开发管理：只剩本机 + 开发服务器。历史停留在「跳板机」域的会话自动回退「全部」。</div>
+    </div>
+  </div>
+
+  <!-- ══════════ 页面 4：设置中心 · 连接表单 ══════════ -->
+  <div class="sec-title"><span class="no">4</span>设置中心 · 连接表单 —— kind 单选移除，此处只创建开发连接</div>
+  <div class="sec-sub">设置作用域条无纯 SSH tab；纯 SSH 档案的增/删/改全部在 SSH 视图完成，永不出现在设置中心</div>
+  <div class="settings-stage">
+    <div class="scope-bar">
+      <span class="scope-tab">本机</span>
+      <span class="scope-tab"><span>● dev-ubuntu</span><span class="sub">192.168.1.20</span></span>
+      <span class="scope-tab on"><span>● hk-server</span><span class="sub">43.10.2.7</span></span>
+      <span class="scope-tab add" title="新建开发连接">＋</span>
+      <span class="scope-src">数据源：VM ~/.cwb</span>
+    </div>
+    <div class="st-body">
+      <div class="st-nav">
+        <div class="ni on">连接与自检</div>
+        <div class="ni">claude CLI</div>
+        <div class="ni">cwb-server</div>
+        <div class="ni">远程代理</div>
+        <div class="ni">模型服务</div>
+        <div class="ni">Webhook 通知</div>
+        <div class="ni">Skills</div>
+      </div>
+      <div class="st-main">
+        <h3>连接与自检 <span class="kind-badge">远程开发</span> <span class="removed-radio" title="v2.1.1 的 kind 单选">远程开发 / 纯 SSH 单选（已移除）</span></h3>
+        <div class="st-form">
+          <div><label class="fl">名称 <span class="req" style="color:var(--dot-await)">*</span></label><input class="fi" value="hk-server"></div>
+          <div><label class="fl">用户 <span style="color:var(--dot-await)">*</span></label><input class="fi" value="ubuntu"></div>
+          <div><label class="fl">主机 <span style="color:var(--dot-await)">*</span></label><input class="fi" value="43.10.2.7"></div>
+          <div><label class="fl">端口 <span style="color:var(--dot-await)">*</span></label><input class="fi" value="22"></div>
+          <div style="grid-column:1/-1"><label class="fl">认证</label>
+            <div class="radio-row" style="margin-bottom:0"><label><input type="radio" checked> SSH 密钥</label><label><input type="radio"> 密码</label></div>
+          </div>
+        </div>
+        <div class="cmp-note" style="margin-top:12px">自检清单 / TOFU 指纹 / 代理面板 —— 现状不变；保存恒为开发连接（kind=dev）。</div>
+      </div>
+    </div>
+
+    <div class="callout" style="left:815px; top:150px;">
+      <span class="b">⑥</span><span class="txt"><b>设置只管开发连接</b>：作用域条无纯 SSH tab，＋ 新建=开发连接；表头「远程开发」固定徽标取代原单选。</span>
+    </div>
+  </div>
+
+  <!-- ══════════ 附：时序图 ══════════ -->
+  <div class="sec-title"><span class="no">附</span>打开 SSH 终端的注入时序 —— 修复「缓冲区打印 + 需 Ctrl+C」</div>
+  <div class="timeline">
+    <div class="tl-row">
+      <span class="tl-label">改前</span>
+      <div class="tl-track">
+        <span class="seg a">通道打开</span><span class="arrow">→</span>
+        <span class="seg c">立即敲入 cd+PROMPT_COMMAND（撞上 rc 脚本 / MOTD → 行被吞、回显交错 → 卡住）</span><span class="arrow">→</span>
+        <span class="seg c">用户 Ctrl+C</span>
+      </div>
+    </div>
+    <div class="tl-row">
+      <span class="tl-label">改后</span>
+      <div class="tl-track">
+        <span class="seg a">通道打开</span><span class="arrow">→</span>
+        <span class="seg a">等 shell 就绪（输出静默 400ms / 见到提示符 / 8s 兜底）</span><span class="arrow">→</span>
+        <span class="seg b">干净执行 cd + OSC 7 钩子</span><span class="arrow">→</span>
+        <span class="seg b">提示符直接可用</span>
+      </div>
+    </div>
+    <div class="legend">附带修复：死会话重开时先清残留缓冲与旧终端画面（不再回放上一场尾巴）；换连接 / 关台时取消未发出的注入。</div>
+  </div>
+</div>
+</body>
+</html>
