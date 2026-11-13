@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { initListeners, useAppStore } from './store'
 import { ProjectSidebar } from './components/ProjectSidebar'
+import { SshServerSidebar } from './components/SshServerSidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalPanel, focusActiveTerminal } from './components/TerminalPanel'
 import { SmokeBridge } from './components/SmokeBridge'
@@ -115,6 +116,8 @@ export function App() {
   const projects = useAppStore((s) => s.projects)
   const openTaskIds = useAppStore((s) => s.openTaskIds)
   const settingsOpen = useAppStore((s) => s.settingsOpen)
+  // v2.1.2 ①：SSH 视图分治——sshActive 时左侧整栏换「SSH 服务器」列表（零项目元素）
+  const sshActive = useAppStore((s) => s.sshActive)
   // v2.1.1（用户指令融合）：右侧「远程文件」面板与竖条按钮移除——远程文件只活在
   // SSH 终端下半区；原 filesTargetConn/filesOpen 流废弃（项目菜单直达 openSshConsole）
   const connectionsForFiles = useAppStore((s) => s.connections)
@@ -159,7 +162,7 @@ export function App() {
   return (
     <div className="app">
       <SmokeBridge smoke={isSmokeMode} />
-      <ProjectSidebar />
+      {sshActive ? <SshServerSidebar /> : <ProjectSidebar />}
       <div className="main-area">
         {/* A3：仅零项目且无打开 tab 时显示（主区中部绝对定位，不再占 TabBar 上方布局）；
             有项目无 tab 时由 TerminalPanel 空态接管提示 */}

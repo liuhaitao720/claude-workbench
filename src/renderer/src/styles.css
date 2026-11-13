@@ -3071,3 +3071,200 @@ button {
 .ssh-follow-toggle { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-3); cursor: pointer; }
 .ssh-follow-toggle input { accent-color: var(--accent); }
 .ssh-kind-row { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+
+/* ── v2.1.2 ①：SSH 视图左侧「SSH 服务器列表」（SshServerSidebar） ──────────
+   展开态复用 .sidebar/.sidebar-resizer/.search-input/.row-more 外壳惯例；
+   此处只补自有类：分组头 / 服务器行（视觉对齐 ProjectTree .server-row 与
+   design/ssh-server-sidebar-v1.html 页1）/ 行高亮 / DEV 小角标 / 空态框 /
+   rail 头像状态角标（定位对齐 .rail-server-dot 用法）。颜色全部走既有
+   CSS 变量，深浅两主题自适应。 */
+
+.ssh-srv-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+
+.ssh-srv-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 13px 4px;
+  font-size: 11px;
+  color: var(--text-4);
+  letter-spacing: 0.4px;
+}
+
+.ssh-srv-count {
+  color: var(--dot-gray);
+  font-weight: 400;
+}
+
+.ssh-srv-group-hint {
+  margin-left: auto;
+  max-width: 118px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--dot-gray);
+  text-align: right;
+}
+
+.ssh-srv-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ssh-srv-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  position: relative;
+  padding: 0 8px 0 12px;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.ssh-srv-row:hover {
+  background: var(--bg-hover);
+}
+
+/* 当前行：底色 + 左缘 accent 条（对齐设计稿 .srv-row.active） */
+.ssh-srv-row.active {
+  background: var(--bg-active-row);
+  box-shadow: inset 2.5px 0 0 var(--accent);
+}
+
+/* 状态点（语义对齐 .sb-chip-dot 的 data-state 惯例） */
+.ssh-srv-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--dot-gray);
+}
+
+.ssh-srv-dot[data-state='connected'] {
+  background: var(--ok-dot);
+}
+
+.ssh-srv-dot[data-state='connecting'],
+.ssh-srv-dot[data-state='reconnecting'] {
+  background: var(--dot-busy);
+}
+
+.ssh-srv-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 6px 2px;
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ssh-srv-name {
+  max-width: 100%;
+  font-size: 12.5px;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ssh-srv-row.active .ssh-srv-name {
+  color: var(--text-max);
+  font-weight: 600;
+}
+
+.ssh-srv-addr {
+  max-width: 100%;
+  font-size: 10.5px;
+  color: var(--text-4);
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* DEV 小角标：开发服务器行名后缀（设计稿 .kind-tag） */
+.ssh-srv-kind {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 0 3.5px;
+  border: 1px solid var(--border-1);
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 13px;
+  color: var(--text-4);
+  vertical-align: 1px;
+}
+
+/* ⋯ 按钮沿用 .row-more（hover 露出域在此扩展到本行） */
+.ssh-srv-row:hover .row-more,
+.ssh-srv-row:focus-within .row-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 空态：虚线框提示 + 新建按钮（设计稿 .sb-footer-tip 形态） */
+.ssh-srv-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 12px;
+  padding: 18px 10px;
+  border: 1px dashed var(--border-1);
+  border-radius: 8px;
+  color: var(--text-4);
+  font-size: 11.5px;
+  text-align: center;
+}
+
+/* rail 头像右下状态角标（定位对齐 .rail-server-dot 用法；颜色按连接态） */
+.ssh-rail-dot {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dot-gray);
+  border: 1px solid var(--bg-panel);
+}
+
+.ssh-rail-dot[data-state='connected'] {
+  background: var(--ok-dot);
+}
+
+.ssh-rail-dot[data-state='connecting'],
+.ssh-rail-dot[data-state='reconnecting'] {
+  background: var(--dot-busy);
+}
+
+/* v2.1.2 ①：纯 SSH 连接对话框——标题徽标随标题行排布 + 字段错误贴字段 */
+.ssh-conn-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ssh-conn-title-row .dialog-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.ssh-field-error {
+  margin: 2px 0 0;
+  font-size: 10.5px;
+  color: var(--danger-text);
+}
