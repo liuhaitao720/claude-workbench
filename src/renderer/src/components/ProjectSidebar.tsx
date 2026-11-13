@@ -46,7 +46,9 @@ export function ProjectSidebar() {
   // 列表按域过滤；主操作随域（本机=打开目录 / 服务器=注册远程目录）
   const sidebarScope = useAppStore((s) => s.sidebarScope)
   const setSidebarScope = useAppStore((s) => s.setSidebarScope)
-  const activeScope = normalizeSidebarScope(sidebarScope, connections.map((c) => c.id))
+  // v2.1.2 ②：作用域仅项目开发管理——合法域剔除纯 SSH（旧持久化纯 ssh 域回退 all）
+  const devConnections = connections.filter((c) => c.kind !== 'ssh')
+  const activeScope = normalizeSidebarScope(sidebarScope, devConnections.map((c) => c.id))
   const scopeConn =
     activeScope !== 'all' && activeScope !== 'local'
       ? connections.find((c) => c.id === activeScope)
@@ -311,7 +313,8 @@ export function ProjectSidebar() {
               </span>
             </div>
           </div>
-          {/* v2.0.1 作用域 chips：全部/本机/各服务器（连接状态点+域内计数） */}
+          {/* v2.0.1 作用域 chips：全部/本机/各服务器（连接状态点+域内计数）；
+              v2.1.2 ②：仅开发连接——纯 SSH 不出现（管理在 SSH 视图） */}
           <div className="scope-chips" role="group" aria-label={t('sidebar.scopeAria')} data-testid="sidebar-scope-chips">
             <button
               type="button"
@@ -330,7 +333,7 @@ export function ProjectSidebar() {
               {t('sidebar.scopeLocal')}{' '}
               <span className="n">{projects.filter((p) => p.connectionId === undefined).length}</span>
             </button>
-            {connections.map((c) => {
+            {devConnections.map((c) => {
               const st = useAppStore.getState().connectionStates[c.id]?.state
               const n = projects.filter((p) => p.connectionId === c.id).length
               return (
@@ -343,8 +346,7 @@ export function ProjectSidebar() {
                   onClick={() => setSidebarScope(c.id)}
                 >
                   <span className="sb-chip-dot" data-state={st ?? 'offline'} />
-                  {c.name}
-                  {c.kind === 'ssh' && <span className="sb-chip-kind">SSH</span>} <span className="n">{n}</span>
+                  {c.name} <span className="n">{n}</span>
                 </button>
               )
             })}

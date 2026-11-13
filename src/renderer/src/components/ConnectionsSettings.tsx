@@ -89,6 +89,9 @@ export function ConnectionsSection({
 }) {
   const t = useI18n()
   const connections = useAppStore((s) => s.connections)
+  // v2.1.2 ②：设置中心只管开发连接——档案列表/空态判断同样剔除纯 SSH
+  // （纯 SSH 的增删改全部在 SSH 视图 SshServerSidebar/SshConnectionDialog 完成）
+  const devConnections = connections.filter((c) => c.kind !== 'ssh')
   const connectionStates = useAppStore((s) => s.connectionStates)
   const saveConnectionFlow = useAppStore((s) => s.saveConnectionFlow)
   const removeConnectionFlow = useAppStore((s) => s.removeConnectionFlow)
@@ -102,8 +105,6 @@ export function ConnectionsSection({
     return target !== undefined ? connFormOf(target) : null
   })
   const [formError, setFormError] = useState('')
-  /** v2.1.1 连接类型（'dev' 缺省；编辑预填）——纯 SSH：仅控制台+文件 */
-  const [kind, setKind] = useState<'dev' | 'ssh'>('dev')
   const [savedMsg, setSavedMsg] = useState('')
   /** 保存进行中（2.0.2：防连点双建——空 id 表单双击保存会经 IPC 各建一条档案） */
   const [saving, setSaving] = useState(false)
@@ -113,14 +114,12 @@ export function ConnectionsSection({
 
   const startAdd = (): void => {
     setForm(emptyConnForm())
-    setKind('dev')
     setFormError('')
     setSavedMsg('')
     setTestResult(null)
   }
   const startEdit = (c: ConnectionRecord): void => {
     setForm(connFormOf(c))
-    setKind(c.kind === 'ssh' ? 'ssh' : 'dev')
     setFormError('')
     setSavedMsg('')
     setTestResult(null)
@@ -148,7 +147,6 @@ export function ConnectionsSection({
     const rec: ConnectionRecord = {
       id: form.id,
       name: form.name.trim(),
-      ...(kind === 'ssh' ? { kind: 'ssh' as const } : {}),
       host: form.host.trim(),
       port: Number(form.port),
       user: form.user.trim(),
@@ -251,10 +249,10 @@ export function ConnectionsSection({
       })()}
       {form === null ? (
         <>
-          {connections.length === 0 && <p className="muted">{t('s6.connEmpty')}</p>}
-          {connections.length > 0 && (
+          {devConnections.length === 0 && <p className="muted">{t('s6.connEmpty')}</p>}
+          {devConnections.length > 0 && (
             <ul className="provider-list conn-list">
-              {connections.map((c) => {
+              {devConnections.map((c) => {
                 const st = connectionStates[c.id]?.state
                 return (
                   <li key={c.id} className="provider-row conn-row" data-connection-id={c.id}>
@@ -358,28 +356,9 @@ export function ConnectionsSection({
             </div>
             <div className="form-row">
               <span className="form-label">{t('conn.kindLabel')}</span>
-              <div className="form-control ssh-kind-row">
-                <label className="dialog-check">
-                  <input
-                    type="radio"
-                    name="conn-kind"
-                    value="dev"
-                    checked={kind === 'dev'}
-                    onChange={() => setKind('dev')}
-                  />
-                  {t('conn.kindDev')}
-                </label>
-                <label className="dialog-check">
-                  <input
-                    type="radio"
-                    name="conn-kind"
-                    value="ssh"
-                    checked={kind === 'ssh'}
-                    onChange={() => setKind('ssh')}
-                  />
-                  {t('conn.kindSsh')}
-                </label>
-                {kind === 'ssh' && <span className="hint-inline">{t('conn.kindHint')}</span>}
+              <div className="form-control">
+                {/* v2.1.2 ②：开发视图只造开发连接——kind 单选移除，固定徽标；纯 SSH 在 SSH 视图新建 */}
+                <span className="hint-inline">{t('conn.kindDevBadge')}</span>
               </div>
             </div>
             <div className="form-row">
@@ -561,7 +540,9 @@ export function RemoteProxyPanel() {
   const t = useI18n()
   const connections = useAppStore((s) => s.connections)
   const requestServerInstall = useAppStore((s) => s.requestServerInstall)
-  const [connId, setConnId] = useState(connections[0]?.id ?? '')
+  // v2.1.2 ②：代理面板候选连接剔除纯 SSH（设置中心只管开发连接）
+  const devConnections = connections.filter((c) => c.kind !== 'ssh')
+  const [connId, setConnId] = useState(devConnections[0]?.id ?? '')
   const [status, setStatus] = useState<RemoteProxyStatus | null>(null)
   const [proxyUrl, setProxyUrl] = useState('')
   /** v1.5.3：server 未安装（needInstall）不再显示原始错误——转安装确认弹窗 + 轻提示 */
@@ -654,7 +635,7 @@ export function RemoteProxyPanel() {
                   value={connId}
                   onChange={(e) => setConnId(e.target.value)}
                 >
-                  {connections.map((c) => (
+                  {devConnections.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>

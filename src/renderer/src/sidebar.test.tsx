@@ -478,4 +478,26 @@ describe('v2.0.1 侧栏作用域过滤（用户确认原型 sidebar-scope-v2）'
     await waitFor(() => expect(projectNode('pl')).not.toBeNull())
     expect(projectNode('pr')).not.toBeNull()
   })
+
+  // v2.1.2 ②：开发视图作用域合法域剔除纯 SSH——旧持久化纯 ssh 域 normalize 回退 all
+  it('持久化作用域指向纯 SSH 连接 → 回退 all（「全部」chip 激活、全量可见、无该 chip）', async () => {
+    const pure = makeConnection({ id: 'c9', name: '跳板机', kind: 'ssh' })
+    installCwbMock({ projects: [pLocal, pRemote], connections: [conn, pure] })
+    useAppStore.setState({
+      projects: [pLocal, pRemote],
+      connections: [conn, pure],
+      sidebarScope: 'c9'
+    })
+    render(<App />)
+    await waitFor(() => expect(document.querySelector('.sidebar-scope-chips')).toBeDefined())
+    const chips = screen.getByTestId('sidebar-scope-chips')
+    // 「全部」chip 处于激活态（aria-pressed=true——纯 ssh cid 不在合法域）
+    const allBtn = within(chips).getByText('全部').closest('button')
+    expect(allBtn?.getAttribute('aria-pressed')).toBe('true')
+    // 回退 all：本机与远程项目全量可见；纯 SSH 无 chip、dev 连接 chip 仍在
+    expect(projectNode('pl')).not.toBeNull()
+    expect(projectNode('pr')).not.toBeNull()
+    expect(document.querySelector('[data-testid="sb-chip-c9"]')).toBeNull()
+    expect(document.querySelector('[data-testid="sb-chip-c1"]')).not.toBeNull()
+  })
 })

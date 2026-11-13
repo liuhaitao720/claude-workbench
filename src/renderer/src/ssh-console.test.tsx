@@ -251,7 +251,7 @@ describe('v2.1.1 目录跟随与任务上下文直达', () => {
     ).toBe(false)
   })
 
-  it('纯 SSH 连接：徽标可见 + 下拉标注 + 不出现「新建远程项目」入口', async () => {
+  it('纯 SSH 连接：开发视图无作用域 chip/SSH 徽标/服务器节点；SSH 视图下拉标注仍在', async () => {
     await renderApp()
     act(() => {
       const pure = makeConnection({ id: 'c9', name: '跳板机', kind: 'ssh' })
@@ -259,21 +259,18 @@ describe('v2.1.1 目录跟随与任务上下文直达', () => {
         connections: [...useAppStore.getState().connections, pure]
       })
     })
-    // 侧栏 chip 徽标（等 chips 重渲染出 c9）
-    await waitFor(() => expect(document.querySelector('.sb-chip-kind')?.textContent).toBe('SSH'))
-    // SSH 控制台下拉标注「纯 SSH」
+    // v2.1.2 ②：开发视图作用域仅项目开发——纯 SSH 不出现 chip/SSH 徽标；dev 连接 chip 仍在
+    expect(document.querySelector('[data-testid="sb-chip-c9"]')).toBeNull()
+    expect(document.querySelector('.sb-chip-kind')).toBeNull()
+    expect(document.querySelector('[data-testid="sb-chip-c1"]')).not.toBeNull()
+    // v2.1.2 ②：项目树不渲染纯 SSH 服务器分组（不承载项目——管理在 SSH 视图）
+    expect(document.querySelector('[data-connection-id="c9"]')).toBeNull()
+    // SSH 视图（管理归属地）：控制台下拉仍列出纯 SSH 并标注「纯 SSH」
     fireEvent.click(screen.getByTestId('btn-ssh-rail'))
     await waitFor(() => expect(useAppStore.getState().sshActive).toBe(true))
     expect(
       (screen.getByRole('combobox', { name: '目标连接' }) as HTMLSelectElement).textContent
     ).toContain('纯 SSH')
-    // 服务器节点菜单无「新建远程项目」（纯 SSH 不可承载 claude 项目）
-    const menuBtn = document.querySelector('[data-connection-id="c9"] .row-menu-btn') as HTMLElement | null
-    if (menuBtn !== null) {
-      fireEvent.click(menuBtn)
-      await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeDefined())
-      expect(within(document.querySelector('[role="menu"]') as HTMLElement).queryByText('新建远程项目…')).toBeNull()
-    }
   })
 })
 

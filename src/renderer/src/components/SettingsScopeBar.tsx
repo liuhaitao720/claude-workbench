@@ -40,7 +40,8 @@ export function SettingsScopeBar() {
       >
         {t('settings.scopeLocal')}
       </button>
-      {connections.map((c) => {
+      {/* v2.1.2 ②：设置作用域条无纯 SSH tab——纯 SSH 增删改在 SSH 视图完成 */}
+      {connections.filter((c) => c.kind !== 'ssh').map((c) => {
         const st = connectionStates[c.id]?.state
         return (
           <button

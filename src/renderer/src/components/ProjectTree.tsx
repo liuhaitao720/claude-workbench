@@ -95,6 +95,8 @@ export function ProjectTree({
   // 服务器分组：命中服务器名/host → 整组保留（子项目不再逐个过滤）
   // v2.0.1 服务器域：仅渲染该连接组（all/local 渲染全部——local 在组级再隐藏）
   const serverGroups = connections
+    // v2.1.2 ②：项目树不渲染纯 SSH 服务器分组——它们不承载项目（管理在 SSH 视图）
+    .filter((conn) => conn.kind !== 'ssh')
     .filter((conn) => (scope === 'all' || scope === 'local' ? true : conn.id === scope))
     .map((conn) => {
       const serverHit = q !== '' && (conn.name.toLowerCase().includes(q) || conn.host.toLowerCase().includes(q))

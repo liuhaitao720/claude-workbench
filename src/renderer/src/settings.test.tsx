@@ -5,7 +5,7 @@ import type { CwbApiMock } from './test-helpers'
 import { App } from './App'
 import { terminalCache } from './components/TerminalPanel'
 import { FONT_FAMILY_WHITELIST, isFontFamily, isFontInstalled, loadFontFamily } from './font-family'
-import { installCwbMock, makeProject, makeTask } from './test-helpers'
+import { installCwbMock, makeConnection, makeProject, makeTask } from './test-helpers'
 import { useAppStore } from './store'
 
 /**
@@ -919,5 +919,33 @@ describe('v0.9.4 字体下拉只显示本机已装（用户指令）', () => {
     expect(values).toContain('Cascadia Mono')
     expect(values).toContain('SimSun-ExtB') // 不在白名单——本机检测追加
     expect(values).not.toContain('JetBrains Mono') // 白名单但未装——不显示
+  })
+})
+
+describe('v2.1.2 ② 开发视图剔除纯 SSH（设置中心）', () => {
+  it('作用域条无纯 SSH 连接 tab（普通连接 tab 仍在）；连接表单固定徽标取代 kind 单选', async () => {
+    const dev = makeConnection({ id: 'c1', name: 'VM-Dev' })
+    const pure = makeConnection({ id: 'c9', name: '跳板机', kind: 'ssh' })
+    installCwbMock({ projects: [project], tasks: [taskA, taskB], connections: [dev, pure] })
+    useAppStore.setState({ connections: [dev, pure] })
+    render(<App />)
+    await waitFor(() => expect(document.querySelector('li[data-task-id="t-s1"]')).toBeDefined())
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+    const dialog = await screen.findByRole('dialog', { name: '设置' })
+    // 设置作用域条：纯 SSH 无 tab（增删改在 SSH 视图完成）；普通连接 tab 仍在
+    expect(within(dialog).queryByTestId('scope-tab-c9')).toBeNull()
+    expect(within(dialog).getByTestId('scope-tab-c1')).toBeDefined()
+    // 连接表单：kind 单选移除，固定徽标（conn.kindDevBadge）常驻
+    fireEvent.click(within(dialog).getByTestId('scope-tab-c1'))
+    await waitFor(() =>
+      expect(document.querySelector('.conn-list [data-connection-id="c1"]')).not.toBeNull()
+    )
+    // v2.1.2 ② 补刀：档案列表同样剔除纯 SSH——设置中心任何角落不见纯 SSH 行
+    expect(document.querySelector('.conn-list [data-connection-id="c9"]')).toBeNull()
+    const row = document.querySelector('.conn-list [data-connection-id="c1"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: '编辑' }))
+    const form = await screen.findByRole('form', { name: '远程连接' })
+    expect(within(form).getByText('远程开发（claude 任务 + cwb-server）')).toBeDefined()
+    expect(within(form).queryByRole('radio', { name: '纯 SSH（仅控制台与文件，不装 claude）' })).toBeNull()
   })
 })

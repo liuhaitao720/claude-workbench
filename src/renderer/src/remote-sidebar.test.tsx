@@ -856,3 +856,19 @@ describe('设置中心「远程连接」分类', () => {
     expect(screen.queryByText(/路径：/)).toBeNull()
   })
 })
+
+describe('v2.1.2 ② 开发视图剔除纯 SSH（作用域 chips 与项目树）', () => {
+  it('纯 SSH 连接：无作用域 chip、无服务器分组节点；普通连接两者不受影响', async () => {
+    const pure = makeConnection({ id: 'c9', name: '跳板机', kind: 'ssh' })
+    await renderApp({ connections: [conn, pure] })
+    await waitFor(() => expect(screen.getByTestId('sb-chip-c1')).toBeDefined())
+    // 作用域 chips：纯 SSH 不出现（开发视图作用域仅项目开发——管理在 SSH 视图）
+    expect(document.querySelector('[data-testid="sb-chip-c9"]')).toBeNull()
+    expect(document.querySelector('.sb-chip-kind')).toBeNull()
+    // 项目树（.project-list）：纯 SSH 不渲染服务器分组（不承载项目）
+    expect(serverNode('c9')).toBeNull()
+    // 普通连接 chip 与服务器分组仍在
+    expect(screen.getByTestId('sb-chip-c1')).toBeDefined()
+    expect(serverNode('c1')).not.toBeNull()
+  })
+})

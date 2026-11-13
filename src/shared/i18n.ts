@@ -229,6 +229,8 @@ export const zh = {
   'ssh.connKindFixed': '纯 SSH（仅控制台与文件）',
   'conn.kindLabel': '连接类型',
   'conn.kindDev': '远程开发（claude 任务 + cwb-server）',
+  // v2.1.2 ②：开发视图连接表单固定徽标（复用 conn.kindDev 文案值；纯 SSH 在 SSH 视图新建）
+  'conn.kindDevBadge': '远程开发（claude 任务 + cwb-server）',
   'conn.kindSsh': '纯 SSH（仅控制台与文件，不装 claude）',
   'conn.kindHint': '纯 SSH 连接：跳过 claude 自检与 server 安装，不可注册远程项目',
   'conn.pureBadge': 'SSH',
@@ -916,6 +918,8 @@ export const en: Record<MessageKey, string> = {
   'ssh.connKindFixed': 'Pure SSH (console + files only)',
   'conn.kindLabel': 'Connection type',
   'conn.kindDev': 'Remote dev (claude tasks + cwb-server)',
+  // v2.1.2 ②: dev-view connection form fixed badge (same text as conn.kindDev)
+  'conn.kindDevBadge': 'Remote dev (claude tasks + cwb-server)',
   'conn.kindSsh': 'Pure SSH (console & files only, no claude)',
   'conn.kindHint': 'Pure SSH: skips claude self-check & server install; no remote projects',
   'conn.pureBadge': 'SSH',
