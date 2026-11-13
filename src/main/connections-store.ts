@@ -113,6 +113,10 @@ export function parseConnectionInput(lang: Language, raw: unknown): ParsedConnec
   if (rawPassword !== undefined && typeof rawPassword !== 'string') throw new Error(msg('shape'))
   const plainPassword = rawPassword as string | undefined
 
+  // v2.1.1 连接类型（'dev' 缺省；非法值归 'dev'）
+  const kindRaw = o['kind']
+  const kind = kindRaw === 'ssh' ? ('ssh' as const) : ('dev' as const)
+
   const rawFp = o['lastHostKeyFingerprint']
   if (rawFp !== undefined && typeof rawFp !== 'string') throw new Error(msg('shape'))
   const lastHostKeyFingerprint =
@@ -134,6 +138,7 @@ export function parseConnectionInput(lang: Language, raw: unknown): ParsedConnec
         ? { passwordEncrypted: o['passwordEncrypted'] as string }
         : {}),
       ...(lastHostKeyFingerprint !== undefined ? { lastHostKeyFingerprint } : {}),
+      ...(kind === 'ssh' ? { kind } : {}),
       createdAt
     },
     plainPassword
@@ -208,6 +213,7 @@ export class ConnectionsStore {
       ...(record.lastHostKeyFingerprint !== undefined && record.lastHostKeyFingerprint !== ''
         ? { lastHostKeyFingerprint: normalizeFingerprint(record.lastHostKeyFingerprint) }
         : {}),
+      ...(record.kind === 'ssh' ? { kind: 'ssh' as const } : {}),
       createdAt: existing?.createdAt ?? (record.createdAt !== '' ? record.createdAt : new Date().toISOString())
     }
     if (!isValidConnection(saved)) throw new Error(connectionMessage('zh', 'shape'))
@@ -299,6 +305,7 @@ function isValidConnection(v: unknown): v is ConnectionRecord {
     (o['keyPath'] === undefined || typeof o['keyPath'] === 'string') &&
     (o['passwordEncrypted'] === undefined || typeof o['passwordEncrypted'] === 'string') &&
     (o['lastHostKeyFingerprint'] === undefined || typeof o['lastHostKeyFingerprint'] === 'string') &&
+    (o['kind'] === undefined || o['kind'] === 'dev' || o['kind'] === 'ssh') &&
     typeof o['createdAt'] === 'string'
   )
 }

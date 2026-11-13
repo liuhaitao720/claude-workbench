@@ -202,3 +202,65 @@ describe('v2.1.0 评审修复回归（F2/F3/F4）', () => {
     expect(api.closeSshShell).toHaveBeenCalledWith('c1')
   })
 })
+
+describe('v2.1.1 目录跟随与任务上下文直达', () => {
+  afterEach(cleanup)
+
+  it('任务上下文打开：shell cd 注入（bootstrap 含 cd+PROMPT_COMMAND）+ 面板直达项目目录', async () => {
+    const api = await renderApp()
+    // tRun（远程任务 active）→ 竖条 SSH：注入 cd /home/dev/r + OSC7 钩子
+    fireEvent.click(screen.getByTestId('btn-ssh-rail'))
+    await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c1'))
+    const boot = vi.mocked(api.writeSshShell).mock.calls.find(
+      (c) => c[0] === 'c1' && c[1].includes('PROMPT_COMMAND')
+    )
+    expect(boot).toBeDefined()
+    expect(boot![1]).toContain("cd '/home/dev/r'")
+    await waitFor(() => expect(useAppStore.getState().sshFollowDir?.path).toBe('/home/dev/r'))
+  })
+
+  it('跟随导航：sshFollowDir seq 变化 → 面板 listRemoteFiles 到新目录（模拟 OSC 7 cd）', async () => {
+    const api = await renderApp()
+    fireEvent.click(screen.getByTestId('btn-ssh-rail'))
+    await waitFor(() => expect(screen.getByTestId('files-panel')).toBeDefined())
+    vi.mocked(api.listRemoteFiles).mockClear()
+    act(() => {
+      useAppStore.getState().setSshFollowDir('c1', '/var/log')
+    })
+    await waitFor(() => expect(api.listRemoteFiles).toHaveBeenCalledWith('c1', '/var/log'))
+    // 关闭跟随后,OSC 源不再导航;显式源(explicit)仍直达
+    act(() => {
+      useAppStore.getState().setSshFollowEnabled(false)
+      useAppStore.getState().setSshFollowDir('c1', '/etc', 'osc')
+    })
+    await act(async () => {})
+    expect(
+      vi.mocked(api.listRemoteFiles).mock.calls.some((c) => c[1] === '/etc')
+    ).toBe(false)
+  })
+
+  it('纯 SSH 连接：徽标可见 + 下拉标注 + 不出现「新建远程项目」入口', async () => {
+    await renderApp()
+    act(() => {
+      const pure = makeConnection({ id: 'c9', name: '跳板机', kind: 'ssh' })
+      useAppStore.setState({
+        connections: [...useAppStore.getState().connections, pure]
+      })
+    })
+    // 侧栏 chip 徽标（等 chips 重渲染出 c9）
+    await waitFor(() => expect(document.querySelector('.sb-chip-kind')?.textContent).toBe('SSH'))
+    // SSH 控制台下拉标注「纯 SSH」
+    fireEvent.click(screen.getByTestId('btn-ssh-rail'))
+    await waitFor(() => expect(useAppStore.getState().sshActive).toBe(true))
+    expect(
+      (screen.getByRole('combobox', { name: '目标连接' }) as HTMLSelectElement).textContent
+    ).toContain('纯 SSH')
+    // 服务器节点菜单无「新建远程项目」（纯 SSH 不可承载 claude 项目）
+    const menuBtn = document.querySelector('[data-connection-id="c9"] .row-menu-btn') as HTMLElement | null
+    if (menuBtn !== null) {
+      fireEvent.click(menuBtn)
+      await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeDefined())
+      expect(within(document.querySelector('[role="menu"]') as HTMLElement).queryByText('新建远程项目…')).toBeNull()
+    }
+  })
+})

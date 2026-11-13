@@ -52,6 +52,8 @@ export function makeConnection(c: Partial<ConnectionRecord> = {}): ConnectionRec
     port: c.port ?? 22,
     user: c.user ?? 'dev',
     authMethod: c.authMethod ?? 'key',
+    // v2.1.1 连接类型（'dev' 缺省——纯 SSH 用例传 'ssh'）
+    ...(c.kind !== undefined ? { kind: c.kind } : {}),
     ...(c.keyPath !== undefined ? { keyPath: c.keyPath } : {}),
     ...(c.passwordEncrypted !== undefined
       ? { passwordEncrypted: c.passwordEncrypted }

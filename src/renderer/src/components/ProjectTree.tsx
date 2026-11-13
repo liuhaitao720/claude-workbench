@@ -199,7 +199,10 @@ function ServerNode({
       label: t('conn.menu.edit'),
       onClick: () => openSettings('connections', connection.id)
     },
-    { label: t('conn.menu.newProject'), onClick: () => setRegistering(true) },
+    // v2.1.1：纯 SSH 连接不可承载 claude 项目——不提供「新建远程项目」
+    ...(connection.kind !== 'ssh'
+      ? [{ label: t('conn.menu.newProject'), onClick: () => setRegistering(true) }]
+      : []),
     {
       label: t('tree.delete'),
       danger: true,
@@ -395,10 +398,11 @@ function ProjectNode({
     ...(project.connectionId !== undefined
       ? [
           {
-            // v2.0.1（用户指令）：远程项目定位到其工作目录打开文件面板
-            label: t('tree.openInFiles'),
+            // v2.1.1（用户指令融合）：打开 SSH 终端并直达该项目工作目录
+            // （上=shell 已 cd 注入，下=文件面板自动定位）
+            label: t('tree.openInSsh'),
             onClick: () =>
-              useAppStore.getState().openFilesPanel(project.connectionId!, project.dir)
+              void useAppStore.getState().openSshConsole(project.connectionId!, project.dir)
           }
         ]
       : []),

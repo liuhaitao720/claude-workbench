@@ -130,7 +130,16 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
     [connectionId] // st.path 故意不入依赖（读最新经函数式——压栈语义防重复 effect）
   )
 
+  // v2.1.1 SSH 目录跟随（仅 SSH 控制台内嵌形态消费：seq 变化 → 导航）
+  const follow = useAppStore((s) => s.sshFollowDir)
+  const followEnabled = useAppStore((s) => s.sshFollowEnabled)
   useEffect(() => {
+    if (follow === null || follow.connectionId !== connectionId) return
+    // 显式定位（项目菜单/任务上下文）恒导航；OSC 7 跟随受开关门控
+    if (follow.source === 'explicit' || followEnabled) load(follow.path, false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 跟随按 seq 导航
+  }, [follow?.seq, connectionId])
+useEffect(() => {
     // per-connection 目录记忆（面板重开回上次位置；无记忆=home）
     const saved = useAppStore.getState().uiSettings.filesPanelPath?.[connectionId]
     load(saved)

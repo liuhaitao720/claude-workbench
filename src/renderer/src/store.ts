@@ -217,6 +217,23 @@ export function discardSshData(connectionId: string): void {
   sshDataPending.delete(connectionId)
 }
 
+/**
+ * v2.1.1 SSH 目录跟随 bootstrap：cd（有初始目录时）+ PROMPT_COMMAND 发 OSC 7
+ * （bash；一行可见命令——shell 无隐藏输入通道，可接受的代价；zsh 用户可自行
+ * 加 precmd 等价钩子，未注入时跟随自动退化为「仅初始目录」）。
+ */
+function injectSshBootstrap(connectionId: string, dir?: string): void {
+  const q = (v: string): string => v.replaceAll("'", `'\\''`)
+  const hook =
+    'export PROMPT_COMMAND=' +
+    q('printf \'\\033]7;file://%s%s\\007\' "$HOSTNAME" "$PWD"')
+  const boot =
+    dir !== undefined && dir.trim() !== ''
+      ? `cd '${q(dir.trim())}'; ${hook}\n`
+      : `${hook}\n`
+  window.cwb.writeSshShell(connectionId, boot)
+}
+
 export function emitSshData(e: SshDataEvent): void {
   const set = sshDataListeners.get(e.connectionId)
   if (set !== undefined && set.size > 0) {
@@ -392,8 +409,18 @@ interface AppState {
   sshActive: boolean
   /** 当前 SSH 会话已结束（远端 exit/断连）——冻结层给重开按钮 */
   sshSessionDead: boolean
-  /** 打开/切换 SSH 控制台（换连接=关旧开新 shell） */
-  openSshConsole: (connectionId: string) => Promise<void>
+  /**
+   * v2.1.1 目录跟随（用户需求：shell cd 后文件面板自动进入对应目录）：
+   * OSC 7 / 初始定位写入，RemoteFilesPanel 按 seq 变化导航。
+   */
+  sshFollowDir: { connectionId: string; path: string; seq: number; source: 'osc' | 'explicit' } | null
+  /** 目录跟随开关（默认开；关闭后 OSC 7 只更新不导航） */
+  sshFollowEnabled: boolean
+  /** 显式定位（项目菜单/任务上下文打开 SSH 终端直达项目目录） */
+  setSshFollowDir: (connectionId: string, path: string, source?: 'osc' | 'explicit') => void
+  setSshFollowEnabled: (on: boolean) => void
+  /** 打开/切换 SSH 控制台（换连接=关旧开新 shell）。dir=初始目录（任务/项目上下文） */
+  openSshConsole: (connectionId: string, dir?: string) => Promise<void>
   /** 关闭 SSH 控制台（断 shell，虚拟 tab 移除） */
   closeSshConsole: () => void
   /** 激活 SSH 控制台前台（虚拟 tab 点击 / Ctrl+Shift+S） */
@@ -831,7 +858,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   dismissReviewHint: () => set({ reviewHint: null }),
 
   // ── v2.1.0 SSH 纯终端 ──────────────────────────────────────────────
-  openSshConsole: async (connectionId) => {
+  openSshConsole: async (connectionId, dir) => {
     if (get().connections.every((c) => c.id !== connectionId)) return
     const cur = get().sshConsoleCid
     if (cur === connectionId) {
@@ -840,7 +867,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         set({ sshActive: true, reviewActive: false, sshSessionDead: false })
         void window.cwb.closeSshShell(connectionId).catch(() => {})
         try {
-          await window.cwb.openSshShell(connectionId)
+          const r = await window.cwb.openSshShell(connectionId)
+          if (r.ok) injectSshBootstrap(connectionId, dir)
         } catch {
           /* 失败留冻结层 */
         }
@@ -853,6 +881,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (cur !== null) void window.cwb.closeSshShell(cur)
     discardSshData(connectionId)
     set({ sshConsoleCid: connectionId, sshActive: true, reviewActive: false, sshSessionDead: false })
+    // v2.1.1 初始目录直达（任务/项目上下文）：面板先行定位
+    if (dir !== undefined && dir.trim() !== '')
+      get().setSshFollowDir(connectionId, dir.trim(), 'explicit')
     try {
       const r = await window.cwb.openSshShell(connectionId)
       // F2（评审）：失败落 dead 态——冻结层给出「重开会话」恢复入口（此前仅
@@ -860,7 +891,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
       if (!r.ok && get().sshConsoleCid === connectionId) {
         console.error('[cwb] openSshShell failed:', r.error)
         set({ sshSessionDead: true })
+        return
       }
+      // v2.1.1 目录跟随注入（cd + PROMPT_COMMAND 发 OSC 7）
+      injectSshBootstrap(connectionId, dir)
     } catch (err) {
       console.error('[cwb] openSshShell failed:', err)
       if (get().sshConsoleCid === connectionId) set({ sshSessionDead: true })
@@ -879,6 +913,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
   activateSshConsole: () => {
     if (get().sshConsoleCid !== null) set({ sshActive: true, reviewActive: false })
   },
+
+  setSshFollowDir: (connectionId, path, source = 'osc') => {
+    const cur = get().sshFollowDir
+    const seq = (cur !== null && cur.connectionId === connectionId ? cur.seq : 0) + 1
+    set({ sshFollowDir: { connectionId, path, seq, source } })
+  },
+
+  setSshFollowEnabled: (on) => set({ sshFollowEnabled: on }),
 
   applyConnectionState: (e) => {
     const prev = get().connectionStates[e.connectionId]
@@ -1123,6 +1165,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   sshConsoleCid: null,
   sshActive: false,
   sshSessionDead: false,
+  sshFollowDir: null,
+  sshFollowEnabled: true,
 
   reloadProviders: async () => {
     try {

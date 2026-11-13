@@ -77,11 +77,14 @@ const SESSION_MARKER_VARS = [
   'CLAUDE_PID'
 ] as const
 
-/** 回放兜底参数（5.8=A：toggle 后 300ms 无新输出→回放尾部 ≤4000 字节） */
-const REPLAY_DELAY_MS = 300
-const REPLAY_MAX_BYTES = 4000
-/** 环形缓冲容量（回放预算 4000 的 2 倍余量：toggle 生效时无需回放，容量只为兜底） */
-const RING_CAPACITY_BYTES = 8192
+/**
+ * v2.1.1（用户实测「首开只有末尾一点且不能滚」根因）：环形缓冲 8KB/回放 4KB
+ * 只够当前屏——改为全量历史回放。容量对齐客户端 xterm scrollback（8000 行量级，
+ * ~2MB 上限）；回放上限 1.5MB（taskDataPending 客户端缓冲 800KB + 直通余量）。
+ */
+const REPLAY_MAX_BYTES = 1_500_000
+/** 环形缓冲容量（全量回放预算 + 余量；>容量丢最旧——超长会话保最近 2MB） */
+const RING_CAPACITY_BYTES = 2_000_000
 
 interface Entry {
   taskId: string
@@ -158,7 +161,12 @@ export class TaskRegistry {
     }
   }
 
-  /** task.attach：标记+开始推送；resize toggle 逼重绘，300ms 无新输出回放尾部 */
+  /**
+   * task.attach：标记+开始推送。v2.1.1 改为**全量历史回放优先**——环形缓冲尾部
+   * （≤1.5MB）即刻投递（含当前屏：空闲会话的末屏即最后渲染帧，滚动完整）；
+   * 环为空（零输出会话）时 resize toggle 逼一次 SIGWINCH 重绘作兜底（防白屏）。
+   * 旧「toggle 优先+300ms 定时回放 4KB」废弃（toggle 会致回放+重绘双屏重复）。
+   */
   attach(taskId: string, sink: TaskSink): void {
     const entry = this.require(taskId)
     if (entry.replayTimer !== null) {
@@ -168,19 +176,15 @@ export class TaskRegistry {
     entry.sinks.add(sink)
     entry.lifecycleSinks.add(sink)
     entry.freshBytes = 0
-    // 路径1：resize toggle（cols+1→复原）强制 SIGWINCH——claude TUI 收到即全量重绘
+    const tail = entry.ring.tail(REPLAY_MAX_BYTES)
+    if (tail !== '') {
+      sink.onData(taskId, tail)
+      return
+    }
+    // 空环兜底：resize toggle（cols+1→复原）强制 SIGWINCH——TUI 收到即全量重绘
     const { cols, rows } = entry.pty
     entry.pty.resize(cols + 1, rows)
     entry.pty.resize(cols, rows)
-    // 路径2：300ms 内无新数据帧→回放环形缓冲尾部（toggle 未逼出重绘的退化路径）
-    entry.replayTimer = setTimeout(() => {
-      entry.replayTimer = null
-      // sink 在窗口内已 detach/断连则不投递（防 detach 后收到不请自来的回放）
-      if (entry.freshBytes === 0 && this.entries.get(taskId) === entry && entry.sinks.has(sink)) {
-        const tail = entry.ring.tail(REPLAY_MAX_BYTES)
-        if (tail !== '') sink.onData(taskId, tail)
-      }
-    }, REPLAY_DELAY_MS)
   }
 
   /** task.detach：停推数据流不断 PTY、不退订生命周期（5.9=b） */

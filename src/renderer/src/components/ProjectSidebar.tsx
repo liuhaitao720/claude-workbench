@@ -343,7 +343,8 @@ export function ProjectSidebar() {
                   onClick={() => setSidebarScope(c.id)}
                 >
                   <span className="sb-chip-dot" data-state={st ?? 'offline'} />
-                  {c.name} <span className="n">{n}</span>
+                  {c.name}
+                  {c.kind === 'ssh' && <span className="sb-chip-kind">SSH</span>} <span className="n">{n}</span>
                 </button>
               )
             })}

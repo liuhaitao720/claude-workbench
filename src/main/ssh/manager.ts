@@ -275,7 +275,16 @@ export class RealConnectionManager implements ConnectionManager {
           this.setState(entry, 'offline')
           return
         }
-        // 只读自检（2.1/2.2=A）：缺失阻断项 → 状态回 offline + 结构化失败清单上抛
+        // 只读自检（2.1/2.2=A）：缺失阻断项 → 状态回 offline + 结构化失败清单上抛。
+        // v2.1.1 纯 SSH 连接（kind='ssh'）：跳过 claude/node 自检——仅作 SSH 控制台
+        // 与文件面板用，主机没有 claude 不应阻断连接
+        if (record.kind === 'ssh') {
+          this.attach(entry, opened)
+          entry.attempt = 0
+          entry.loopActive = false
+          this.setState(entry, 'connected')
+          return
+        }
         const checks = await runSelfCheck((command) => execOnClient(opened!.client, command, lang))
         if (!entry.wantConnected) {
           opened.client.end()

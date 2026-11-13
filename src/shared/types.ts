@@ -353,6 +353,14 @@ export interface ConnectionRecord {
   lastHostKeyFingerprint?: string
   /** ISO 8601 */
   createdAt: string
+  /**
+   * v2.1.1 连接类型（用户需求：纯 SSH 连接可保存，仅针对 SSH，不支持 claude 开发）：
+   * - 'dev'=远程开发机（现状）：claude 任务/自检 claude+node/cwb-server 可安装
+   * - 'ssh'=纯 SSH 主机：仅 SSH 控制台与文件面板——跳过 claude 自检、永不触发
+   *   cwb-server 安装、不可注册远程项目
+   * 缺省 'dev'（存量档案零迁移）。
+   */
+  kind?: 'dev' | 'ssh'
 }
 
 /**

@@ -36,6 +36,8 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
   const openSshConsole = useAppStore((s) => s.openSshConsole)
   const connectFlow = useAppStore((s) => s.connectFlow)
   const uiSplit = useAppStore((s) => s.uiSettings.sshSplit?.[connectionId])
+  const sshFollowEnabled = useAppStore((s) => s.sshFollowEnabled)
+  const setSshFollowEnabled = useAppStore((s) => s.setSshFollowEnabled)
   const hostRef = useRef<HTMLDivElement>(null)
   const termHostRef = useRef<HTMLDivElement>(null)
   /** 拖拽中的即时值（null=用持久值） */
@@ -79,6 +81,25 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
         return true
       })
       term.onData((d) => window.cwb.writeSshShell(connectionId, d))
+      // v2.1.1 目录跟随：PROMPT_COMMAND 注入的 OSC 7（file://host/path）——
+      // 解析出 cwd，跟随开启时导航文件面板
+      term.parser.registerOscHandler(7, (data) => {
+        try {
+          const path = decodeURIComponent(new URL(`file://x${data.split(';')[1] ?? ''}`).pathname)
+          if (path !== '' && path !== '/') {
+            const st = useAppStore.getState()
+            if (st.sshFollowEnabled && st.sshConsoleCid === connectionId) {
+              const cur = st.sshFollowDir
+              if (cur === null || cur.path !== path || cur.connectionId !== connectionId) {
+                st.setSshFollowDir(connectionId, path)
+              }
+            }
+          }
+        } catch {
+          /* 非法 URI 忽略 */
+        }
+        return false // 不渲染进终端
+      })
       term.open(host)
     } else {
       term.open(host) // 复挂（隐藏期间 DOM 常驻则此路径少走；防御双挂载场景）
@@ -171,7 +192,7 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
         >
           {connections.map((c) => (
             <option key={c.id} value={c.id}>
-              {c.name} ({c.user}@{c.host})
+              {c.name} ({c.user}@{c.host}){c.kind === 'ssh' ? ` · ${t('ssh.kindPure')}` : ''}
             </option>
           ))}
         </select>
@@ -180,6 +201,15 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
             {conn.user}@{conn.host}:{conn.port}
           </span>
         )}
+        {conn?.kind === 'ssh' && <span className="ssh-kind-badge">SSH</span>}
+        <label className="ssh-follow-toggle" title={t('ssh.followHint')}>
+          <input
+            type="checkbox"
+            checked={sshFollowEnabled}
+            onChange={(e) => setSshFollowEnabled(e.target.checked)}
+          />
+          {t('ssh.follow')}
+        </label>
         <span className="conn-pill" data-state={connState}>
           {connState}
         </span>

@@ -97,7 +97,6 @@ function makeRegistry() {
   return { registry, created, events }
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 describe('TaskRegistry 生命周期', () => {
   it('spawn：argv 原样/env 形态（TERM/COLORTERM/envDenylist 剥离）/cwd/尺寸', async () => {
@@ -196,7 +195,7 @@ describe('TaskRegistry 生命周期', () => {
 })
 
 describe('attach/detach 数据流', () => {
-  it('attach 前数据只进 ring；attach 后实时推送', async () => {
+  it('attach 前数据进 ring；attach 即全量回放历史 + 之后实时推送（v2.1.1）', async () => {
     const { registry, created } = makeRegistry()
     await registry.spawn(REQ())
     const pty = created[0]!
@@ -204,8 +203,10 @@ describe('attach/detach 数据流', () => {
     pty.emitData('before-attach\n')
     expect(sink.chunks).toEqual([])
     registry.attach('t-1', sink)
+    // 全量历史即刻回放（含 attach 前的全部输出——首开可滚动的关键）
+    expect(sink.chunks).toEqual(['before-attach\n'])
     pty.emitData('after-attach\n')
-    expect(sink.chunks).toEqual(['after-attach\n'])
+    expect(sink.chunks).toEqual(['before-attach\n', 'after-attach\n'])
   })
 
   it('detach 停推不断 PTY（5.9=b）', async () => {
@@ -254,8 +255,22 @@ describe('attach/detach 数据流', () => {
   })
 })
 
-describe('re-attach 重绘（5.8=A）——两条路径都可断言', () => {
-  it('路径1 toggle：attach 即刻 resize cols+1→复原（SIGWINCH 强制全量重绘）', async () => {
+describe('re-attach 重绘（v2.1.1：全量历史回放优先）', () => {
+  it('环有数据：attach 即回放全部历史（无 resize toggle——防双屏重复）；>4KB 全量可滚', async () => {
+    const { registry, created } = makeRegistry()
+    await registry.spawn(REQ({ cols: 100, rows: 30 }))
+    const pty = created[0]!
+    const sink = recordingSink()
+    const big = 'x'.repeat(6000)
+    pty.emitData(`${big}\nboot-marker-1\nboot-marker-2\n`) // 断连期间的历史（>旧 4KB 上限）
+    registry.attach('t-1', sink)
+    expect(pty.resizes).toEqual([]) // 有数据不再 toggle
+    expect(sink.chunks.join('')).toContain(big) // 旧 4KB 上限已废——全量
+    expect(sink.chunks.join('')).toContain('boot-marker-1')
+    expect(sink.chunks.join('')).toContain('boot-marker-2')
+  })
+
+  it('空环兜底：零输出会话 attach → resize cols+1→复原 逼 SIGWINCH 重绘（防白屏）', async () => {
     const { registry, created } = makeRegistry()
     await registry.spawn(REQ({ cols: 100, rows: 30 }))
     const pty = created[0]!
@@ -267,43 +282,27 @@ describe('re-attach 重绘（5.8=A）——两条路径都可断言', () => {
     ])
   })
 
-  it('路径2 回放：toggle 后 300ms 无新数据→sink 收到环形缓冲尾部 ≤4000B', async () => {
-    const { registry, created } = makeRegistry()
-    await registry.spawn(REQ())
-    const pty = created[0]!
-    const sink = recordingSink()
-    pty.emitData('boot-marker-1\nboot-marker-2\n') // 断连期间的历史输出
-    registry.attach('t-1', sink)
-    expect(sink.chunks).toEqual([]) // attach 不立即推历史
-    await sleep(450) // >300ms 且无新数据 → 回放路径命中
-    expect(sink.chunks.join('')).toContain('boot-marker-1')
-    expect(sink.chunks.join('')).toContain('boot-marker-2')
-    expect(Buffer.byteLength(sink.chunks.join(''), 'utf8')).toBeLessThanOrEqual(4000)
-  })
-
-  it('toggle 逼出新数据→回放取消（历史不重复推送）', async () => {
+  it('回放一次性：attach 后新输出直送，历史不重复', async () => {
     const { registry, created } = makeRegistry()
     await registry.spawn(REQ())
     const pty = created[0]!
     const sink = recordingSink()
     pty.emitData('boot\n')
     registry.attach('t-1', sink)
-    await sleep(80)
-    pty.emitData('fresh-redraw\n') // toggle 的 SIGWINCH 逼出全量重绘（300ms 内）
-    await sleep(450) // 回放窗口已过
-    expect(sink.chunks.join('')).toBe('fresh-redraw\n') // boot 不再重复出现
+    pty.emitData('fresh-redraw\n')
+    expect(sink.chunks.join('')).toBe('boot\nfresh-redraw\n')
   })
 
-  it('任务退出后回放定时器不再投递', async () => {
+  it('回放上限 1.5MB：超限丢最旧（保最近历史）', async () => {
     const { registry, created } = makeRegistry()
     await registry.spawn(REQ())
     const pty = created[0]!
     const sink = recordingSink()
-    pty.emitData('boot\n')
+    const chunk = 'y'.repeat(10_000)
+    for (let i = 0; i < 210; i++) pty.emitData(`${chunk}\n`) // ~2.1MB > 环容量 2MB
     registry.attach('t-1', sink)
-    pty.emitExit(0) // 300ms 窗口内退出
-    await sleep(450)
-    expect(sink.chunks).toEqual([]) // 无回放、无数据
-    expect(sink.exits).toEqual([{ taskId: 't-1', code: 0 }])
+    const total = Buffer.byteLength(sink.chunks.join(''), 'utf8')
+    expect(total).toBeLessThanOrEqual(1_500_000)
+    expect(total).toBeGreaterThan(1_400_000) // 丢最旧但保住绝大多数近期
   })
 })

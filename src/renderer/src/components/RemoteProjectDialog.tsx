@@ -23,8 +23,10 @@ export function RemoteProjectDialog({
   const t = useI18n()
   const connections = useAppStore((s) => s.connections)
   const registerRemoteProjectFlow = useAppStore((s) => s.registerRemoteProjectFlow)
+  // v2.1.1：纯 SSH 连接不可注册远程项目——候选只留开发机
+  const devConns = connections.filter((c) => c.kind !== 'ssh')
   const [connectionId, setConnectionId] = useState(
-    presetConnectionId ?? connections[0]?.id ?? ''
+    presetConnectionId ?? devConns[0]?.id ?? ''
   )
   const [dir, setDir] = useState('')
   const [error, setError] = useState('')
@@ -72,8 +74,8 @@ export function RemoteProjectDialog({
                   value={connectionId}
                   onChange={(e) => setConnectionId(e.target.value)}
                 >
-                  {connections.length === 0 && <option value="">{t('s6.connEmpty')}</option>}
-                  {connections.map((c: ConnectionRecord) => (
+                  {devConns.length === 0 && <option value="">{t('s6.connEmpty')}</option>}
+                  {devConns.map((c: ConnectionRecord) => (
                     <option key={c.id} value={c.id}>
                       {c.name} ({c.user}@{c.host})
                     </option>

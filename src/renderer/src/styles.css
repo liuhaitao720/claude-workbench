@@ -3064,3 +3064,10 @@ button {
 .ssh-files-host .files-panel { width: 100%; flex: 1; border-left: none; }
 .ssh-files-frozen { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-3); font-size: 12px; }
 .ssh-tab-icon { color: var(--ok-dot); font-size: 11px; }
+
+/* v2.1.1 SSH 工具栏:类型徽标 + 跟随开关 + 类型 radio 行 */
+.ssh-kind-badge, .sb-chip-kind { display: inline-block; padding: 0 5px; height: 15px; line-height: 15px; border-radius: 3px; background: var(--bg-sel); color: var(--text-3); font-size: 10px; font-weight: 600; letter-spacing: .05em; }
+.sb-chip-kind { margin: 0 2px; }
+.ssh-follow-toggle { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-3); cursor: pointer; }
+.ssh-follow-toggle input { accent-color: var(--accent); }
+.ssh-kind-row { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { initListeners, useAppStore } from './store'
 import { ProjectSidebar } from './components/ProjectSidebar'
 import { TabBar } from './components/TabBar'
@@ -7,7 +7,6 @@ import { SmokeBridge } from './components/SmokeBridge'
 import { SettingsDialog } from './components/SettingsDialog'
 import { ServerInstallDialog } from './components/ServerInstallDialog'
 import { ConnectErrorToast, HostKeyConfirmDialog } from './components/HostKeyConfirmDialog'
-import { RemoteFilesPanel } from './components/RemoteFilesPanel'
 import { ReviewHintToast } from './components/DiffReview'
 import { useI18n, syncLanguageToMain } from './i18n'
 
@@ -116,24 +115,29 @@ export function App() {
   const projects = useAppStore((s) => s.projects)
   const openTaskIds = useAppStore((s) => s.openTaskIds)
   const settingsOpen = useAppStore((s) => s.settingsOpen)
-  // v2.0 远程文件面板开合 + 目标连接（首个已连接远程；面板内目录记忆 per-cid）
-  const [filesOpen, setFilesOpen] = useState(false)
+  // v2.1.1（用户指令融合）：右侧「远程文件」面板与竖条按钮移除——远程文件只活在
+  // SSH 终端下半区；原 filesTargetConn/filesOpen 流废弃（项目菜单直达 openSshConsole）
   const connectionsForFiles = useAppStore((s) => s.connections)
-  const connectionStates = useAppStore((s) => s.connectionStates)
-  const connectedConn =
-    connectionsForFiles.find((c) => connectionStates[c.id]?.state === 'connected')?.id ?? null
-  // v2.0.1：显式目标（远程项目「在文件面板中打开」）优先；目标未连接回落 null
-  const filesTargetConn = useAppStore((s) => s.filesTargetConn)
-  // 显式指定目标（含目录）即自动开面板（store 动作由项目菜单触发）
-  useEffect(() => {
-    if (filesTargetConn !== null) setFilesOpen(true)
-  }, [filesTargetConn])
-  const filesConnId =
-    filesOpen && filesTargetConn !== null && connectionStates[filesTargetConn]?.state === 'connected'
-      ? filesTargetConn
-      : filesOpen && connectedConn !== null
-        ? connectedConn
-        : null
+  /**
+   * v2.1.1 SSH 竖条/快捷键目标与定位：当前任务所属远程项目（shell cd 注入 +
+   * 文件面板直达其工作目录，worktree 任务带 worktree 路径）→ 已连接 → 首个。
+   */
+  const openSshFromContext = (): Promise<void> => {
+    const st = useAppStore.getState()
+    const task = st.tasks.find((x) => x.id === st.activeTaskId)
+    const project = task !== undefined ? st.projects.find((p) => p.id === task.projectId) : undefined
+    if (task !== undefined && project?.connectionId !== undefined) {
+      return st.openSshConsole(project.connectionId, task.worktreePath ?? task.cwd)
+    }
+    const target =
+      st.connections.find((c) => st.connectionStates[c.id]?.state === 'connected')?.id ??
+      st.connections[0]?.id
+    return target !== undefined ? st.openSshConsole(target) : Promise.resolve()
+  }
+  /** effect(闭包稳定)与竖条共用——ref 防每渲染重建闭包过期 */
+  const openSshFromContextRef = useRef(openSshFromContext)
+  openSshFromContextRef.current = openSshFromContext
+
   // v2.0.3 审查竖条入口目标：当前任务的项目（git——worktree 任务带 worktree 目录）
   // 优先，回落选中项目；两者皆非 git 则不显示
   const activeTaskId = useAppStore((s) => s.activeTaskId)
@@ -169,21 +173,15 @@ export function App() {
             用户实测「看不见进入方式」）+ 远程文件入口。任务窗口上下文优先：审查=当前
             任务的项目（worktree 任务带 worktree 目录）；文件面板=直达该任务项目工作目录 */}
         <div className="rail-stack">
-          {/* v2.1.0 SSH 纯终端入口（有连接档案即可见；目标=首个已连接，否则首个——open 内懒连接） */}
+          {/* v2.1.1 SSH 纯终端入口：任务上下文优先（当前任务所属远程项目——shell cd
+              注入 + 文件面板直达其工作目录）；无任务回落已连接/首个连接 */}
           {connectionsForFiles.length > 0 && (
             <button
               type="button"
               className="files-rail-toggle"
               title={t('ssh.railToggleTitle')}
               data-testid="btn-ssh-rail"
-              onClick={() => {
-                const st = useAppStore.getState()
-                const target =
-                  connectionsForFiles.find(
-                    (c) => st.connectionStates[c.id]?.state === 'connected'
-                  )?.id ?? connectionsForFiles[0]!.id
-                void st.openSshConsole(target)
-              }}
+              onClick={() => void openSshFromContextRef.current()}
             >
               {t('ssh.railToggle')}
             </button>
@@ -199,47 +197,7 @@ export function App() {
               {t('review.railToggle')}
             </button>
           )}
-          {filesConnId === null &&
-            connectedConn !== null && (
-              <button
-                type="button"
-                className="files-rail-toggle"
-                title={t('files.openPanel')}
-                onClick={() => {
-                  // v2.0.3（用户指令）：任务窗口上下文开文件面板 → 直达该任务远程项目
-                  // 的工作目录（此前回落首个已连接+各连接记忆目录）；非远程任务回原行为
-                  const s = useAppStore.getState()
-                  const task = s.tasks.find((x) => x.id === s.activeTaskId)
-                  const project = task !== undefined ? s.projects.find((p) => p.id === task.projectId) : undefined
-                  if (
-                    task !== undefined &&
-                    project?.connectionId !== undefined &&
-                    s.connectionStates[project.connectionId]?.state === 'connected'
-                  ) {
-                    s.openFilesPanel(project.connectionId, task.worktreePath ?? task.cwd)
-                  }
-                  setFilesOpen(true)
-                }}
-              >
-                {t('files.openPanel')}
-              </button>
-            )}
         </div>
-        {/* v2.0 远程文件面板（FinalShell 式右侧——用户确认原型）：开合状态 +
-            目标连接为 renderer 态（第一个已连接远程；记忆 per-connection 目录） */}
-        {filesConnId !== null && (
-          <div className="remote-files-host" data-testid="remote-files-host">
-            <RemoteFilesPanel connectionId={filesConnId} />
-            <button
-              type="button"
-              className="files-rail-toggle"
-              title={t('files.closePanel')}
-              onClick={() => setFilesOpen(false)}
-            >
-              ✕ {t('files.closePanel')}
-            </button>
-          </div>
-        )}
         </div>
       </div>
       {settingsOpen && (

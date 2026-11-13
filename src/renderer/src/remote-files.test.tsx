@@ -31,11 +31,13 @@ async function openPanel(api: ReturnType<typeof installCwbMock>): Promise<HTMLEl
   act(() => {
     useAppStore.setState({ connectionStates: { c1: { state: 'connected' } } })
   })
-  const toggle = await screen.findByRole('button', { name: '远程文件' })
-  fireEvent.click(toggle)
-  // eslint-disable-next-line no-console
+  // v2.1.1：远程文件面板只活在 SSH 终端下半区——经 SSH 竖条打开（任务上下文
+  // tRun → shell cd 注入 + 面板直达 /home/dev）
+  act(() => {
+    useAppStore.setState({ filesTargetConn: null, sshConsoleCid: null, sshActive: false, sshFollowDir: null })
+  })
+  fireEvent.click(await screen.findByRole('button', { name: 'SSH 终端' }))
   const panel = await screen.findByTestId('files-panel')
-  // v2.0.3：任务窗口上下文开面板 → 直达该任务项目工作目录（tRun.cwd）
   await waitFor(() => expect(api.listRemoteFiles).toHaveBeenCalledWith('c1', '/home/dev'))
   return panel
 }
@@ -261,18 +263,20 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
     expect(bar.textContent).toMatch(/2026/)
   })
 
-  it('远程项目菜单「在文件面板中打开」→ 面板自动开 + 定位项目工作目录（filesPanelPath 持久化）', async () => {
+  it('v2.1.1 远程项目菜单「在 SSH 终端中打开」→ SSH 台开 + 文件面板定位项目目录', async () => {
     const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
     vi.mocked(api.listRemoteFiles).mockResolvedValue({ ok: true, path: '/home/dev/r', entries: [] })
+    act(() => {
+      useAppStore.setState({ sshConsoleCid: null, sshActive: false, sshFollowDir: null, filesTargetConn: null })
+    })
     render(<App />)
     await waitFor(() => expect(document.querySelector('li[data-project-id="pr"]')).toBeDefined())
     fireEvent.click(within(document.querySelector('li[data-project-id="pr"]') as HTMLElement).getByRole('button', { name: '项目操作' }))
-    fireEvent.click(await screen.findByRole('menuitem', { name: '在文件面板中打开' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: '在 SSH 终端中打开' }))
     await waitFor(() => expect(screen.getByTestId('files-panel')).toBeDefined())
-    await waitFor(() => expect(useAppStore.getState().filesTargetConn).toBe('c1'))
-    await waitFor(() =>
-      expect(useAppStore.getState().uiSettings.filesPanelPath?.['c1']).toBe('/home/dev/r')
-    )
+    await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c1'))
+    // 面板经 sshFollowDir 定位项目目录（shell 侧同步注入 cd——bootstrap 断言在 ssh 套件）
+    await waitFor(() => expect(useAppStore.getState().sshFollowDir?.path).toBe('/home/dev/r'))
   })
 
   it('面板目录记忆：uiSettings.filesPanelPath 持久化（setAppSettings 携带路径表）', async () => {
@@ -316,24 +320,38 @@ describe('v2.0.3 文件面板任务上下文直达', () => {
     const tLocal = makeTask({ id: 'tl', projectId: 'pl', name: '本地活', status: 'running' })
     const api = installCwbMock({ projects: [pRemote, pLocal], tasks: [tRun, tLocal], connections: [conn] })
     vi.mocked(api.listRemoteFiles).mockResolvedValue({ ok: true, path: '/home/dev', entries: entriesFixture() })
-    // 前序用例遗留的 filesTargetConn 会让 App 挂载即开面板——渲染前清干净
+    // 前序用例遗留（filesTargetConn/ssh 跟随/目录记忆）全部清干净——本用例断言无上下文回落
+    act(() => {
+      useAppStore.setState({
+        filesTargetConn: null,
+        sshConsoleCid: null,
+        sshActive: false,
+        sshFollowDir: null,
+        uiSettings: { ...useAppStore.getState().uiSettings, filesPanelPath: {} }
+      })
+    })
+    render(<App />)
+    await waitFor(() => expect(useAppStore.getState().connections.length).toBeGreaterThan(0))
+    act(() => {
+      useAppStore.setState({
+        activeTaskId: 'tl',
+        connectionStates: { c1: { state: 'connected' } }
+      })
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'SSH 终端' }))
+    await screen.findByTestId('files-panel')
+    await waitFor(() => expect(api.listRemoteFiles).toHaveBeenCalledWith('c1', undefined))
+  })
+
+  it('右侧「远程文件」竖条按钮已移除（v2.1.1 融合——文件面板只活在 SSH 终端）', async () => {
+    installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
     act(() => {
       useAppStore.setState({ filesTargetConn: null })
     })
     render(<App />)
     await waitFor(() => expect(useAppStore.getState().connections.length).toBeGreaterThan(0))
-    act(() => {
-      // 前序用例的 per-connection 目录记忆不带入（本用例断言无上下文回落）
-      useAppStore.setState({
-        activeTaskId: 'tl',
-        connectionStates: { c1: { state: 'connected' } },
-        filesTargetConn: null,
-        uiSettings: { ...useAppStore.getState().uiSettings, filesPanelPath: {} }
-      })
-    })
-    fireEvent.click(await screen.findByRole('button', { name: '远程文件' }))
-    await screen.findByTestId('files-panel')
-    await waitFor(() => expect(api.listRemoteFiles).toHaveBeenCalledWith('c1', undefined))
+    expect(screen.queryByRole('button', { name: '远程文件' })).toBeNull()
+    expect(screen.queryByTestId('remote-files-host')).toBeNull()
   })
 })
 
@@ -344,14 +362,19 @@ describe('v2.0.2 拖拽上传修复（提示遮罩纯视觉化 + leave/drop 收�
     const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
     vi.mocked(api.listRemoteFiles).mockResolvedValue({ ok: true, path: '/home/dev', entries: entriesFixture() })
     act(() => {
-      useAppStore.setState({ filesTargetConn: null })
+      useAppStore.setState({
+        filesTargetConn: null,
+        sshConsoleCid: null,
+        sshActive: false,
+        sshFollowDir: null
+      })
     })
     render(<App />)
     await waitFor(() => expect(useAppStore.getState().connections.length).toBeGreaterThan(0))
     act(() => {
       useAppStore.setState({ connectionStates: { c1: { state: 'connected' } } })
     })
-    fireEvent.click(await screen.findByRole('button', { name: '远程文件' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'SSH 终端' }))
     return await screen.findByTestId('files-panel')
   }
 

@@ -102,6 +102,8 @@ export function ConnectionsSection({
     return target !== undefined ? connFormOf(target) : null
   })
   const [formError, setFormError] = useState('')
+  /** v2.1.1 连接类型（'dev' 缺省；编辑预填）——纯 SSH：仅控制台+文件 */
+  const [kind, setKind] = useState<'dev' | 'ssh'>('dev')
   const [savedMsg, setSavedMsg] = useState('')
   /** 保存进行中（2.0.2：防连点双建——空 id 表单双击保存会经 IPC 各建一条档案） */
   const [saving, setSaving] = useState(false)
@@ -111,12 +113,14 @@ export function ConnectionsSection({
 
   const startAdd = (): void => {
     setForm(emptyConnForm())
+    setKind('dev')
     setFormError('')
     setSavedMsg('')
     setTestResult(null)
   }
   const startEdit = (c: ConnectionRecord): void => {
     setForm(connFormOf(c))
+    setKind(c.kind === 'ssh' ? 'ssh' : 'dev')
     setFormError('')
     setSavedMsg('')
     setTestResult(null)
@@ -144,6 +148,7 @@ export function ConnectionsSection({
     const rec: ConnectionRecord = {
       id: form.id,
       name: form.name.trim(),
+      ...(kind === 'ssh' ? { kind: 'ssh' as const } : {}),
       host: form.host.trim(),
       port: Number(form.port),
       user: form.user.trim(),
@@ -349,6 +354,32 @@ export function ConnectionsSection({
                   value={form.user}
                   onChange={(e) => setForm({ ...form, user: e.target.value })}
                 />
+              </div>
+            </div>
+            <div className="form-row">
+              <span className="form-label">{t('conn.kindLabel')}</span>
+              <div className="form-control ssh-kind-row">
+                <label className="dialog-check">
+                  <input
+                    type="radio"
+                    name="conn-kind"
+                    value="dev"
+                    checked={kind === 'dev'}
+                    onChange={() => setKind('dev')}
+                  />
+                  {t('conn.kindDev')}
+                </label>
+                <label className="dialog-check">
+                  <input
+                    type="radio"
+                    name="conn-kind"
+                    value="ssh"
+                    checked={kind === 'ssh'}
+                    onChange={() => setKind('ssh')}
+                  />
+                  {t('conn.kindSsh')}
+                </label>
+                {kind === 'ssh' && <span className="hint-inline">{t('conn.kindHint')}</span>}
               </div>
             </div>
             <div className="form-row">

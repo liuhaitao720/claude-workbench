@@ -254,7 +254,7 @@ describe('L3 断连保活 + re-attach（5.9=b / 5.8=A / 5.1=A）', () => {
     }
   })
 
-  it('toggle 路径重绘：SIGWINCH 响应型程序即刻出新数据→历史不重复回放', async () => {
+  it('v2.1.1 全量回放：attach 即得历史，之后新输出直送不重复', async () => {
     const ws = await connect(childPort)
     const taskId = 'l3-toggle-1'
     try {
@@ -263,39 +263,31 @@ describe('L3 断连保活 + re-attach（5.9=b / 5.8=A / 5.1=A）', () => {
         rid: 'tg-1',
         req: {
           taskId,
-          argv: [
-            '/bin/bash',
-            // trap 先装（toggle 的 WINCH 可能在 echo 前到达——早到的也触发重绘）
-            '-c',
-            'trap "echo resized-on-winch" WINCH; echo boot-once; while true; do sleep 0.1; done'
-          ],
+          argv: ['/bin/bash', '-c', 'echo boot-once; cat'],
           cwd: workDir,
           cols: 90,
           rows: 30
         }
       })
       expect(spawned.ok).toBe(true)
-      // 等 bash 就位（trap 已装、boot 已出——入 ring），再 attach 触发 toggle
+      // 等 boot 进 ring（attach 前产出不发帧）
       await new Promise((r) => setTimeout(r, 300))
       const collect = collector(ws, taskId)
       await request(ws, { type: 'task.attach', rid: 'tg-2', taskId })
-      // attach 的 toggle 触发 SIGWINCH → bash trap 在 ≤300ms 内输出（sleep 0.1 粒度）
-      await waitForText(ws, taskId, 'resized-on-winch', 10_000, collect.text())
-      await new Promise((r) => setTimeout(r, 600)) // 回放窗口（300ms）已过
-      const text = collect.text()
-      expect(text).toContain('resized-on-winch') // toggle 生效证据（fresh 数据）
-      // boot-once 在 attach 前产出（只进 ring，不发帧）——流中出现它=回放误触发；
-      // toggle 已逼出 fresh 数据 → 回放必须被抑制（5.8=A 路径1 语义）
-      expect(text).not.toContain('boot-once')
-      await request(ws, { type: 'task.kill', rid: 'tg-3', taskId })
+      // v2.1.1：attach 即刻回放全量历史——boot-once 必在（旧 4KB/300ms 语义已废）
+      await waitForText(ws, taskId, 'boot-once', 5_000, collect.text())
+      // 写入回显 → 新输出直送；历史不重复
+      // task.write 是 fire-and-forget 帧（无 rid 无回执）——直 send
+      ws.send(JSON.stringify({ type: 'task.write', taskId, data: 'fresh-line\n' }))
+      await waitForText(ws, taskId, 'fresh-line', 10_000, collect.text())
+      expect(collect.text().indexOf('boot-once')).toBe(collect.text().lastIndexOf('boot-once'))
+      await request(ws, { type: 'task.kill', rid: 'tg-9', taskId })
       await waitFor(ws, (f) => f.type === 'task.exit' && f.taskId === taskId)
     } finally {
       ws.close()
     }
   })
-})
 
-describe('L3 优雅停机', () => {
   it('SIGTERM→conn.closed 帧→进程退出码 0', async () => {
     const extra = await bootServer()
     const ws = await connect(extra.port)

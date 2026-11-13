@@ -113,8 +113,8 @@ describe('build-server 打包（tgz 组装 + 确定性）', () => {
     async () => {
       const outDir = mkTemp('build')
       const manifest = await buildServerPackage({ outDir, quiet: true })
-      expect(manifest.version).toBe('0.1.1')
-      expect(manifest.file).toBe('server-0.1.1.tgz')
+      expect(manifest.version).toBe('0.1.2')
+      expect(manifest.file).toBe('server-0.1.2.tgz')
       expect(manifest.sha256).toMatch(/^[0-9a-f]{64}$/)
       expect(manifest.sizeBytes).toBeGreaterThan(500 * 1024)
       expect(existsSync(join(outDir, manifest.file))).toBe(true)
