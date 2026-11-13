@@ -214,6 +214,8 @@ export const zh = {
   'ssh.followHint': 'shell 中 cd 后，下方文件面板自动进入对应目录（OSC 7）',
   'ssh.kindPure': '纯 SSH',
   // v2.1.2 ①：SSH 视图左侧「SSH 服务器列表」+ 纯 SSH 连接对话框
+  'ssh.viewEmptyTitle': 'SSH 终端',
+  'ssh.viewEmptyHint': '从左侧选择服务器打开终端，或 ＋ 新建 SSH 连接',
   'ssh.serverTitle': 'SSH 服务器',
   'ssh.serverGroupPure': '纯 SSH 连接',
   'ssh.serverGroupDev': '开发服务器',
@@ -903,6 +905,8 @@ export const en: Record<MessageKey, string> = {
   'ssh.followHint': 'cd in shell auto-navigates the files panel below (OSC 7)',
   'ssh.kindPure': 'pure SSH',
   // v2.1.2 ①：SSH server list sidebar + pure-SSH connection dialog
+  'ssh.viewEmptyTitle': 'SSH terminal',
+  'ssh.viewEmptyHint': 'Pick a server on the left to open a terminal, or create a new SSH connection',
   'ssh.serverTitle': 'SSH servers',
   'ssh.serverGroupPure': 'Pure SSH',
   'ssh.serverGroupDev': 'Dev servers',

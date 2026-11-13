@@ -101,7 +101,9 @@ export function App() {
         const target =
           s.connections.find((c) => s.connectionStates[c.id]?.state === 'connected')?.id ??
           s.connections[0]?.id
+        // v2.1.2：零连接也进 SSH 视图（空态引导新建——纯 SSH 唯一创建入口在里面）
         if (target !== undefined) void s.openSshConsole(target)
+        else s.openSshView()
         return
       }
       if (s.sshActive) {
@@ -118,12 +120,10 @@ export function App() {
   const settingsOpen = useAppStore((s) => s.settingsOpen)
   // v2.1.2 ①：SSH 视图分治——sshActive 时左侧整栏换「SSH 服务器」列表（零项目元素）
   const sshActive = useAppStore((s) => s.sshActive)
-  // v2.1.1（用户指令融合）：右侧「远程文件」面板与竖条按钮移除——远程文件只活在
-  // SSH 终端下半区；原 filesTargetConn/filesOpen 流废弃（项目菜单直达 openSshConsole）
-  const connectionsForFiles = useAppStore((s) => s.connections)
   /**
    * v2.1.1 SSH 竖条/快捷键目标与定位：当前任务所属远程项目（shell cd 注入 +
    * 文件面板直达其工作目录，worktree 任务带 worktree 路径）→ 已连接 → 首个。
+   * v2.1.2：零连接不再空转——进 SSH 视图空态（引导新建纯 SSH 连接）。
    */
   const openSshFromContext = (): Promise<void> => {
     const st = useAppStore.getState()
@@ -135,7 +135,11 @@ export function App() {
     const target =
       st.connections.find((c) => st.connectionStates[c.id]?.state === 'connected')?.id ??
       st.connections[0]?.id
-    return target !== undefined ? st.openSshConsole(target) : Promise.resolve()
+    if (target === undefined) {
+      st.openSshView()
+      return Promise.resolve()
+    }
+    return st.openSshConsole(target)
   }
   /** effect(闭包稳定)与竖条共用——ref 防每渲染重建闭包过期 */
   const openSshFromContextRef = useRef(openSshFromContext)
@@ -177,18 +181,17 @@ export function App() {
             任务的项目（worktree 任务带 worktree 目录）；文件面板=直达该任务项目工作目录 */}
         <div className="rail-stack">
           {/* v2.1.1 SSH 纯终端入口：任务上下文优先（当前任务所属远程项目——shell cd
-              注入 + 文件面板直达其工作目录）；无任务回落已连接/首个连接 */}
-          {connectionsForFiles.length > 0 && (
-            <button
-              type="button"
-              className="files-rail-toggle"
-              title={t('ssh.railToggleTitle')}
-              data-testid="btn-ssh-rail"
-              onClick={() => void openSshFromContextRef.current()}
-            >
-              {t('ssh.railToggle')}
-            </button>
-          )}
+              注入 + 文件面板直达其工作目录）；无任务回落已连接/首个连接。
+              v2.1.2：无条件常驻——零连接点击进 SSH 视图空态（纯 SSH 创建唯一入口） */}
+          <button
+            type="button"
+            className="files-rail-toggle"
+            title={t('ssh.railToggleTitle')}
+            data-testid="btn-ssh-rail"
+            onClick={() => void openSshFromContextRef.current()}
+          >
+            {t('ssh.railToggle')}
+          </button>
           {reviewEntry !== null && (
             <button
               type="button"

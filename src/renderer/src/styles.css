@@ -3268,3 +3268,29 @@ button {
   font-size: 10.5px;
   color: var(--danger-text);
 }
+
+/* v2.1.2 SSH 视图空态（sshActive 但未选连接——零连接初始入口） */
+.ssh-view-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--bg-app);
+  color: var(--text-3);
+}
+.ssh-view-empty-icon {
+  font-size: 30px;
+  color: var(--text-4);
+}
+.ssh-view-empty-title {
+  font-size: 15px;
+  color: var(--text-2);
+  font-weight: 600;
+}
+.ssh-view-empty-hint {
+  font-size: 12.5px;
+  color: var(--text-4);
+}

@@ -51,7 +51,10 @@ export function TabBar() {
 
   // v2.1.0 F3（评审）：零任务但开着虚拟 tab（审查/SSH）时 tab 栏仍渲染——
   // SSH 纯终端的主打场景就是「不建任务」，此前整栏早退=无 tab 可切/无 × 可关
-  if (openTasks.length === 0 && reviewState === null && sshConsoleCid === null) return null
+  // v2.1.2：sshActive 空态（cid=null）也算开着——SSH 视图是一等前台
+  if (openTasks.length === 0 && reviewState === null && sshConsoleCid === null && !sshActive) {
+    return null
+  }
 
   const activeIdx = openTasks.findIndex((t) => t.id === activeTaskId)
 
@@ -139,8 +142,9 @@ export function TabBar() {
         </div>
       )}
       {/* v2.1.0 SSH 纯终端虚拟 tab：▣ 图标 + 连接名；× 关台断 shell
-          （Esc 不关——shell 按键须直通远端）；三方互斥互切 */}
-      {sshConsoleCid !== null && (
+          （Esc 不关——shell 按键须直通远端）；三方互斥互切。
+          v2.1.2：cid=null 的 SSH 视图空态也渲染（label=SSH，× 退回开发视图） */}
+      {(sshConsoleCid !== null || sshActive) && (
         <div
           role="tab"
           aria-selected={sshActive}
@@ -150,18 +154,20 @@ export function TabBar() {
           onClick={() => activateSshConsole()}
           onKeyDown={(e) => onTabKeyDown(e, openTasks.length + (reviewState !== null ? 1 : 0))}
           title={
-            connections.find((c) => c.id === sshConsoleCid)
+            connections.find((c) => c.id === sshConsoleCid) !== undefined
               ? `${connections.find((c) => c.id === sshConsoleCid)!.user}@${connections.find((c) => c.id === sshConsoleCid)!.host}`
-              : ''
+              : tr('ssh.viewEmptyTitle')
           }
         >
           <span className="ssh-tab-icon" aria-hidden="true">
             ▣
           </span>
           <span className="tab-name">
-            {tr('ssh.tabLabel', {
-              name: connections.find((c) => c.id === sshConsoleCid)?.name ?? ''
-            })}
+            {sshConsoleCid !== null
+              ? tr('ssh.tabLabel', {
+                  name: connections.find((c) => c.id === sshConsoleCid)?.name ?? ''
+                })
+              : 'SSH'}
           </span>
           <button
             type="button"

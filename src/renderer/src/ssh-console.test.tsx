@@ -349,3 +349,44 @@ describe('v2.1.2 ③ bootstrap 就绪门（修「打开即缓冲区打印、需 
     ).toBe(false)
   })
 })
+
+describe('v2.1.2 SSH 视图一等入口：零连接死锁解除', () => {
+  it('零连接初始态：竖条常驻可点 → 进 SSH 视图空态（服务器侧栏+主区占位+SSH tab）；× 退回开发视图', async () => {
+    // 零连接/零任务初始态——此前竖条按钮不渲染（connections.length>0 为前提），
+    // 且纯 SSH 唯一创建入口在 SSH 视图内 → 互为死锁
+    const api = installCwbMock({ projects: [], tasks: [], connections: [] })
+    useAppStore.setState({
+      projects: [],
+      tasks: [],
+      connections: [],
+      connectionStates: {},
+      openTaskIds: [],
+      activeTaskId: null,
+      sshConsoleCid: null,
+      sshActive: false,
+      sshSessionDead: false,
+      reviewState: null,
+      reviewActive: false,
+      reviewHint: null,
+      settingsOpen: false
+    })
+    render(<App />)
+    fireEvent.click(screen.getByTestId('btn-ssh-rail'))
+    await waitFor(() => expect(useAppStore.getState().sshActive).toBe(true))
+    // 空态：进入视图但不开 shell（无连接可开）
+    expect(useAppStore.getState().sshConsoleCid).toBe(null)
+    expect(api.openSshShell).not.toHaveBeenCalled()
+    // 左侧=SshServerSidebar（标题+空态引导）；主区=空态占位；TabBar=SSH tab
+    expect(screen.getByText('SSH 服务器')).toBeDefined()
+    expect(screen.getByText('还没有 SSH 服务器')).toBeDefined()
+    expect(screen.getByTestId('ssh-view-empty')).toBeDefined()
+    const tab = screen.getByTestId('ssh-tab')
+    expect(tab.textContent).toContain('SSH')
+    expect(tab.getAttribute('aria-selected')).toBe('true')
+    // × → 退回开发视图：侧栏还原项目树（作用域 chips 回归）、SSH tab 消失
+    fireEvent.click(within(tab).getByRole('button'))
+    await waitFor(() => expect(useAppStore.getState().sshActive).toBe(false))
+    expect(screen.queryByTestId('ssh-tab')).toBeNull()
+    expect(screen.getByTestId('sidebar-scope-chips')).toBeDefined()
+  })
+})

@@ -752,11 +752,12 @@ export function TerminalPanel() {
 
   return (
     <div className="terminal-panel">
-      {/* v2.0.2 审查前台 / v2.1.0 SSH 前台：终端常驻但隐藏（不卸载） */}
+      {/* v2.0.2 审查前台 / v2.1.0 SSH 前台：终端常驻但隐藏（不卸载）。
+          v2.1.2：sshActive 即隐藏（含 cid=null 的 SSH 视图空态） */}
       <div
         className="terminal-hosts"
         style={
-          ((reviewActive && reviewState !== null) || (sshActive && sshConsoleCid !== null))
+          (reviewActive && reviewState !== null) || sshActive
             ? { display: 'none' as const }
             : undefined
         }
@@ -780,6 +781,15 @@ export function TerminalPanel() {
           style={sshActive ? undefined : { display: 'none' as const }}
         >
           <SshConsoleView connectionId={sshConsoleCid} />
+        </div>
+      )}
+      {/* v2.1.2 SSH 视图空态：sshActive 但未选中连接（零连接初始态入口）——
+          主区给引导，实际动作在左侧 SshServerSidebar（选服务器/＋新建） */}
+      {sshActive && sshConsoleCid === null && (
+        <div className="ssh-view-empty" data-testid="ssh-view-empty" role="status">
+          <span className="ssh-view-empty-icon" aria-hidden="true">▣</span>
+          <span className="ssh-view-empty-title">{t('ssh.viewEmptyTitle')}</span>
+          <span className="ssh-view-empty-hint">{t('ssh.viewEmptyHint')}</span>
         </div>
       )}
     </div>

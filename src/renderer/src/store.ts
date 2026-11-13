@@ -466,6 +466,13 @@ interface AppState {
   /** 激活 SSH 控制台前台（虚拟 tab 点击 / Ctrl+Shift+S） */
   activateSshConsole: () => void
   /**
+   * v2.1.2：进入 SSH 视图（不要求已有连接）——左侧换服务器列表、主区给空态引导。
+   * 打破「零连接死锁」：纯 SSH 连接唯一创建入口在 SSH 视图侧栏，而竖条入口原先
+   * 要求 connections.length>0，零连接时永远进不去。选中/新建服务器后经
+   * openSshConsole 落 cid 开终端。
+   */
+  openSshView: () => void
+  /**
    * TOFU 首连待确认（connectFlow 的 hostKeyConfirm 信号触发——main 侧 ConnectionsConnect
    * 以 [cwb:host-key-confirm] token 前缀标记；设置页「测试连接」路径已有同等确认 UI，
    * 此处补齐侧栏/终端等直连入口：确认后写档案锁定指纹并自动重连）
@@ -961,7 +968,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   activateSshConsole: () => {
-    if (get().sshConsoleCid !== null) set({ sshActive: true, reviewActive: false })
+    // v2.1.2：cid 可为 null（SSH 视图空态——无连接时的前台 tab）
+    set({ sshActive: true, reviewActive: false })
+  },
+
+  openSshView: () => {
+    set({ sshActive: true, reviewActive: false })
   },
 
   setSshFollowDir: (connectionId, path, source = 'osc') => {
