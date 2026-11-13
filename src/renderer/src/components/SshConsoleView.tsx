@@ -2,13 +2,22 @@ import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import { WebglAddon } from '@xterm/addon-webgl'
 import type { ConnectionRecord } from '../../../shared/types'
 import { useAppStore, subscribeSshData } from '../store'
 import { useI18n } from '../i18n'
 import { loadFontSize } from '../font-size'
 import { loadFontFamily } from '../font-family'
 import { terminalThemeFor, type EffectiveTheme } from '../theme'
+import {
+  applyTermTheme,
+  changeFontSize,
+  focusActiveTerminal
+} from './TerminalPanel'
 import { RemoteFilesPanel } from './RemoteFilesPanel'
+import { SidebarMenu } from './SidebarMenu'
 
 /**
  * v2.1.0 SSH 纯终端（不启 claude CLI）：TabBar 虚拟「SSH」tab 的前台视图。
@@ -42,6 +51,9 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
   const termHostRef = useRef<HTMLDivElement>(null)
   /** 拖拽中的即时值（null=用持久值） */
   const [dragSplit, setDragSplit] = useState<number | null>(null)
+  /** v2.1.3 Shift+右键菜单锚点（普通右键=智能复制/粘贴——对齐开发终端） */
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; sel: string } | null>(null)
+  const nullBtnRef = useRef<HTMLButtonElement>(null)
   const split = dragSplit ?? clampSplit(uiSplit ?? 0.5)
   const connState = connEntry?.state ?? 'offline'
   const conn: ConnectionRecord | undefined = connections.find((c) => c.id === connectionId)
@@ -62,20 +74,67 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
         cursorBlink: true,
         convertEol: false,
         scrollback: 8000,
+        // v2.1.3 对齐 TerminalView：CJK 保真（宽字形缩放/ConPTY 补行启发按平台）
+        rescaleOverlappingGlyphs: true,
+        windowsPty:
+          (window as unknown as { cwb?: { platform?: string } }).cwb?.platform === 'win32'
+            ? { backend: 'conpty' }
+            : undefined,
+        linkHandler: {
+          activate: (_e, uri) => {
+            void window.cwb.openExternal(uri)
+          }
+        },
         theme: terminalThemeFor(termThemeNow())
       })
       const fit = new FitAddon()
       term.loadAddon(fit)
+      term.loadAddon(new Unicode11Addon())
+      term.unicode.activeVersion = '11'
+      term.loadAddon(
+        new WebLinksAddon((_e, uri) => {
+          void window.cwb.openExternal(uri)
+        })
+      )
       sshTermCache.set(connectionId, term)
       sshFitCache.set(connectionId, fit)
-      // 粘贴/复制（对齐 TerminalView 惯例：Ctrl+V 走剪贴板正规粘贴通道）
+      // v2.1.3（用户需求）：交互对齐开发终端——粘贴三键/智能 Ctrl+C 复制/
+      // 恒复制键/字号 Ctrl+=/-（Shift+Enter 搜索等 claude 专属项不移植）
       term.attachCustomKeyEventHandler((ev) => {
         if (ev.type !== 'keydown') return true
+        const t = sshTermCache.get(connectionId)
+        if (t === undefined) return true
         if (
           (ev.ctrlKey && !ev.altKey && !ev.metaKey && ev.key.toLowerCase() === 'v') ||
           (ev.shiftKey && !ev.ctrlKey && !ev.altKey && ev.key === 'Insert')
         ) {
-          void navigator.clipboard.readText().then((text) => term!.paste(text))
+          void navigator.clipboard
+            .readText()
+            .then((text) => {
+              if (text !== '' && sshTermCache.get(connectionId) === t) t.paste(text)
+            })
+            .catch(() => {})
+          return false
+        }
+        const isCopyKey =
+          (ev.ctrlKey && ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'c') ||
+          (ev.ctrlKey && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'c' && t.hasSelection()) ||
+          (ev.ctrlKey && !ev.shiftKey && !ev.altKey && ev.key === 'Insert')
+        if (isCopyKey) {
+          const sel = t.getSelection()
+          if (sel !== '') {
+            void navigator.clipboard.writeText(sel).catch(() => {})
+            return false
+          }
+          return true
+        }
+        if (!ev.ctrlKey || ev.metaKey || ev.altKey) return true
+        if (ev.key === '=' || ev.key === '+') {
+          changeFontSize(1)
+          return false
+        }
+        if (ev.key === '-' || ev.key === '_') {
+          changeFontSize(-1)
           return false
         }
         return true
@@ -101,6 +160,15 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
         return false // 不渲染进终端
       })
       term.open(host)
+      // v2.1.3：WebGL 渲染器（失败/丢上下文静默回落 DOM——对齐 TerminalView）
+      try {
+        const webgl = new WebglAddon()
+        webgl.onContextLoss(() => webgl.dispose())
+        term.loadAddon(webgl)
+      } catch {
+        // jsdom/无 GPU——DOM 渲染器
+      }
+      applyTermTheme(term, termThemeNow())
     } else {
       term.open(host) // 复挂（隐藏期间 DOM 常驻则此路径少走；防御双挂载场景）
     }
@@ -230,7 +298,35 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
       </div>
 
       {/* 上：裸 shell（xterm）；冻结层复用 term-frozen 视觉 */}
-      <div className="ssh-term-wrap" style={{ height: `${Math.round(split * 1000) / 10}%` }}>
+      <div
+        className="ssh-term-wrap"
+        style={{ height: `${Math.round(split * 1000) / 10}%` }}
+        onMouseDown={() => sshTermCache.get(connectionId)?.focus()}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          const term = sshTermCache.get(connectionId)
+          // v2.1.3 右键智能动作（Windows Terminal 语义）：无选中=粘贴，有选中=
+          // 复制并清选中；Shift+右键=完整菜单（复制/粘贴/全选/清屏）——对齐开发终端
+          if (!e.shiftKey) {
+            if (term !== undefined && term.hasSelection()) {
+              const sel = term.getSelection()
+              if (sel !== '') void navigator.clipboard.writeText(sel).catch(() => {})
+              term.clearSelection()
+              term.focus()
+              return
+            }
+            term?.focus()
+            void navigator.clipboard
+              .readText()
+              .then((text) => {
+                if (text !== '' && sshTermCache.get(connectionId) === term) term?.paste(text)
+              })
+              .catch(() => {})
+            return
+          }
+          setCtxMenu({ x: e.clientX, y: e.clientY, sel: term?.getSelection() ?? '' })
+        }}
+      >
         <div ref={termHostRef} className="ssh-term-host" />
         {frozen && (
           <div className="term-frozen" role="status">
@@ -246,6 +342,46 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
         )}
       </div>
 
+      {ctxMenu !== null && (
+        <SidebarMenu
+          triggerRef={nullBtnRef}
+          anchor={{ x: ctxMenu.x, y: ctxMenu.y }}
+          items={[
+            ...(ctxMenu.sel !== ''
+              ? [
+                  {
+                    label: t('term.copy'),
+                    onClick: () =>
+                      void navigator.clipboard.writeText(ctxMenu.sel).catch(() => {})
+                  }
+                ]
+              : []),
+            {
+              label: t('term.paste'),
+              onClick: () =>
+                void navigator.clipboard
+                  .readText()
+                  .then((text) => {
+                    if (text !== '') sshTermCache.get(connectionId)?.paste(text)
+                  })
+                  .catch(() => {})
+                  .finally(() => sshTermCache.get(connectionId)?.focus())
+            },
+            {
+              label: t('term.selectAll'),
+              onClick: () => sshTermCache.get(connectionId)?.selectAll()
+            },
+            {
+              label: t('term.clear'),
+              onClick: () => sshTermCache.get(connectionId)?.clear()
+            }
+          ]}
+          onClose={() => {
+            setCtxMenu(null)
+            focusActiveTerminal()
+          }}
+        />
+      )}
       {/* 分隔条：拖拽调高 / 双击复位 / 键盘步进 */}
       <div
         className="ssh-splitter"

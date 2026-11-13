@@ -220,14 +220,29 @@ describe('v2.1.1 目录跟随与任务上下文直达', () => {
       )
     // 就绪门：shell 刚开（rc/MOTD 未落）不注入
     expect(cdWrites()).toHaveLength(0)
-    // 远端吐出以提示符结尾的一拍 → 立即过门注入
+    // 远端吐出以提示符结尾的一拍 → 过门分步注入（v2.1.3：\r→文本→\r 三写）
     act(() => emit!({ connectionId: 'c1', data: '\r\nuser@vm:~$ ' }))
+    await waitFor(
+      () => {
+        expect(cdWrites()).toHaveLength(1)
+      },
+      { timeout: 2_000 }
+    )
     const boots = cdWrites()
-    expect(boots).toHaveLength(1)
     expect(boots[0]![1]).toContain("cd '/home/dev/r'")
     expect(boots[0]![1]).toContain('\\033]7;') // 字面反斜杠+033 文本
     expect(boots[0]![1]).not.toContain('\u001b') // 未嵌原始 ESC 字节
-    expect(boots[0]![1].endsWith('\r')).toBe(true) // 对齐真实回车键
+    expect(boots[0]![1].endsWith('\r')).toBe(false) // 文本体不带回车（第三步单发）
+    await waitFor(
+      () => {
+        const seq = vi.mocked(api.writeSshShell).mock.calls.map((c) => c[1])
+        // 分步序列：先回车同步、再文本、终回车提交
+        expect(seq[seq.indexOf(boots[0]![1]) + 1]).toBe('\r')
+      },
+      { timeout: 2_000 }
+    )
+    // OSC 7 回执 → 确认成功（不再重试）
+    act(() => emit!({ connectionId: 'c1', data: '\u001b]7;file://h/home/dev/r\u0007' }))
     await waitFor(() => expect(useAppStore.getState().sshFollowDir?.path).toBe('/home/dev/r'))
   })
 
@@ -308,10 +323,14 @@ describe('v2.1.2 ③ bootstrap 就绪门（修「打开即缓冲区打印、需 
     await act(async () => {})
     expect(api.closeSshShell).toHaveBeenCalledWith('c1')
     expect(bootWrites()).toHaveLength(0) // 新门仍在等远端就绪
-    // 提示符拍 → 注入一次；再拍不再注入（幂等）
+    // 提示符拍 → 注入一次（v2.1.3 分步：文本在 150ms 后）；再拍不再注入（幂等）
     act(() => emit!({ connectionId: 'c1', data: '\r\nuser@vm:~$ ' }))
-    await act(async () => {})
-    expect(bootWrites()).toHaveLength(1)
+    await waitFor(
+      () => {
+        expect(bootWrites()).toHaveLength(1)
+      },
+      { timeout: 2_000 }
+    )
     act(() => emit!({ connectionId: 'c1', data: '\r\nuser@vm:~$ ' }))
     await act(async () => {})
     expect(bootWrites()).toHaveLength(1)

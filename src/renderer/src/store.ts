@@ -217,8 +217,31 @@ export function discardSshData(connectionId: string): void {
   sshDataPending.delete(connectionId)
 }
 
-// ── v2.1.2 ③：bootstrap 就绪门——等远端 shell 输出静默/出提示符再注入，避免
-// 命令行撞上 rc 脚本或 MOTD 被吞/交错（「打开即缓冲区打印、需 Ctrl+C」根因）
+/**
+ * v2.1.3 原始流订阅（不冲放缓冲）——就绪门专用：subscribeSshData 订阅即冲放
+ * 历史缓冲，banner 里以 `$ ` 结尾的旧块会让提示符正则瞬间误触发（用户实测
+ * 「注入撞登录序列、卡续行需 Ctrl+C」根因）。此口只看订阅后的新输出。
+ */
+function onSshDataRaw(connectionId: string, cb: (data: string) => void): () => void {
+  let set = sshDataListeners.get(connectionId)
+  if (!set) {
+    set = new Set()
+    sshDataListeners.set(connectionId, set)
+  }
+  set.add(cb)
+  return () => {
+    const s = sshDataListeners.get(connectionId)
+    if (!s) return
+    s.delete(cb)
+    if (s.size === 0) sshDataListeners.delete(connectionId)
+  }
+}
+
+// ── v2.1.3 bootstrap 就绪门 + 分步注入 + OSC 7 回执确认 ─────────────────────
+// v2.1.2 教训（用户实测：注入行被回显但不执行、需 Ctrl+C）：①门用 subscribeSshData
+// 订阅即冲放历史，banner 旧提示符块瞬间击穿正则——注入撞在 sshd/bash 登录序列中间；
+// ②整串「文本+回车」一包发出，echo 与 readline 启动交错。修法：原始订阅只看新
+// 输出；注入分三步（回车同步→文本→回车提交）；发完等 OSC 7 回执，超时重试一次。
 const sshBootstrapCancels = new Map<string, () => void>()
 
 function cancelSshBootstrap(connectionId: string): void {
@@ -226,52 +249,78 @@ function cancelSshBootstrap(connectionId: string): void {
   sshBootstrapCancels.delete(connectionId)
 }
 
-/** 就绪判定：输出静默 400ms / 某拍以提示符结尾 / 8s 兜底，先到先注入 */
+/**
+ * 就绪判定（只看新输出）：静默 400ms / 某拍以提示符结尾 / 8s 兜底，先到先注入；
+ * 注入后等 OSC 7（\x1b]7;）回执，未到重试一轮（仅一次）。
+ */
 function injectSshBootstrapWhenReady(connectionId: string, dir?: string): void {
   cancelSshBootstrap(connectionId)
-  let done = false
-  let quietTimer: ReturnType<typeof setTimeout> | undefined
-  let hardTimer: ReturnType<typeof setTimeout> | undefined
-  let off: (() => void) | undefined
-  const fire = (): void => {
-    if (done) return
-    done = true
-    clearTimeout(quietTimer)
-    clearTimeout(hardTimer)
-    off?.()
-    sshBootstrapCancels.delete(connectionId)
-    injectSshBootstrap(connectionId, dir)
-  }
-  off = subscribeSshData(connectionId, (chunk) => {
-    if (done) return
-    clearTimeout(quietTimer)
-    quietTimer = setTimeout(fire, 400)
-    if (/(?:^|[\r\n])[^\r\n]*[$#%>]\s?$/.test(chunk)) fire()
-  })
-  hardTimer = setTimeout(fire, 8000)
-  sshBootstrapCancels.set(connectionId, () => {
-    done = true
-    clearTimeout(quietTimer)
-    clearTimeout(hardTimer)
-    off?.()
-  })
+  runBootstrapRound(connectionId, dir, true)
 }
 
-/**
- * v2.1.1 SSH 目录跟随 bootstrap：cd（有初始目录时）+ PROMPT_COMMAND 发 OSC 7
- * （bash；一行可见命令——shell 无隐藏输入通道，可接受的代价；zsh 用户可自行
- * 加 precmd 等价钩子，未注入时跟随自动退化为「仅初始目录」）。
- */
-function injectSshBootstrap(connectionId: string, dir?: string): void {
-  const q = (v: string): string => v.replaceAll("'", `'\\''`)
-  const hook =
-    'export PROMPT_COMMAND=' +
-    q('printf \'\\033]7;file://%s%s\\007\' "$HOSTNAME" "$PWD"')
-  const boot =
-    dir !== undefined && dir.trim() !== ''
-      ? `cd '${q(dir.trim())}'; ${hook}\r`
-      : `${hook}\r`
-  window.cwb.writeSshShell(connectionId, boot)
+function runBootstrapRound(connectionId: string, dir: string | undefined, allowRetry: boolean): void {
+  const timers: ReturnType<typeof setTimeout>[] = []
+  let off: (() => void) | undefined
+  let done = false
+  const finish = (): void => {
+    if (done) return
+    done = true
+    for (const t of timers) clearTimeout(t)
+    off?.()
+    sshBootstrapCancels.delete(connectionId)
+  }
+  sshBootstrapCancels.set(connectionId, finish)
+
+  const fire = (): void => {
+    if (done) return
+    for (const t of timers) clearTimeout(t)
+    off?.()
+    off = undefined
+    // 分步注入：①\r 先落定到新鲜提示符（清掉半行）→ ②文本 → ③\r 提交
+    window.cwb.writeSshShell(connectionId, '\r')
+    timers.push(
+      setTimeout(() => {
+        const q = (v: string): string => v.replaceAll("'", `'\\''`)
+        const hook =
+          'export PROMPT_COMMAND=' +
+          q('printf \'\\033]7;file://%s%s\\007\' "$HOSTNAME" "$PWD"')
+        const text =
+          dir !== undefined && dir.trim() !== ''
+            ? `cd '${q(dir.trim())}'; ${hook}`
+            : hook
+        window.cwb.writeSshShell(connectionId, text)
+        timers.push(
+          setTimeout(() => window.cwb.writeSshShell(connectionId, '\r'), 120)
+        )
+        // 回执确认：新输出里出现 OSC 7（\x1b]7;）即成功；超时重试一轮
+        off = onSshDataRaw(connectionId, (chunk) => {
+          if (chunk.includes('\x1b]7;')) finish()
+        })
+        timers.push(
+          setTimeout(() => {
+            if (done) return
+            off?.()
+            off = undefined
+            if (allowRetry) {
+              console.info('[cwb] ssh bootstrap 无 OSC 7 回执——重试一轮')
+              runBootstrapRound(connectionId, dir, false)
+            } else {
+              finish()
+            }
+          }, 2_500)
+        )
+      }, 150)
+    )
+  }
+
+  // 就绪门：只看订阅后的新输出（原始订阅不冲放）
+  off = onSshDataRaw(connectionId, (chunk) => {
+    if (done) return
+    clearTimeout(timers[0])
+    timers[0] = setTimeout(fire, 400)
+    if (/(?:^|[\r\n])[^\r\n]*[$#%>]\s?$/.test(chunk)) fire()
+  })
+  timers.push(setTimeout(fire, 8_000))
 }
 
 export function emitSshData(e: SshDataEvent): void {
