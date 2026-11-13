@@ -206,16 +206,28 @@ describe('v2.1.0 评审修复回归（F2/F3/F4）', () => {
 describe('v2.1.1 目录跟随与任务上下文直达', () => {
   afterEach(cleanup)
 
-  it('任务上下文打开：shell cd 注入（bootstrap 含 cd+PROMPT_COMMAND）+ 面板直达项目目录', async () => {
+  it('任务上下文打开：就绪门——open 后不立即注入，提示符拍到达即注入 cd+PROMPT_COMMAND；面板直达项目目录', async () => {
     const api = await renderApp()
-    // tRun（远程任务 active）→ 竖条 SSH：注入 cd /home/dev/r + OSC7 钩子
+    // tRun（远程任务 active）→ 竖条 SSH：开门等提示符，再注入 cd /home/dev/r + OSC7 钩子
     fireEvent.click(screen.getByTestId('btn-ssh-rail'))
     await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c1'))
-    const boot = vi.mocked(api.writeSshShell).mock.calls.find(
-      (c) => c[0] === 'c1' && c[1].includes('PROMPT_COMMAND')
-    )
-    expect(boot).toBeDefined()
-    expect(boot![1]).toContain("cd '/home/dev/r'")
+    await act(async () => {}) // openSshShell 已决、就绪门已挂
+    const emit = vi.mocked(api.onSshData).mock.calls[0]?.[0]
+    expect(emit).toBeDefined()
+    const cdWrites = () =>
+      vi.mocked(api.writeSshShell).mock.calls.filter(
+        (c) => c[0] === 'c1' && c[1].includes("cd '/home/dev/r'")
+      )
+    // 就绪门：shell 刚开（rc/MOTD 未落）不注入
+    expect(cdWrites()).toHaveLength(0)
+    // 远端吐出以提示符结尾的一拍 → 立即过门注入
+    act(() => emit!({ connectionId: 'c1', data: '\r\nuser@vm:~$ ' }))
+    const boots = cdWrites()
+    expect(boots).toHaveLength(1)
+    expect(boots[0]![1]).toContain("cd '/home/dev/r'")
+    expect(boots[0]![1]).toContain('\\033]7;') // 字面反斜杠+033 文本
+    expect(boots[0]![1]).not.toContain('\u001b') // 未嵌原始 ESC 字节
+    expect(boots[0]![1].endsWith('\r')).toBe(true) // 对齐真实回车键
     await waitFor(() => expect(useAppStore.getState().sshFollowDir?.path).toBe('/home/dev/r'))
   })
 
@@ -262,5 +274,81 @@ describe('v2.1.1 目录跟随与任务上下文直达', () => {
       await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeDefined())
       expect(within(document.querySelector('[role="menu"]') as HTMLElement).queryByText('新建远程项目…')).toBeNull()
     }
+  })
+})
+
+describe('v2.1.2 ③ bootstrap 就绪门（修「打开即缓冲区打印、需 Ctrl+C」）', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    act(() => {
+      // 关台=取消残留就绪门，防悬空注入渗进后续用例
+      useAppStore.getState().closeSshConsole()
+    })
+  })
+
+  it('重开分支：dead 后再 open → closeSshShell+重新开门，提示符后注入恰好一次（幂等）', async () => {
+    const api = await renderApp()
+    fireEvent.click(screen.getByTestId('btn-ssh-rail'))
+    await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c1'))
+    await act(async () => {})
+    const emit = vi.mocked(api.onSshData).mock.calls[0]?.[0]
+    const emitClosed = vi.mocked(api.onSshClosed).mock.calls[0]?.[0]
+    expect(emit).toBeDefined()
+    expect(emitClosed).toBeDefined()
+    const bootWrites = () =>
+      vi.mocked(api.writeSshShell).mock.calls.filter(
+        (c) => c[0] === 'c1' && c[1].includes('PROMPT_COMMAND')
+      )
+    // 会话死：onSshClosed 顶部即作废就绪门（死会话不得再注入）
+    act(() => emitClosed!({ connectionId: 'c1' }))
+    await waitFor(() => expect(useAppStore.getState().sshSessionDead).toBe(true))
+    expect(bootWrites()).toHaveLength(0)
+    // 重开：先关旧 shell 再开新——就绪门重新挂起
+    const before = vi.mocked(api.openSshShell).mock.calls.length
+    vi.mocked(api.writeSshShell).mockClear()
+    fireEvent.click(screen.getAllByRole('button', { name: '重开会话' })[0]!)
+    await waitFor(() => expect(vi.mocked(api.openSshShell).mock.calls.length).toBe(before + 1))
+    await act(async () => {})
+    expect(api.closeSshShell).toHaveBeenCalledWith('c1')
+    expect(bootWrites()).toHaveLength(0) // 新门仍在等远端就绪
+    // 提示符拍 → 注入一次；再拍不再注入（幂等）
+    act(() => emit!({ connectionId: 'c1', data: '\r\nuser@vm:~$ ' }))
+    await act(async () => {})
+    expect(bootWrites()).toHaveLength(1)
+    act(() => emit!({ connectionId: 'c1', data: '\r\nuser@vm:~$ ' }))
+    await act(async () => {})
+    expect(bootWrites()).toHaveLength(1)
+  })
+
+  it('换连接取消：A 首拍后立即切 B → 推进定时器，A 的 bootstrap 从未发出', async () => {
+    const api = await renderApp()
+    fireEvent.click(screen.getByTestId('btn-ssh-rail'))
+    await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c1'))
+    await act(async () => {})
+    const emit = vi.mocked(api.onSshData).mock.calls[0]?.[0]
+    expect(emit).toBeDefined()
+    vi.useFakeTimers() // 冻结 400ms 静默计时，杜绝竞态
+    // A 首拍（无提示符结尾）→ 只起静默计时，未注入
+    act(() => emit!({ connectionId: 'c1', data: 'Welcome to Ubuntu 22.04 LTS\r\n' }))
+    expect(
+      vi.mocked(api.writeSshShell).mock.calls.some((c) => c[0] === 'c1')
+    ).toBe(false)
+    // 立即换 B：A 的就绪门应被取消
+    const select = screen.getByRole('combobox', { name: '目标连接' }) as HTMLSelectElement
+    await act(async () => {
+      fireEvent.change(select, { target: { value: 'c2' } })
+    })
+    expect(useAppStore.getState().sshConsoleCid).toBe('c2')
+    await act(async () => {}) // openSshShell(B) 已决、B 门已挂
+    expect(api.closeSshShell).toHaveBeenCalledWith('c1')
+    // 推进 10s：A 的 400ms 静默与 8s 兜底若未取消必现形——断言 A 从未注入
+    act(() => {
+      vi.advanceTimersByTime(10_000)
+    })
+    expect(
+      vi.mocked(api.writeSshShell).mock.calls.some(
+        (c) => c[0] === 'c1' && c[1].includes('PROMPT_COMMAND')
+      )
+    ).toBe(false)
   })
 })

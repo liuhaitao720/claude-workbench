@@ -217,6 +217,46 @@ export function discardSshData(connectionId: string): void {
   sshDataPending.delete(connectionId)
 }
 
+// ── v2.1.2 ③：bootstrap 就绪门——等远端 shell 输出静默/出提示符再注入，避免
+// 命令行撞上 rc 脚本或 MOTD 被吞/交错（「打开即缓冲区打印、需 Ctrl+C」根因）
+const sshBootstrapCancels = new Map<string, () => void>()
+
+function cancelSshBootstrap(connectionId: string): void {
+  sshBootstrapCancels.get(connectionId)?.()
+  sshBootstrapCancels.delete(connectionId)
+}
+
+/** 就绪判定：输出静默 400ms / 某拍以提示符结尾 / 8s 兜底，先到先注入 */
+function injectSshBootstrapWhenReady(connectionId: string, dir?: string): void {
+  cancelSshBootstrap(connectionId)
+  let done = false
+  let quietTimer: ReturnType<typeof setTimeout> | undefined
+  let hardTimer: ReturnType<typeof setTimeout> | undefined
+  let off: (() => void) | undefined
+  const fire = (): void => {
+    if (done) return
+    done = true
+    clearTimeout(quietTimer)
+    clearTimeout(hardTimer)
+    off?.()
+    sshBootstrapCancels.delete(connectionId)
+    injectSshBootstrap(connectionId, dir)
+  }
+  off = subscribeSshData(connectionId, (chunk) => {
+    if (done) return
+    clearTimeout(quietTimer)
+    quietTimer = setTimeout(fire, 400)
+    if (/(?:^|[\r\n])[^\r\n]*[$#%>]\s?$/.test(chunk)) fire()
+  })
+  hardTimer = setTimeout(fire, 8000)
+  sshBootstrapCancels.set(connectionId, () => {
+    done = true
+    clearTimeout(quietTimer)
+    clearTimeout(hardTimer)
+    off?.()
+  })
+}
+
 /**
  * v2.1.1 SSH 目录跟随 bootstrap：cd（有初始目录时）+ PROMPT_COMMAND 发 OSC 7
  * （bash；一行可见命令——shell 无隐藏输入通道，可接受的代价；zsh 用户可自行
@@ -229,8 +269,8 @@ function injectSshBootstrap(connectionId: string, dir?: string): void {
     q('printf \'\\033]7;file://%s%s\\007\' "$HOSTNAME" "$PWD"')
   const boot =
     dir !== undefined && dir.trim() !== ''
-      ? `cd '${q(dir.trim())}'; ${hook}\n`
-      : `${hook}\n`
+      ? `cd '${q(dir.trim())}'; ${hook}\r`
+      : `${hook}\r`
   window.cwb.writeSshShell(connectionId, boot)
 }
 
@@ -864,11 +904,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (cur === connectionId) {
       // 会话死后台重开（冻结层「重开」也走这里——open=后端关旧建新）
       if (get().sshSessionDead) {
+        cancelSshBootstrap(connectionId)
+        discardSshData(connectionId) // 清死会话残留，防旧尾巴回放进新终端
         set({ sshActive: true, reviewActive: false, sshSessionDead: false })
-        void window.cwb.closeSshShell(connectionId).catch(() => {})
+        try {
+          await window.cwb.closeSshShell(connectionId)
+        } catch {
+          /* 已死可忽略 */
+        }
         try {
           const r = await window.cwb.openSshShell(connectionId)
-          if (r.ok) injectSshBootstrap(connectionId, dir)
+          if (r.ok) injectSshBootstrapWhenReady(connectionId, dir)
         } catch {
           /* 失败留冻结层 */
         }
@@ -878,7 +924,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
       return
     }
     // 换连接=关旧会话（后端每连接单会话，open 自会重开；显式关防旧输出串流）
-    if (cur !== null) void window.cwb.closeSshShell(cur)
+    if (cur !== null) {
+      cancelSshBootstrap(cur) // 旧连接的就绪门悬空注入一并作废
+      void window.cwb.closeSshShell(cur)
+    }
     discardSshData(connectionId)
     set({ sshConsoleCid: connectionId, sshActive: true, reviewActive: false, sshSessionDead: false })
     // v2.1.1 初始目录直达（任务/项目上下文）：面板先行定位
@@ -893,8 +942,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         set({ sshSessionDead: true })
         return
       }
-      // v2.1.1 目录跟随注入（cd + PROMPT_COMMAND 发 OSC 7）
-      injectSshBootstrap(connectionId, dir)
+      // v2.1.2 ③ 目录跟随注入走就绪门（cd + PROMPT_COMMAND 发 OSC 7）
+      injectSshBootstrapWhenReady(connectionId, dir)
     } catch (err) {
       console.error('[cwb] openSshShell failed:', err)
       if (get().sshConsoleCid === connectionId) set({ sshSessionDead: true })
@@ -905,6 +954,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const cur = get().sshConsoleCid
     set({ sshConsoleCid: null, sshActive: false })
     if (cur !== null) {
+      cancelSshBootstrap(cur)
       discardSshData(cur)
       void window.cwb.closeSshShell(cur)
     }
@@ -1313,6 +1363,8 @@ export function initListeners(): () => void {
   // v2.1.0 SSH 纯终端：输出流经 emitSshData（缓冲/冲放）；会话结束关台
   const offSshData = window.cwb.onSshData?.((e) => emitSshData(e))
   const offSshClosed = window.cwb.onSshClosed?.((e: SshClosedEvent) => {
+    // v2.1.2 ③：无条件作废该连接的就绪门（后台连接关合同样不得悬空注入）
+    cancelSshBootstrap(e.connectionId)
     const s = useAppStore.getState()
     if (s.sshConsoleCid === e.connectionId) {
       // 会话死但台还开着——留台显示「会话已结束/重开」态，不清 sshConsoleCid

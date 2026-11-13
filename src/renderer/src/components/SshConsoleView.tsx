@@ -14,8 +14,8 @@ import { RemoteFilesPanel } from './RemoteFilesPanel'
  * v2.1.0 SSH 纯终端（不启 claude CLI）：TabBar 虚拟「SSH」tab 的前台视图。
  * 上下分栏——上=裸 shell（xterm，ssh2 shell 通道），下=复用 RemoteFilesPanel。
  *
- * - 实例缓存 `sshTermCache`（键=cid）：后台切换/关闭台不销毁（scrollback 留存；
- *   会话死=连接断/远端 exit——冻结层给重开按钮）。
+ * - 实例缓存 `sshTermCache`（键=cid）：后台切换留存复挂；会话随台关/换连接
+ *   即弃（dispose，见下 cleanup）；会话死=连接断/远端 exit——冻结层给重开按钮。
  * - 分栏比例按连接记忆（uiSettings.sshSplit[cid]，clamp 0.2–0.75）；分隔条
  *   拖拽/双击复位 0.5/键盘 ↑↓ 40px 步进（WCAG 2.2 dragging-alternative）。
  * - Esc/Ctrl+D 等全部直通 shell——UI 不拦截任何终端按键（与审查视图不同）。
@@ -133,6 +133,13 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 实例按 cid 生命周期管理
   }, [connectionId])
+
+  /** v2.1.2 ③：死会话重开时清旧终端画面（新 shell 的 banner 干净进入） */
+  const prevDeadRef = useRef(sessionDead)
+  useEffect(() => {
+    if (prevDeadRef.current && !sessionDead) sshTermCache.get(connectionId)?.reset()
+    prevDeadRef.current = sessionDead
+  }, [sessionDead, connectionId])
 
   /** 换连接下拉：openSshConsole 自带「关旧开新」语义 */
   const switchConn = (cid: string): void => {
