@@ -252,3 +252,91 @@ describe('v0.5.4 validateWebhookUrl（误填管理页防护）', () => {
     }
   })
 })
+
+describe('v2.2.0 配置扩展（events/answer + read-modify-write）', () => {
+  let dir: string
+  let file: string
+  let svc: NotifyService
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cwb-notify-ext-'))
+    file = join(dir, 'notify.json')
+    svc = new NotifyService({ file, language: () => 'zh' })
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  const onDisk = (): Record<string, unknown> =>
+    JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+
+  it('setWebhook 保留 events/answer/未来未知字段（3.2=A）', () => {
+    writeFileSync(
+      file,
+      JSON.stringify({
+        url: 'https://old.example.com/h',
+        enabled: false,
+        channel: 'generic',
+        events: { stop: false },
+        answer: { enabled: true, ttlSec: 1200 },
+        futureField: { keep: 1 }
+      })
+    )
+    const saved = svc.setWebhook('https://qyapi.weixin.qq.com/h?key=k', true)
+    expect(saved).toEqual({
+      url: 'https://qyapi.weixin.qq.com/h?key=k',
+      enabled: true,
+      channel: 'wecom'
+    })
+    const disk = onDisk()
+    expect(disk['events']).toEqual({ stop: false })
+    expect(disk['answer']).toEqual({ enabled: true, ttlSec: 1200 })
+    expect(disk['futureField']).toEqual({ keep: 1 })
+  })
+
+  it('getEvents 缺省全开；setEvents 部分更新且保留未知字段', () => {
+    expect(svc.getEvents()).toEqual({ awaiting: true, stop: true, stopFailure: true, exit: true })
+    svc.setWebhook('https://example.com/h', true)
+    const next = svc.setEvents({ stop: false })
+    expect(next).toEqual({ awaiting: true, stop: false, stopFailure: true, exit: true })
+    const disk = onDisk()
+    expect(disk['url']).toBe('https://example.com/h')
+    expect(disk['events']).toEqual(next)
+  })
+
+  it('setEvents 忽略非布尔值（防注入）', () => {
+    const next = svc.setEvents({ stop: 'no' as unknown as boolean })
+    expect(next.stop).toBe(true)
+  })
+
+  it('getAnswer 缺省关；setAnswer 合并更新；越界抛错且不落盘', () => {
+    expect(svc.getAnswer()).toEqual({
+      enabled: false,
+      ttlSec: 900,
+      presenceMin: 5,
+      tunnel: 'cloudflare',
+      pagePort: 0
+    })
+    const next = svc.setAnswer({ enabled: true, ttlSec: 1200, pagePort: 18080 })
+    expect(next).toEqual({
+      enabled: true,
+      ttlSec: 1200,
+      presenceMin: 5,
+      tunnel: 'cloudflare',
+      pagePort: 18080
+    })
+    expect(onDisk()['answer']).toEqual(next)
+    const before = readFileSync(file, 'utf8')
+    expect(() => svc.setAnswer({ ttlSec: 10 })).toThrow(/ttlSec/)
+    expect(() => svc.setAnswer({ pagePort: 70000 })).toThrow(/pagePort/)
+    expect(() => svc.setAnswer({ presenceMin: 0 })).toThrow(/presenceMin/)
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+
+  it('三组配置共存同一文件（setWebhook 不清 events/answer，反之亦然）', () => {
+    svc.setEvents({ exit: false })
+    svc.setAnswer({ enabled: true, presenceMin: 3 })
+    svc.setWebhook('https://example.com/x', true)
+    expect(svc.getEvents().exit).toBe(false)
+    expect(svc.getAnswer().presenceMin).toBe(3)
+    expect(svc.getConfig()).toEqual({ url: 'https://example.com/x', enabled: true, channel: 'generic' })
+  })
+})

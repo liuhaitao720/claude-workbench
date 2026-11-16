@@ -25,7 +25,12 @@ const CLIENT_FRAME_TYPES = [
   'proxy.start',
   'proxy.stop',
   'proxy.config.get',
-  'proxy.config.set'
+  'proxy.config.set',
+  // v2.2.0 推送扩展 + 手机答复
+  'presence',
+  'server.capabilities',
+  'answer.pending',
+  'answer.cancel'
 ] as const satisfies readonly ClientFrame['type'][]
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -56,12 +61,79 @@ function assertSpawnRequest(v: unknown): asserts v is RemoteTaskSpawnRequest {
   if (v['settingsPath'] !== undefined) expect(v, 'settingsPath', str)
   // v2.0.2 任务显示名（服务器侧推送文案用；缺省不附）
   if (v['name'] !== undefined) expect(v, 'name', str)
+  // v2.2.0 项目显示名（推送文案用；缺省不附）
+  if (v['projectName'] !== undefined) expect(v, 'projectName', str)
   if (v['envDenylist'] !== undefined) {
     expect(v, 'envDenylist', Array.isArray)
     for (const n of v['envDenylist'] as unknown[]) {
       if (!str(n)) throw new FrameDecodeError('field req.envDenylist[]: unexpected type')
     }
   }
+}
+
+const ANSWER_KINDS = ['permission', 'question', 'plan'] as const
+const isAnswerKind = (v: unknown): boolean =>
+  (ANSWER_KINDS as readonly unknown[]).includes(v)
+
+/** 待答复问题模型校验（问题原文/选项 label 透传——server 不解释文本语义） */
+function assertAnswerPending(v: unknown): void {
+  if (!isObj(v)) throw new FrameDecodeError('field pending: unexpected type')
+  expect(v, 'pendingId', str)
+  expect(v, 'taskId', str)
+  expect(v, 'event', str)
+  expect(v, 'kind', isAnswerKind)
+  expect(v, 'taskName', str)
+  if (v['projectName'] !== undefined) expect(v, 'projectName', str)
+  expect(v, 'questions', Array.isArray)
+  for (const q of v['questions'] as unknown[]) {
+    if (!isObj(q)) throw new FrameDecodeError('field pending.questions[]: unexpected type')
+    expect(q, 'question', str)
+    if (q['header'] !== undefined) expect(q, 'header', str)
+    if (q['multiSelect'] !== undefined) {
+      expect(q, 'multiSelect', (x) => typeof x === 'boolean')
+    }
+    expect(q, 'options', Array.isArray)
+    for (const o of q['options'] as unknown[]) {
+      if (!isObj(o)) throw new FrameDecodeError('field pending.questions[].options[]: unexpected type')
+      expect(o, 'label', str)
+      if (o['description'] !== undefined) expect(o, 'description', str)
+    }
+  }
+}
+
+/** 手机/桌面提交的选择（索引 + 自由文本；server 侧再校验范围） */
+function assertAnswerChoice(v: unknown): void {
+  if (!isObj(v)) throw new FrameDecodeError('field choice: unexpected type')
+  expect(v, 'kind', isAnswerKind)
+  if (v['action'] !== undefined) {
+    expect(v, 'action', (x) => x === 'allow' || x === 'deny' || x === 'approve' || x === 'reject')
+  }
+  if (v['selections'] !== undefined) {
+    expect(v, 'selections', Array.isArray)
+    for (const s of v['selections'] as unknown[]) {
+      if (!isObj(s)) throw new FrameDecodeError('field choice.selections[]: unexpected type')
+      expect(s, 'questionIndex', num)
+      if (s['optionIndexes'] !== undefined) {
+        expect(s, 'optionIndexes', Array.isArray)
+        for (const i of s['optionIndexes'] as unknown[]) {
+          if (!num(i)) throw new FrameDecodeError('field choice.selections[].optionIndexes[]: unexpected type')
+        }
+      }
+      if (s['text'] !== undefined) expect(s, 'text', str)
+    }
+  }
+}
+
+function assertAnswerState(v: unknown): void {
+  if (!isObj(v)) throw new FrameDecodeError('field state: unexpected type')
+  expect(v, 'enabled', (x) => typeof x === 'boolean')
+  if (v['baseUrl'] !== undefined) expect(v, 'baseUrl', str)
+  expect(
+    v,
+    'tunnel',
+    (x) => x === 'off' || x === 'starting' || x === 'up' || x === 'down' || x === 'missing'
+  )
+  expect(v, 'pendingCount', num)
 }
 
 /**
@@ -105,6 +177,20 @@ export function decodeClientFrame(text: string): ClientFrame {
       break
     case 'proxy.config.set':
       expect(raw, 'patch', isObj)
+      break
+    case 'presence':
+      expect(raw, 'lastInputAt', num)
+      expect(raw, 'focused', (v) => typeof v === 'boolean')
+      break
+    case 'server.capabilities':
+      break
+    case 'answer.pending':
+      expect(raw, 'pending', isObj)
+      assertAnswerPending(raw['pending'])
+      break
+    case 'answer.cancel':
+      if (raw['pendingId'] !== undefined) expect(raw, 'pendingId', str)
+      if (raw['taskId'] !== undefined) expect(raw, 'taskId', str)
       break
   }
   if (type === 'task.write') expect(raw, 'data', str)
@@ -151,6 +237,29 @@ function assertServerFrame(frame: ServerFrame): void {
       expect(frame, 'inReplyTo', str)
       expect(frame, 'ok', (v) => typeof v === 'boolean')
       if (frame['error'] !== undefined) expect(frame, 'error', str)
+      break
+    case 'answer.pending':
+      expect(frame, 'pending', isObj)
+      assertAnswerPending(frame['pending'])
+      if (frame['url'] !== undefined) expect(frame, 'url', str)
+      break
+    case 'answer.submit':
+      expect(frame, 'pendingId', str)
+      expect(frame, 'choice', isObj)
+      assertAnswerChoice(frame['choice'])
+      break
+    case 'answer.resolved':
+      if (frame['pendingId'] !== undefined) expect(frame, 'pendingId', str)
+      expect(frame, 'taskId', str)
+      expect(frame, 'by', (v) => v === 'phone' || v === 'desktop' || v === 'system')
+      expect(frame, 'action', (v) => v === 'answered' || v === 'cancelled' || v === 'expired')
+      break
+    case 'answer.stop':
+      expect(frame, 'taskId', str)
+      break
+    case 'answer.state':
+      expect(frame, 'state', isObj)
+      assertAnswerState(frame['state'])
       break
     default:
       throw new FrameDecodeError('unknown frame type')

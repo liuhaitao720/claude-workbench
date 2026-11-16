@@ -1,5 +1,13 @@
 import { WebSocket } from 'ws'
-import type { ClientFrame, ServerFrame } from '../shared/remote-protocol'
+import type {
+  AnswerChoice,
+  AnswerPendingView,
+  AnswerResolvedBy,
+  AnswerResolvedAction,
+  AnswerStateView,
+  ClientFrame,
+  ServerFrame
+} from '../shared/remote-protocol'
 import type { ConnectionManager } from './ssh/connection-manager'
 
 /**
@@ -43,6 +51,24 @@ export interface ServerClientEvents {
    * （事件为可选——旧 server 不发，本地/测试可不接）。
    */
   onHookEvent?: (taskId: string, event: string, epoch: number) => void
+  /**
+   * v2.2.0 手机答复帧（全部可选——旧 server 不发；缺省忽略）。
+   * onAnswerPending：server 持有/确认了挂起，桌面显示横幅（url=手机页面地址）。
+   * onAnswerSubmit：本地任务答案回送（客户端 resolve 挂起的 hook）。
+   * onAnswerResolved：手机/桌面/系统已处理（清横幅 + toast）。
+   * onAnswerStop：手机请求停止本地任务（走既有 stopTask 路径）。
+   * onAnswerState：答复通道状态（设置页/横幅展示隧道与计数）。
+   */
+  onAnswerPending?: (pending: AnswerPendingView, url?: string) => void
+  onAnswerSubmit?: (pendingId: string, choice: AnswerChoice) => void
+  onAnswerResolved?: (
+    pendingId: string | undefined,
+    taskId: string,
+    by: AnswerResolvedBy,
+    action: AnswerResolvedAction
+  ) => void
+  onAnswerStop?: (taskId: string) => void
+  onAnswerState?: (state: AnswerStateView) => void
   /** 连接关闭（WS 意外断开或 server 主动 conn.closed；reason=脱敏摘要） */
   onClosed: (reason?: string) => void
 }
@@ -248,6 +274,29 @@ export class ServerClient implements ServerTransport {
         else p.reject(new Error(typeof f['error'] === 'string' ? f['error'] : 'request failed'))
         return
       }
+      case 'answer.pending':
+        this.opts.onAnswerPending?.(
+          f['pending'] as AnswerPendingView,
+          typeof f['url'] === 'string' ? f['url'] : undefined
+        )
+        return
+      case 'answer.submit':
+        this.opts.onAnswerSubmit?.(f['pendingId'] as string, f['choice'] as AnswerChoice)
+        return
+      case 'answer.resolved':
+        this.opts.onAnswerResolved?.(
+          typeof f['pendingId'] === 'string' ? f['pendingId'] : undefined,
+          f['taskId'] as string,
+          f['by'] as AnswerResolvedBy,
+          f['action'] as AnswerResolvedAction
+        )
+        return
+      case 'answer.stop':
+        this.opts.onAnswerStop?.(f['taskId'] as string)
+        return
+      case 'answer.state':
+        this.opts.onAnswerState?.(f['state'] as AnswerStateView)
+        return
       default:
         return // 未知帧类型（协议演进）：忽略
     }
@@ -287,6 +336,37 @@ export function isValidServerFrame(v: unknown): v is ServerFrame {
       return f['reason'] === undefined || typeof f['reason'] === 'string'
     case 'result':
       return typeof f['inReplyTo'] === 'string' && typeof f['ok'] === 'boolean'
+    case 'answer.pending':
+      return (
+        typeof f['pending'] === 'object' &&
+        f['pending'] !== null &&
+        typeof (f['pending'] as Record<string, unknown>)['pendingId'] === 'string' &&
+        typeof (f['pending'] as Record<string, unknown>)['taskId'] === 'string' &&
+        Array.isArray((f['pending'] as Record<string, unknown>)['questions']) &&
+        (f['url'] === undefined || typeof f['url'] === 'string')
+      )
+    case 'answer.submit':
+      return (
+        typeof f['pendingId'] === 'string' &&
+        typeof f['choice'] === 'object' &&
+        f['choice'] !== null
+      )
+    case 'answer.resolved':
+      return (
+        (f['pendingId'] === undefined || typeof f['pendingId'] === 'string') &&
+        typeof f['taskId'] === 'string' &&
+        (f['by'] === 'phone' || f['by'] === 'desktop' || f['by'] === 'system') &&
+        (f['action'] === 'answered' || f['action'] === 'cancelled' || f['action'] === 'expired')
+      )
+    case 'answer.stop':
+      return typeof f['taskId'] === 'string'
+    case 'answer.state':
+      return (
+        typeof f['state'] === 'object' &&
+        f['state'] !== null &&
+        typeof (f['state'] as Record<string, unknown>)['enabled'] === 'boolean' &&
+        typeof (f['state'] as Record<string, unknown>)['pendingCount'] === 'number'
+      )
     default:
       return false
   }

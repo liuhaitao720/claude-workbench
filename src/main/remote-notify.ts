@@ -47,7 +47,11 @@ export async function readRemoteNotify(
   }
 }
 
-/** 写远端通知配置（校验同本地 setWebhook；mkdir -p ~/.cwb 后覆写） */
+/**
+ * 写远端通知配置（校验同本地 setWebhook）。
+ * 3.2=A read-modify-write：先读同文件原始对象再合并本段三字段——整文件覆写会抹掉
+ * 旧客户端不认识的 events/answer（两端版本不一致是常态）。
+ */
 export async function writeRemoteNotify(
   mgr: ConnectionManager,
   cid: string,
@@ -72,6 +76,24 @@ export async function writeRemoteNotify(
     throw new Error(`remote notify dir prepare failed (exit ${prep.code})`)
   }
   const sftp = await mgr.sftp(cid)
-  await sftp.writeFile(`${home}/${REMOTE_FILE_REL}`, JSON.stringify(config, null, 2))
+  const path = `${home}/${REMOTE_FILE_REL}`
+  const raw = await readRawJson(sftp, path)
+  await sftp.writeFile(path, JSON.stringify({ ...raw, ...config }, null, 2))
   return { ...config }
+}
+
+/** 读远端文件为原始对象（缺失/损坏 → {}；不解释语义） */
+async function readRawJson(
+  sftp: Awaited<ReturnType<ConnectionManager['sftp']>>,
+  path: string
+): Promise<Record<string, unknown>> {
+  try {
+    const parsed: unknown = JSON.parse((await sftp.readFile(path)).toString('utf8'))
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    /* 缺失/损坏 → 空对象 */
+  }
+  return {}
 }

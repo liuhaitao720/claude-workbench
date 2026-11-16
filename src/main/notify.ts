@@ -1,5 +1,10 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
-import type { NotifyConfig, TaskActivityEvent } from '../shared/types'
+import type {
+  AnswerConfig,
+  NotifyConfig,
+  NotifyEventFlags,
+  TaskActivityEvent
+} from '../shared/types'
 import { translate, type Language } from '../shared/i18n'
 import { mainLanguage } from './language'
 
@@ -20,6 +25,23 @@ import { mainLanguage } from './language'
 export const PUSH_DEBOUNCE_MS = 5 * 60 * 1000
 /** webhook POST 超时 */
 export const FETCH_TIMEOUT_MS = 3_000
+
+/** v2.2.0 事件开关缺省（全开：配置了 webhook 的用户默认收到完成推送——1.13=A） */
+export const DEFAULT_EVENT_FLAGS: NotifyEventFlags = {
+  awaiting: true,
+  stop: true,
+  stopFailure: true,
+  exit: true
+}
+
+/** v2.2.0 手机答复缺省（关：公网暴露入口须显式开启——2.23=A） */
+export const DEFAULT_ANSWER_CONFIG: AnswerConfig = {
+  enabled: false,
+  ttlSec: 900,
+  presenceMin: 5,
+  tunnel: 'cloudflare',
+  pagePort: 0
+}
 
 export interface NotifyServiceOptions {
   /** 配置文件路径（组合根注入 join(userData, 'notify.json')） */
@@ -100,7 +122,11 @@ export class NotifyService {
     return this.load()
   }
 
-  /** 保存 webhook 配置（channel 按 URL 推断；URL 为空强制 enabled=false）并返回 */
+  /**
+   * 保存 webhook 配置（channel 按 URL 推断；URL 为空强制 enabled=false）并返回。
+   * 3.2=A read-modify-write：保留磁盘上的未知字段（events/answer 及未来版本新增
+   * 字段），两端版本不一致时不互相抹除。
+   */
   setWebhook(url: string, enabled: boolean): NotifyConfig {
     const trimmed = url.trim()
     const invalid = validateWebhookUrl(trimmed, this.language())
@@ -110,10 +136,71 @@ export class NotifyService {
       enabled: enabled && trimmed.length > 0,
       channel: inferChannel(trimmed)
     }
-    const tmp = `${this.opts.file}.tmp`
-    writeFileSync(tmp, JSON.stringify(config, null, 2), 'utf8')
-    renameSync(tmp, this.opts.file)
+    this.writeRaw({ ...this.loadRaw(), ...config })
     return { ...config }
+  }
+
+  /** v2.2.0 事件开关（完成/停止/异常/退出推送；缺省全开） */
+  getEvents(): NotifyEventFlags {
+    const ev = this.loadRaw()['events']
+    const o = isPlainObj(ev) ? ev : {}
+    const flag = (k: keyof NotifyEventFlags): boolean =>
+      typeof o[k] === 'boolean' ? (o[k] as boolean) : DEFAULT_EVENT_FLAGS[k]
+    return {
+      awaiting: flag('awaiting'),
+      stop: flag('stop'),
+      stopFailure: flag('stopFailure'),
+      exit: flag('exit')
+    }
+  }
+
+  /** 保存事件开关（部分更新，其余字段保留） */
+  setEvents(patch: Partial<NotifyEventFlags>): NotifyEventFlags {
+    const next = { ...this.getEvents(), ...pickBooleans(patch) }
+    this.writeRaw({ ...this.loadRaw(), events: next })
+    return next
+  }
+
+  /** v2.2.0 手机答复配置（缺省关；数值越界回落缺省） */
+  getAnswer(): AnswerConfig {
+    const an = this.loadRaw()['answer']
+    const o = isPlainObj(an) ? an : {}
+    const int = (v: unknown, def: number, min: number, max: number): number =>
+      typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max ? v : def
+    return {
+      enabled: o['enabled'] === true,
+      ttlSec: int(o['ttlSec'], DEFAULT_ANSWER_CONFIG.ttlSec, 60, 86_400),
+      presenceMin: int(o['presenceMin'], DEFAULT_ANSWER_CONFIG.presenceMin, 1, 1_440),
+      tunnel: 'cloudflare',
+      pagePort: int(o['pagePort'], DEFAULT_ANSWER_CONFIG.pagePort, 0, 65_535)
+    }
+  }
+
+  /** 保存手机答复配置（部分更新；数值越界抛错——设置页应给可操作反馈） */
+  setAnswer(patch: Partial<AnswerConfig>): AnswerConfig {
+    const base = this.getAnswer()
+    const next: AnswerConfig = { ...base, tunnel: 'cloudflare' }
+    if (patch.enabled !== undefined) next.enabled = patch.enabled === true
+    if (patch.ttlSec !== undefined) {
+      if (!Number.isInteger(patch.ttlSec) || patch.ttlSec < 60 || patch.ttlSec > 86_400) {
+        throw new Error('ttlSec out of range (60..86400)')
+      }
+      next.ttlSec = patch.ttlSec
+    }
+    if (patch.presenceMin !== undefined) {
+      if (!Number.isInteger(patch.presenceMin) || patch.presenceMin < 1 || patch.presenceMin > 1_440) {
+        throw new Error('presenceMin out of range (1..1440)')
+      }
+      next.presenceMin = patch.presenceMin
+    }
+    if (patch.pagePort !== undefined) {
+      if (!Number.isInteger(patch.pagePort) || patch.pagePort < 0 || patch.pagePort > 65_535) {
+        throw new Error('pagePort out of range (0..65535)')
+      }
+      next.pagePort = patch.pagePort
+    }
+    this.writeRaw({ ...this.loadRaw(), answer: next })
+    return next
   }
 
   /**
@@ -227,21 +314,44 @@ export class NotifyService {
   }
 
   private load(): NotifyConfig {
+    const rec = this.loadRaw()
+    const url = typeof rec['url'] === 'string' ? rec['url'] : ''
+    const enabled = rec['enabled'] === true
+    const channel =
+      rec['channel'] === 'wecom' || rec['channel'] === 'dingtalk' || rec['channel'] === 'generic'
+        ? rec['channel']
+        : 'wecom'
+    return { url, enabled, channel }
+  }
+
+  /** 整文件原始对象（缺失/损坏 → {}；read-modify-write 的基础——3.2=A） */
+  private loadRaw(): Record<string, unknown> {
     try {
       const parsed: unknown = JSON.parse(readFileSync(this.opts.file, 'utf8'))
-      if (typeof parsed === 'object' && parsed !== null) {
-        const rec = parsed as Record<string, unknown>
-        const url = typeof rec['url'] === 'string' ? rec['url'] : ''
-        const enabled = rec['enabled'] === true
-        const channel =
-          rec['channel'] === 'wecom' || rec['channel'] === 'dingtalk' || rec['channel'] === 'generic'
-            ? rec['channel']
-            : 'wecom'
-        return { url, enabled, channel }
-      }
-      return { url: '', enabled: false, channel: 'wecom' }
+      if (isPlainObj(parsed)) return parsed
     } catch {
-      return { url: '', enabled: false, channel: 'wecom' }
+      /* 缺失/损坏 → 空对象 */
     }
+    return {}
   }
+
+  /** 原子整文件写（tmp+rename；URL 属凭据仅存本地——红线 1） */
+  private writeRaw(obj: Record<string, unknown>): void {
+    const tmp = `${this.opts.file}.tmp`
+    writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8')
+    renameSync(tmp, this.opts.file)
+  }
+}
+
+function isPlainObj(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** 只保留布尔字段（部分更新防注入非布尔值） */
+function pickBooleans(patch: Partial<NotifyEventFlags>): Partial<NotifyEventFlags> {
+  const out: Partial<NotifyEventFlags> = {}
+  for (const k of ['awaiting', 'stop', 'stopFailure', 'exit'] as const) {
+    if (typeof patch[k] === 'boolean') out[k] = patch[k]
+  }
+  return out
 }

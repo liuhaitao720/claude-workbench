@@ -7,7 +7,10 @@ import {
   buildNotifyPayload,
   inferChannel,
   isAwaitingHookEvent,
-  loadNotifyConfig
+  loadNotifyConfig,
+  loadNotifyExtras,
+  DEFAULT_ANSWER_CONFIG,
+  DEFAULT_EVENT_FLAGS
 } from '../notify'
 
 /**
@@ -100,5 +103,56 @@ describe('触发门控与防抖', () => {
     })
     expect(isAwaitingHookEvent('PermissionRequest')).toBe(true)
     expect(isAwaitingHookEvent('Stop')).toBe(false)
+  })
+})
+
+describe('loadNotifyExtras（v2.2.0 events/answer 配置层）', () => {
+  const writeCfg = (obj: unknown): void => {
+    mkdirSync(join(home, '.cwb'), { recursive: true })
+    writeFileSync(join(home, '.cwb', 'notify.json'), JSON.stringify(obj))
+  }
+
+  it('无配置/损坏 → 安全缺省（events 全开、answer 关）', () => {
+    expect(loadNotifyExtras(home)).toEqual({
+      events: DEFAULT_EVENT_FLAGS,
+      answer: DEFAULT_ANSWER_CONFIG
+    })
+    writeCfg('not json')
+    expect(loadNotifyExtras(home).answer.enabled).toBe(false)
+    expect(loadNotifyExtras(home).events.stop).toBe(true)
+  })
+
+  it('events 逐项覆盖，非布尔字段回落缺省（部分损坏不影响其余）', () => {
+    writeCfg({ url: 'https://x', enabled: true, events: { stop: false, exit: 'yes' } })
+    const { events } = loadNotifyExtras(home)
+    expect(events).toEqual({ awaiting: true, stop: false, stopFailure: true, exit: true })
+  })
+
+  it('answer：enabled 须严格 true；数值越界回落缺省', () => {
+    writeCfg({ answer: { enabled: 1, ttlSec: 30, presenceMin: 5, pagePort: 0 } })
+    let a = loadNotifyExtras(home).answer
+    expect(a.enabled).toBe(false) // 非布尔 true 不认
+    expect(a.ttlSec).toBe(900) // 30 < 60 越界
+    expect(a.presenceMin).toBe(5)
+    writeCfg({ answer: { enabled: true, ttlSec: 1200, presenceMin: 5, pagePort: 18080 } })
+    a = loadNotifyExtras(home).answer
+    expect(a).toEqual({ enabled: true, ttlSec: 1200, presenceMin: 5, tunnel: 'cloudflare', pagePort: 18080 })
+  })
+
+  it('与 loadNotifyConfig 同文件并存（互不干扰，旧返回形状不变）', () => {
+    writeCfg({
+      url: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=k',
+      enabled: true,
+      channel: 'wecom',
+      events: { stop: false },
+      answer: { enabled: true }
+    })
+    expect(loadNotifyConfig(home)).toEqual({
+      url: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=k',
+      enabled: true,
+      channel: 'wecom'
+    })
+    expect(loadNotifyExtras(home).events.stop).toBe(false)
+    expect(loadNotifyExtras(home).answer.enabled).toBe(true)
   })
 })

@@ -37,10 +37,74 @@ export interface RemoteTaskSpawnRequest {
    */
   name?: string
   /**
+   * 项目显示名（v2.2.0 推送文案「任务名（项目名）」；旧客户端不传=不展示）。
+   * 缺省不附。
+   */
+  projectName?: string
+  /**
    * 剥离不注入的环境变量名（3.3=A 防御性白名单外剥离；S3 应用到 spawn env）。
    * 缺省=不剥离（VM 内 shell 环境原样为准）。
    */
   envDenylist?: string[]
+}
+
+/**
+ * 待答复视图（v2.2.0 B 链）：server 解析 hook body 后的归一化模型，页面与桌面
+ * 横幅共用。只含问题原文与选项 label（2.11=A——不展示 tool_input 摘要/终端屏）。
+ */
+export type AnswerKind = 'permission' | 'question' | 'plan'
+
+export interface AnswerQuestionOptionView {
+  label: string
+  description?: string
+}
+
+export interface AnswerQuestionView {
+  question: string
+  header?: string
+  multiSelect?: boolean
+  options: AnswerQuestionOptionView[]
+}
+
+export interface AnswerPendingView {
+  /** 服务端生成的 pending id（一次性 token 的对外关联键） */
+  pendingId: string
+  taskId: string
+  /** 原始 hook 事件名（PermissionRequest / PreToolUse） */
+  event: string
+  kind: AnswerKind
+  taskName: string
+  projectName?: string
+  questions: AnswerQuestionView[]
+}
+
+/** 手机/桌面提交的选择：索引映射由 server 完成（2.12——不接受任意按键/字段名） */
+export interface AnswerSelection {
+  questionIndex: number
+  /** 选项索引（单选=1 项；多选=有序多项） */
+  optionIndexes?: number[]
+  /** 自由文本（2.10=B；仅作为 answers 值，上限 2000 字符） */
+  text?: string
+}
+
+export interface AnswerChoice {
+  kind: AnswerKind
+  /** permission: allow/deny；plan: approve/reject */
+  action?: 'allow' | 'deny' | 'approve' | 'reject'
+  /** question：每题的选项/自由文本 */
+  selections?: AnswerSelection[]
+}
+
+export type AnswerResolvedBy = 'phone' | 'desktop' | 'system'
+export type AnswerResolvedAction = 'answered' | 'cancelled' | 'expired'
+
+/** 手机答复通道状态（设置页/桌面横幅展示） */
+export interface AnswerStateView {
+  enabled: boolean
+  /** 公网入口基址（隧道 URL；未启用/不可用时缺省） */
+  baseUrl?: string
+  tunnel: 'off' | 'starting' | 'up' | 'down' | 'missing'
+  pendingCount: number
 }
 
 /**
@@ -81,6 +145,21 @@ export type ClientFrame =
   | { type: 'proxy.config.get'; rid?: string }
   /** 远程代理配置写（A5 验收：set→get 回环一致）【S4 / S3】 */
   | { type: 'proxy.config.set'; rid?: string; patch: Partial<RemoteProxyConfig> }
+  /**
+   * 桌面在场心跳（v2.2.0 B 链）：连接建立即发、键入时节流 5s、每 30s 定时。
+   * server 以 lastInputAt 判定「桌面是否在场」（2.16：5 分钟无键入=不在场）。
+   * 【S4 / S3】
+   */
+  | { type: 'presence'; lastInputAt: number; focused: boolean }
+  /** 能力探测（3.3=A：pushEvents/answer 按能力开关，不靠版本号猜）【S4 / S3】 */
+  | { type: 'server.capabilities'; rid?: string }
+  /**
+   * 本地任务挂起（v2.2.0）：客户端 task-activity 扣住 hook，经此帧交 server 建
+   * 一次性 token/推送/页面；答案经 answer.submit 帧回本条连接。【S4 / S3】
+   */
+  | { type: 'answer.pending'; pending: AnswerPendingView }
+  /** 桌面中止挂起（2.16「改本机输入」）：server 以空响应释放 hook【S4 / S3】 */
+  | { type: 'answer.cancel'; pendingId?: string; taskId?: string }
 
 /**
  * server→client 帧全集【S3 生产 / S2/S4/S7 消费】。
@@ -116,3 +195,23 @@ export type ServerFrame =
    * proxy.config.get→RemoteProxyConfig 等，S3 定终态）。【S3 产生 / 请求发起方消费】
    */
   | { type: 'result'; inReplyTo: string; ok: boolean; error?: string; payload?: unknown }
+  /**
+   * 待答复通知（v2.2.0）：远程任务由 server 直接持有 hook；本地任务为回执确认。
+   * 桌面据此显示横幅「已挂起等手机 · 点此改本机输入」。url=手机页面地址（隧道
+   * 可用时）。【S3 / S4→renderer】
+   */
+  | { type: 'answer.pending'; pending: AnswerPendingView; url?: string }
+  /** 本地任务答案回送（server 解析页面选择后下发；客户端据此应答 hook）【S3 / S4】 */
+  | { type: 'answer.submit'; pendingId: string; choice: AnswerChoice }
+  /** 已处理（手机/桌面/系统）：桌面清横幅 + toast「已由手机答复」（2.20）【S3 / S4】 */
+  | {
+      type: 'answer.resolved'
+      pendingId?: string
+      taskId: string
+      by: AnswerResolvedBy
+      action: AnswerResolvedAction
+    }
+  /** 手机请求停止本地任务（2.17=B；远程任务 server 直接 kill，不发此帧）【S3 / S4】 */
+  | { type: 'answer.stop'; taskId: string }
+  /** 手机答复通道状态（设置页/横幅；启停隧道时广播）【S3 / S4】 */
+  | { type: 'answer.state'; state: AnswerStateView }

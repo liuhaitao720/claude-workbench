@@ -148,6 +148,34 @@ export interface NotifyConfig {
   channel: 'wecom' | 'dingtalk' | 'generic'
 }
 
+/**
+ * v2.2.0 推送事件开关（notify.json 的 `events` 段；缺省全开——1.13=A）。
+ * awaiting=等待答复（权限确认/选择）；stop=每轮结束；stopFailure=异常结束；
+ * exit=进程退出/显式停止。
+ */
+export interface NotifyEventFlags {
+  awaiting: boolean
+  stop: boolean
+  stopFailure: boolean
+  exit: boolean
+}
+
+/**
+ * v2.2.0 手机答复配置（notify.json 的 `answer` 段；缺省关——2.23=A）。
+ * 开启=把应答页经隧道暴露到公网，属安全姿态变更，须显式确认风险。
+ */
+export interface AnswerConfig {
+  enabled: boolean
+  /** 一次性 token 有效期（秒；2.5=A 15 分钟） */
+  ttlSec: number
+  /** 桌面在场判定阈值（分钟；2.16 改写：5 分钟无键入=不在场） */
+  presenceMin: number
+  /** 隧道服务商（2.3f=A Cloudflare Quick Tunnel） */
+  tunnel: 'cloudflare'
+  /** 应答页监听端口（0=OS 动态分配） */
+  pagePort: number
+}
+
 /** v2.0 远程文件条目（FilesPanel 列表） */
 export interface RemoteFileEntry {
   name: string

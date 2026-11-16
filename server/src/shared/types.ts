@@ -148,6 +148,34 @@ export interface NotifyConfig {
   channel: 'wecom' | 'dingtalk' | 'generic'
 }
 
+/**
+ * v2.2.0 推送事件开关（notify.json 的 `events` 段；缺省全开——1.13=A）。
+ * awaiting=等待答复（权限确认/选择）；stop=每轮结束；stopFailure=异常结束；
+ * exit=进程退出/显式停止。
+ */
+export interface NotifyEventFlags {
+  awaiting: boolean
+  stop: boolean
+  stopFailure: boolean
+  exit: boolean
+}
+
+/**
+ * v2.2.0 手机答复配置（notify.json 的 `answer` 段；缺省关——2.23=A）。
+ * 开启=把应答页经隧道暴露到公网，属安全姿态变更，须显式确认风险。
+ */
+export interface AnswerConfig {
+  enabled: boolean
+  /** 一次性 token 有效期（秒；2.5=A 15 分钟） */
+  ttlSec: number
+  /** 桌面在场判定阈值（分钟；2.16 改写：5 分钟无键入=不在场） */
+  presenceMin: number
+  /** 隧道服务商（2.3f=A Cloudflare Quick Tunnel） */
+  tunnel: 'cloudflare'
+  /** 应答页监听端口（0=OS 动态分配） */
+  pagePort: number
+}
+
 /** v2.0 远程文件条目（FilesPanel 列表） */
 export interface RemoteFileEntry {
   name: string
@@ -224,6 +252,17 @@ export interface DiffListResult {
   /** 'HEAD'（V1 固定；基线选择留作扩展） */
   base: 'HEAD'
   files: DiffFileEntry[]
+}
+
+/** v2.1.0 SSH 纯终端输出流事件（ssh2 shell → xterm） */
+export interface SshDataEvent {
+  connectionId: string
+  data: string
+}
+
+/** v2.1.0 SSH 纯终端会话结束事件（远端退出/断连/本地关闭） */
+export interface SshClosedEvent {
+  connectionId: string
 }
 
 /** 任务结束审查提示事件（main→renderer；每项目 10 分钟节流一次） */
@@ -342,6 +381,19 @@ export interface ConnectionRecord {
   lastHostKeyFingerprint?: string
   /** ISO 8601 */
   createdAt: string
+  /**
+   * v2.1.1 连接类型（用户需求：纯 SSH 连接可保存，仅针对 SSH，不支持 claude 开发）：
+   * - 'dev'=远程开发机（现状）：claude 任务/自检 claude+node/cwb-server 可安装
+   * - 'ssh'=纯 SSH 主机：仅 SSH 控制台与文件面板——跳过 claude 自检、永不触发
+   *   cwb-server 安装、不可注册远程项目
+   * 缺省 'dev'（存量档案零迁移）。
+   */
+  kind?: 'dev' | 'ssh'
+  /**
+   * 连接分组（目录）名（v2.1.6：连接管理按目录整理——SSH 视图侧栏按此分节；
+   * 空/缺省=「未分组」）。仅影响展示收纳，不参与任何连接逻辑。
+   */
+  group?: string
 }
 
 /**
@@ -450,6 +502,8 @@ export interface AppSettings {
   downloadPerConnection?: boolean
   /** v2.0 文件面板 per-connection 目录记忆（cid → 远端路径） */
   filesPanelPath?: Record<string, string>
+  /** v2.1.0 SSH 纯终端分栏比例（connectionId → 上半占比 0.2–0.75） */
+  sshSplit?: Record<string, number>
   /** v2.0.1 侧栏作用域：'all' | 'local' | 连接 id（连接删除后消费点归一回 all） */
   sidebarScope?: string
   /**
@@ -764,7 +818,29 @@ export interface CWBApi {
   /** 删除（v2.0.1 用户指令：直接删除不进回收站）：文件=unlink；目录=递归 rm -rf */
   deleteRemote(cid: string, path: string, isDir: boolean): Promise<void>
   /** 小文本文件双击本机打开（文本扩展白名单 + <10MB；返回本机临时路径） */
-  peekRemoteFile(cid: string, remotePath: string): Promise<string>
+  /**
+   * v2.1.7 双击编辑（用户确认设计）：读远端文本（≤5MB；二进制拒绝）。
+   * mtimeMs 供保存前冲突复核；binary=true 时 content 为空。
+   */
+  readRemoteTextFile(
+    cid: string,
+    remotePath: string
+  ): Promise<{ ok: true; content: string; size: number; mtimeMs: number } | { ok: false; error: string; binary?: boolean; tooLarge?: boolean }>
+  /** 直写远端文本（SFTP 覆写；baseMtimeMs 给出且远端已变 → conflict=true 不写） */
+  writeRemoteTextFile(
+    cid: string,
+    remotePath: string,
+    content: string,
+    baseMtimeMs?: number
+  ): Promise<{ ok: true; mtimeMs: number } | { ok: false; error: string; conflict?: boolean }>
+  /** 清掉传输记录里已完成/失败/取消的项（活动项保留；成功后广播进度事件） */
+  clearFinishedTransfers(): Promise<void>
+  /**
+   * v2.1.7 修复：该连接下载的**实际落位目录**（main 侧同源解析：自定义目录或
+   * 系统下载/SSH Workbench + 按连接子目录；不存在则就地创建）——传输弹窗
+   * 「打开保存目录」对默认目录也可用（此前仅自定义目录给按钮）。
+   */
+  getTransfersSaveDir(cid: string): Promise<string>
   /** 本机选择上传源（多选；files=true 含文件 / dirs=true 含目录） */
   pickLocalForUpload(files: boolean, dirs: boolean): Promise<string[] | null>
   /** 上传入队（冲突按 policy；返回条目与冲突清单——skip 由调用方对冲突项 cancel） */
@@ -856,5 +932,18 @@ export interface CWBApi {
   diffFile(projectId: string, cwd: string, path: string, status: DiffFileEntry['status']): Promise<DiffFileDetail>
   /** 任务结束审查提示（每项目 10 分钟节流；files=0 不推） */
   onReviewHint(cb: (e: ReviewHintEvent) => void): Unsubscribe
+  // ── v2.1.0 SSH 纯终端（不启 claude CLI）─────────────────────────
+  /** 打开裸 shell（同连接重开=先关旧会话）；输出经 onSshData 流回 */
+  openSshShell(connectionId: string): Promise<{ ok: boolean; error?: string }>
+  /** 键入透传（SEND 面，无往返） */
+  writeSshShell(connectionId: string, data: string): void
+  /** 栅格同步 */
+  resizeSshShell(connectionId: string, cols: number, rows: number): void
+  /** 关闭会话（幂等） */
+  closeSshShell(connectionId: string): Promise<void>
+  /** shell 输出流订阅（disposer 模式） */
+  onSshData(cb: (e: SshDataEvent) => void): Unsubscribe
+  /** 会话结束订阅 */
+  onSshClosed(cb: (e: SshClosedEvent) => void): Unsubscribe
   reportSmoke(payload: string): void
 }

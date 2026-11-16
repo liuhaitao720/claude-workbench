@@ -36,7 +36,25 @@ export interface FrameContext {
   send: (frame: ServerFrame) => void
   /** 该连接的任务数据 sink（attach 标记用） */
   sink: TaskSink
+  /** 该连接的桌面在场状态（v2.2.0 presence 帧写入；本连接级，断开即失效） */
+  presence: PresenceState
 }
+
+/** 桌面在场状态（v2.2.0）：lastInputAt=客户端最近键入时刻（不存内容），focused=窗口聚焦 */
+export interface PresenceState {
+  lastInputAt: number
+  focused: boolean
+}
+
+/**
+ * 能力清单（3.3=A capability 帧应答；实现落地时逐项打开——客户端据此显示入口，
+ * 不靠版本号猜）。answer/answerPage 在应答页与隧道落地前置 false。
+ */
+export const SERVER_CAPABILITIES = {
+  pushEvents: true,
+  answer: false,
+  answerPage: false
+} as const
 
 /** 脱敏元数据日志出口（server.log 帧 + stderr 镜像；禁止内容型字段） */
 export type LogFn = (level: 'info' | 'warn' | 'error', message: string) => void
@@ -176,7 +194,9 @@ export class CwbServer {
     }
     const ctx: FrameContext = {
       send: (frame) => this.send(ws, frame),
-      sink
+      sink,
+      // 无 presence 帧的旧客户端：按「在场」处理（不挂起，桌面行为不变）
+      presence: { lastInputAt: Number.MAX_SAFE_INTEGER, focused: false }
     }
     const handlers = createHandlers(this, ctx)
     // 帧序串行化：handler 存在异步段（spawn 的 PATH 发现/proxy.start 监听），
@@ -340,6 +360,26 @@ function createHandlers(server: CwbServer, ctx: FrameContext): Record<ClientFram
       const next = config.set(frame.patch)
       log('info', 'proxy config updated')
       replyOk(c, frame.rid, next)
+    },
+    // v2.2.0：桌面在场心跳（只记时间戳与聚焦态，不存内容）
+    presence: (frame, c) => {
+      if (frame.type !== 'presence') return
+      c.presence.lastInputAt = frame.lastInputAt
+      c.presence.focused = frame.focused
+    },
+    'server.capabilities': (frame, c) => {
+      if (frame.type !== 'server.capabilities') return
+      replyOk(c, frame.rid, { ...SERVER_CAPABILITIES, version: VERSION })
+    },
+    // v2.2.0 B 链（本地任务挂起）：答案页/隧道落地后接入 AnswerService。
+    // 未接入前不建号、不推送——客户端本地 hook 按其自身超时回落 TUI。
+    'answer.pending': (frame) => {
+      if (frame.type !== 'answer.pending') return
+      log('info', `answer.pending ignored (answer service unavailable, ${frame.pending.taskId})`)
+    },
+    'answer.cancel': (frame) => {
+      if (frame.type !== 'answer.cancel') return
+      log('info', `answer.cancel ignored (answer service unavailable, ${frame.taskId ?? '-'})`)
     }
   }
 }

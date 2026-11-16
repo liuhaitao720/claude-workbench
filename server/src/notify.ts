@@ -54,6 +54,86 @@ function disabled(): ServerNotifyConfig {
   return { url: '', enabled: false, channel: 'generic' }
 }
 
+/** 推送事件开关（v2.2.0；缺省全开——1.13=A 完成类推送默认生效） */
+export interface NotifyEventFlags {
+  awaiting: boolean
+  stop: boolean
+  stopFailure: boolean
+  exit: boolean
+}
+
+/** 手机答复配置（v2.2.0；缺省关——2.23=A 安全姿态变更须显式开启） */
+export interface AnswerConfig {
+  enabled: boolean
+  /** 一次性 token TTL（秒） */
+  ttlSec: number
+  /** 桌面在场判定阈值（分钟） */
+  presenceMin: number
+  tunnel: 'cloudflare'
+  /** 应答页监听端口（0=OS 动态分配） */
+  pagePort: number
+}
+
+export const DEFAULT_EVENT_FLAGS: NotifyEventFlags = {
+  awaiting: true,
+  stop: true,
+  stopFailure: true,
+  exit: true
+}
+
+export const DEFAULT_ANSWER_CONFIG: AnswerConfig = {
+  enabled: false,
+  ttlSec: 900,
+  presenceMin: 5,
+  tunnel: 'cloudflare',
+  pagePort: 0
+}
+
+/**
+ * 扩展配置读取（3.1：events/answer 与 url/enabled/channel 同一文件）。
+ * 与 loadNotifyConfig 分开读，保持既有返回形状不变（旧单测/调用方零改动）；
+ * 缺失/损坏字段一律安全缺省，绝不抛。
+ */
+export function loadNotifyExtras(home: string): {
+  events: NotifyEventFlags
+  answer: AnswerConfig
+} {
+  let o: Record<string, unknown> = {}
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(home, '.cwb', 'notify.json'), 'utf8'))
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      o = parsed as Record<string, unknown>
+    }
+  } catch {
+    /* 缺失/损坏 → 全部缺省 */
+  }
+  const ev = isPlainObj(o['events']) ? o['events'] : {}
+  const an = isPlainObj(o['answer']) ? o['answer'] : {}
+  const flag = (k: keyof NotifyEventFlags): boolean =>
+    typeof ev[k] === 'boolean' ? (ev[k] as boolean) : DEFAULT_EVENT_FLAGS[k]
+  const int = (v: unknown, def: number, min: number, max: number): number =>
+    typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max ? v : def
+  return {
+    events: {
+      awaiting: flag('awaiting'),
+      stop: flag('stop'),
+      stopFailure: flag('stopFailure'),
+      exit: flag('exit')
+    },
+    answer: {
+      enabled: an['enabled'] === true,
+      ttlSec: int(an['ttlSec'], DEFAULT_ANSWER_CONFIG.ttlSec, 60, 86_400),
+      presenceMin: int(an['presenceMin'], DEFAULT_ANSWER_CONFIG.presenceMin, 1, 1_440),
+      tunnel: 'cloudflare',
+      pagePort: int(an['pagePort'], DEFAULT_ANSWER_CONFIG.pagePort, 0, 65_535)
+    }
+  }
+}
+
+function isPlainObj(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
 /** 按 URL 推断通道（镜像客户端 inferChannel） */
 export function inferChannel(url: string): ServerNotifyConfig['channel'] {
   const u = url.toLowerCase()
