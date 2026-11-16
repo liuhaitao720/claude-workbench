@@ -42,6 +42,8 @@ interface ConnFormState {
   authMethod: 'key' | 'password'
   keyPath: string
   password: string
+  /** v2.1.6 连接分组（目录）：空=未分组 */
+  group: string
 }
 
 const emptyConnForm = (): ConnFormState => ({
@@ -52,7 +54,8 @@ const emptyConnForm = (): ConnFormState => ({
   user: '',
   authMethod: 'key',
   keyPath: '',
-  password: ''
+  password: '',
+  group: ''
 })
 
 const connFormOf = (c: ConnectionRecord): ConnFormState => ({
@@ -64,7 +67,8 @@ const connFormOf = (c: ConnectionRecord): ConnFormState => ({
   authMethod: c.authMethod,
   keyPath: c.keyPath ?? '',
   // 密码不回读展示（契约注：passwordEncrypted 仅 S2 connections-store 读写）
-  password: ''
+  password: '',
+  group: c.group ?? ''
 })
 
 function errMsg(err: unknown): string {
@@ -157,6 +161,7 @@ export function ConnectionsSection({
       // main 当作既有密文透传而在 save 合并时丢弃 → 新建密码认证连接必失败）。
       // 留空=保持原值。
       ...(form.password !== '' ? { password: form.password } : {}),
+      ...(form.group.trim() !== '' ? { group: form.group.trim().slice(0, 40) } : {}),
       createdAt: editing?.createdAt ?? new Date().toISOString()
     }
     setFormError('')
@@ -352,6 +357,29 @@ export function ConnectionsSection({
                   value={form.user}
                   onChange={(e) => setForm({ ...form, user: e.target.value })}
                 />
+              </div>
+            </div>
+            <div className="form-row">
+              <span className="form-label">{t('conn.groupLabel')}</span>
+              <div className="form-control">
+                <input
+                  className="settings-input grow"
+                  type="text"
+                  list="cwb-conn-groups"
+                  aria-label={t('conn.groupLabel')}
+                  placeholder={t('ssh.serverGroupNone')}
+                  title={t('conn.groupHint')}
+                  value={form.group}
+                  onChange={(e) => setForm({ ...form, group: e.target.value })}
+                />
+                <datalist id="cwb-conn-groups">
+                  {[...new Set(connections.map((c) => c.group).filter((g): g is string => g !== undefined && g !== ''))].map(
+                    (g) => (
+                      <option key={g} value={g} />
+                    )
+                  )}
+                </datalist>
+                <p className="hint-small">{t('conn.groupHint')}</p>
               </div>
             </div>
             <div className="form-row">

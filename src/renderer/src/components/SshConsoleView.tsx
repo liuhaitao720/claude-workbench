@@ -361,7 +361,12 @@ function SshTermPane({ cid, active }: { cid: string; active: boolean }) {
         // 解析出 cwd，跟随开启且是当前台时才导航文件面板
         term.parser.registerOscHandler(7, (data) => {
           try {
-            const path = decodeURIComponent(new URL(`file://x${data.split(';')[1] ?? ''}`).pathname)
+            // v2.1.6 根因修复：xterm 传入的 data 就是 OSC 7 载荷「file://host/path」
+            // （标识与终结符已剥）。旧代码 split(';')[1] 永远取 undefined → 空路径
+            // → OSC 跟随从不导航（此前测试通过纯属显式定位先行写了同一路径）。
+            const url =
+              data.startsWith('file:') ? new URL(data) : new URL(`file://x${data.startsWith('/') ? '' : '/'}${data}`)
+            const path = decodeURIComponent(url.pathname)
             if (path !== '' && path !== '/') {
               const st = useAppStore.getState()
               if (st.sshFollowEnabled && st.sshConsoleCid === cid) {

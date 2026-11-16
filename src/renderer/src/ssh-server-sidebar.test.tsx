@@ -1,6 +1,6 @@
 import './test-setup'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { App } from './App'
 import { terminalCache } from './components/TerminalPanel'
 import { installCwbMock, makeConnection } from './test-helpers'
@@ -91,7 +91,7 @@ function row(id: string): HTMLElement {
   if (el === null) throw new Error(`ssh-srv row ${id} not found`)
   return el
 }
-function group(kind: 'pure' | 'dev'): HTMLElement {
+function group(kind: string): HTMLElement {
   const el = document.querySelector(
     `.ssh-srv-group[data-group="${kind}"]`
   ) as HTMLElement | null
@@ -99,33 +99,54 @@ function group(kind: 'pure' | 'dev'): HTMLElement {
   return el
 }
 
-describe('v2.1.2 ① SSH 视图侧栏：分组渲染', () => {
-  it('kind ssh 与无 kind 分别落两组；组头 ×N 计数；开发行带 DEV 角标 + 地址 mono 小字', async () => {
+describe('v2.1.6 连接按目录（分组）收纳', () => {
+  it('无分组连接落「未分组」（×N 计数）；行内 SSH/DEV 徽标自说明；地址 mono 小字', async () => {
     await renderSshView()
     // ProjectSidebar 已被替代：无作用域 chips / 项目树
     expect(document.querySelector('.scope-chips')).toBeNull()
     expect(document.querySelector('.project-list')).toBeNull()
-    const pure = group('pure')
-    const dev = group('dev')
-    // 组头标题 + 计数
-    expect(within(pure).getByText('纯 SSH 连接')).toBeDefined()
-    expect(within(pure).getByText('×2')).toBeDefined()
-    expect(within(dev).getByText('开发服务器')).toBeDefined()
-    expect(within(dev).getByText('×1')).toBeDefined()
-    expect(within(dev).getByText('承载远程项目 · 亦可开纯终端')).toBeDefined()
-    // 行落组：两条纯 SSH 在 pure；开发行在 dev
-    expect(pure.contains(row('cs'))).toBe(true)
-    expect(pure.contains(row('cs2'))).toBe(true)
-    expect(dev.contains(row('cd'))).toBe(true)
-    // 开发行名后 DEV 小角标；纯 SSH 行不带
+    const def = group('default')
+    expect(within(def).getByText('未分组')).toBeDefined()
+    expect(within(def).getByText('×3')).toBeDefined()
+    // 三条都在未分组（fixtures 均无 group）
+    expect(def.contains(row('cs'))).toBe(true)
+    expect(def.contains(row('cs2'))).toBe(true)
+    expect(def.contains(row('cd'))).toBe(true)
+    // 行内徽标自说明：开发=DEV，纯 SSH=SSH
     expect(within(row('cd')).getByText('DEV')).toBeDefined()
-    expect(row('cs').querySelector('.ssh-srv-kind')).toBeNull()
+    expect(within(row('cs')).getByText('SSH')).toBeDefined()
     // 地址行 user@host:port
     expect(within(row('cs')).getByText('root@10.0.0.5:22')).toBeDefined()
     // 状态点缺省 offline（data-state 语义对齐 .sb-chip-dot）
     expect((row('cs').querySelector('.ssh-srv-dot') as HTMLElement).getAttribute('data-state')).toBe(
       'offline'
     )
+  })
+
+  it('group 字段分节（名称序在前，未分组垫底）；搜索按分组名命中', async () => {
+    await renderSshView()
+    act(() => {
+      useAppStore.setState({
+        connections: [
+          { ...connSsh, group: '生产环境' },
+          { ...connDev, group: '办公网' },
+          { ...connSsh2 } // 未分组
+        ]
+      })
+    })
+    // 命名组按名称排序在前：办公网 < 生产环境（localeCompare）；未分组垫底
+    const names = [...document.querySelectorAll('.ssh-srv-group')].map(
+      (g) => g.getAttribute('data-group') ?? ''
+    )
+    expect(names).toEqual(['办公网', '生产环境', 'default'])
+    expect(group('生产环境').contains(row('cs'))).toBe(true)
+    expect(group('办公网').contains(row('cd'))).toBe(true)
+    expect(group('default').contains(row('cs2'))).toBe(true)
+    // 搜索分组名 → 命中该组连接
+    fireEvent.change(screen.getByPlaceholderText('搜索服务器…'), { target: { value: '生产' } })
+    await waitFor(() => expect(row('cs')).not.toBeNull())
+    expect(document.querySelector('.ssh-srv-row[data-connection-id="cd"]')).toBeNull()
+    expect(document.querySelector('.ssh-srv-row[data-connection-id="cs2"]')).toBeNull()
   })
 })
 

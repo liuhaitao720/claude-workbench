@@ -528,11 +528,19 @@ interface AppState {
   /**
    * 打开/切换 SSH 控制台。**每连接一台**（v2.1.5）：已开着的连接切回即恢复
    * （会话与回滚都在），不关旧会话。dir=初始目录（仅开发窗口/项目上下文给）——
-   * 只有给了 dir 才注入 bootstrap（cd + OSC 7 钩子）；从竖条裸进 SSH 视图不注入。
+   * 有 dir 注入 cd + 跟随钩子；无 dir 只装跟随钩子（PROMPT_COMMAND 报告 cwd，
+   * 不改目录）；从竖条裸进 SSH 视图不注入改目录的脚本。
    */
   openSshConsole: (connectionId: string, dir?: string) => Promise<void>
-  /** 关闭 SSH 控制台（断 shell，虚拟 tab 移除） */
+  /** 关闭 SSH 控制台（断全部 shell，退出视图） */
   closeSshConsole: () => void
+  /**
+   * v2.1.6（用户需求：每台独立 tab）：只关一个连接的台——断该 shell、下其 tab；
+   * 关的是当前台则切到其余任一台（无剩余=退出 SSH 视图）。
+   */
+  closeSshConsoleFor: (connectionId: string) => void
+  /** v2.1.6：切到某个已开台（不重开 shell；TabBar 每台一 tab 的点击动作） */
+  activateSshConsoleCid: (connectionId: string) => void
   /** 激活 SSH 控制台前台（虚拟 tab 点击 / Ctrl+Shift+S） */
   activateSshConsole: () => void
   /**
@@ -784,7 +792,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
         ...(reviewGone ? { reviewState: null, reviewActive: false } : {}),
         sshOpenCids,
         sshDeadCids,
-        ...(sshGone ? { sshConsoleCid: null, sshActive: false, sshSessionDead: false } : {}),
+        // v2.1.6：删的是当前台且还有别的台 → 切到剩余台（tab 语义）；无剩余才退出视图
+      ...(sshGone
+        ? sshOpenCids.length > 0
+          ? {
+              sshConsoleCid: sshOpenCids[sshOpenCids.length - 1]!,
+              sshSessionDead: sshDeadCids.includes(sshOpenCids[sshOpenCids.length - 1]!)
+            }
+          : { sshConsoleCid: null, sshActive: false, sshSessionDead: false }
+        : {}),
         selectedProjectId:
           s.selectedProjectId !== null && ids.has(s.selectedProjectId)
             ? s.selectedProjectId
@@ -1005,7 +1021,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         }
         try {
           const r = await window.cwb.openSshShell(connectionId)
-          // 重开沿用该台的目录意图（定向打开过的才注入；rail 裸进的不注入）
+          // 重开沿用该台的目录意图：定向打开过的重新 cd；裸进的只装跟随钩子
           const bootDir = wantDir ?? sshDirIntent.get(connectionId)
           if (!r.ok && get().sshConsoleCid === connectionId) {
             set({
@@ -1014,7 +1030,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
             })
             return
           }
-          if (r.ok && bootDir !== undefined) injectSshBootstrapWhenReady(connectionId, bootDir)
+          if (r.ok) injectSshBootstrapWhenReady(connectionId, bootDir)
         } catch {
           /* 失败留冻结层 */
         }
@@ -1067,9 +1083,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
         })
         return
       }
-      // v2.1.5（用户指令）：注入只服务「从开发窗口/项目上下文进入」的定向——
-      // 裸进 SSH 视图不往别人的 shell 里塞脚本（cd + PROMPT_COMMAND 均不发）
-      if (wantDir !== undefined) injectSshBootstrapWhenReady(connectionId, wantDir)
+      // v2.1.6（用户指令：目录跟随默认可用）：cd 只在「从开发窗口/项目上下文
+      // 定向打开」时注入；跟随钩子（PROMPT_COMMAND 发 OSC 7——只报告 cwd 不改
+      // 目录）每次开台都装。裸进 SSH 视图不注入任何改目录的脚本。
+      // 面板手动切目录后：终端没动（OSC 同路径）不拽回；终端真 cd 了（路径变）
+      // 直接跟到新目录——SshTermPane 的 OSC 去重天然给出这语义。
+      injectSshBootstrapWhenReady(connectionId, wantDir)
     } catch (err) {
       console.error('[cwb] openSshShell failed:', err)
       if (get().sshConsoleCid === connectionId)
@@ -1101,6 +1120,39 @@ export const useAppStore = create<AppState>()((set, get) => ({
   activateSshConsole: () => {
     // v2.1.2：cid 可为 null（SSH 视图空态——无连接时的前台 tab）
     set({ sshActive: true, reviewActive: false })
+  },
+
+  activateSshConsoleCid: (connectionId) => {
+    const s = get()
+    if (!s.sshOpenCids.includes(connectionId)) return
+    set({
+      sshConsoleCid: connectionId,
+      sshActive: true,
+      reviewActive: false,
+      sshSessionDead: s.sshDeadCids.includes(connectionId)
+    })
+  },
+
+  closeSshConsoleFor: (connectionId) => {
+    const s = get()
+    if (!s.sshOpenCids.includes(connectionId)) return
+    cancelSshBootstrap(connectionId)
+    discardSshData(connectionId)
+    sshDirIntent.delete(connectionId)
+    void window.cwb.closeSshShell(connectionId)
+    const rest = s.sshOpenCids.filter((c) => c !== connectionId)
+    const deadRest = s.sshDeadCids.filter((c) => c !== connectionId)
+    if (s.sshConsoleCid === connectionId) {
+      // 关的是当前台：有剩余切到最后一台，无剩余退出 SSH 视图
+      const next = rest.length > 0 ? rest[rest.length - 1] : null
+      if (next !== null) {
+        set({ sshOpenCids: rest, sshDeadCids: deadRest, sshConsoleCid: next, sshSessionDead: deadRest.includes(next) })
+      } else {
+        set({ sshOpenCids: rest, sshDeadCids: deadRest, sshConsoleCid: null, sshActive: false, sshSessionDead: false })
+      }
+    } else {
+      set({ sshOpenCids: rest, sshDeadCids: deadRest })
+    }
   },
 
   openSshView: () => {

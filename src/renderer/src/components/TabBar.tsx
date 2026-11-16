@@ -26,12 +26,15 @@ export function TabBar() {
   const activateReview = useAppStore((s) => s.activateReview)
   const closeReview = useAppStore((s) => s.closeReview)
   const projects = useAppStore((s) => s.projects)
-  // v2.1.0 SSH 纯终端虚拟 tab（单槽；三方互斥互切——openTask/setActive 落 sshActive=false）
+  // v2.1.0 SSH 纯终端虚拟 tab；v2.1.6：**每台（连接）一个 tab**（不再折叠成单 tab）
   const sshConsoleCid = useAppStore((s) => s.sshConsoleCid)
   const sshActive = useAppStore((s) => s.sshActive)
+  const sshOpenCids = useAppStore((s) => s.sshOpenCids)
   const connections = useAppStore((s) => s.connections)
   const activateSshConsole = useAppStore((s) => s.activateSshConsole)
   const closeSshConsole = useAppStore((s) => s.closeSshConsole)
+  const activateSshConsoleCid = useAppStore((s) => s.activateSshConsoleCid)
+  const closeSshConsoleFor = useAppStore((s) => s.closeSshConsoleFor)
   const listRef = useRef<HTMLDivElement>(null)
 
   /**
@@ -52,7 +55,7 @@ export function TabBar() {
   // v2.1.0 F3（评审）：零任务但开着虚拟 tab（审查/SSH）时 tab 栏仍渲染——
   // SSH 纯终端的主打场景就是「不建任务」，此前整栏早退=无 tab 可切/无 × 可关
   // v2.1.2：sshActive 空态（cid=null）也算开着——SSH 视图是一等前台
-  if (openTasks.length === 0 && reviewState === null && sshConsoleCid === null && !sshActive) {
+  if (openTasks.length === 0 && reviewState === null && sshOpenCids.length === 0 && !sshActive) {
     return null
   }
 
@@ -92,7 +95,13 @@ export function TabBar() {
           onKeyDown={(e) => onTabKeyDown(e, i)}
         >
           <TaskStatusDot task={t} />
-          <span className="tab-name">{t.name}</span>
+          {/* v2.1.6：标题=项目名-任务名（项目缺失回落任务名） */}
+          <span className="tab-name" title={t.name}>
+            {(() => {
+              const pn = projects.find((p) => p.id === t.projectId)?.name
+              return pn !== undefined && pn !== '' ? `${pn}-${t.name}` : t.name
+            })()}
+          </span>
           <button
             type="button"
             className="tab-close"
@@ -141,10 +150,48 @@ export function TabBar() {
           </button>
         </div>
       )}
-      {/* v2.1.0 SSH 纯终端虚拟 tab：▣ 图标 + 连接名；× 关台断 shell
-          （Esc 不关——shell 按键须直通远端）；三方互斥互切。
-          v2.1.2：cid=null 的 SSH 视图空态也渲染（label=SSH，× 退回开发视图） */}
-      {(sshConsoleCid !== null || sshActive) && (
+      {/* v2.1.6 SSH 终端 tab：**每台（连接）一个**——▣ 图标 + 连接名，点击切台
+          （不重开 shell），× 只关该台；关的是当前台由 store 切换/退出视图。
+          v2.1.2 空态保留：零台但 SSH 视图前台（cid=null）时渲染单个占位 tab。 */}
+      {sshOpenCids.map((cid, i) => {
+        const conn = connections.find((c) => c.id === cid)
+        const active = sshActive && sshConsoleCid === cid
+        return (
+          <div
+            key={cid}
+            role="tab"
+            aria-selected={active}
+            className={active ? 'tab ssh-tab active' : 'tab ssh-tab'}
+            data-testid={sshConsoleCid === cid ? 'ssh-tab' : undefined}
+            data-connection-id={cid}
+            tabIndex={active ? 0 : -1}
+            onClick={() => activateSshConsoleCid(cid)}
+            onKeyDown={(e) =>
+              onTabKeyDown(e, openTasks.length + (reviewState !== null ? 1 : 0) + i)
+            }
+            title={conn !== undefined ? `${conn.user}@${conn.host}:${conn.port}` : cid}
+          >
+            <span className="ssh-tab-icon" aria-hidden="true">
+              ▣
+            </span>
+            <span className="tab-name">
+              {tr('ssh.tabLabel', { name: conn?.name ?? cid })}
+            </span>
+            <button
+              type="button"
+              className="tab-close"
+              title={tr('ssh.railToggleTitle')}
+              onClick={(e) => {
+                e.stopPropagation()
+                closeSshConsoleFor(cid)
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )
+      })}
+      {sshOpenCids.length === 0 && (sshConsoleCid !== null || sshActive) && (
         <div
           role="tab"
           aria-selected={sshActive}
@@ -152,23 +199,15 @@ export function TabBar() {
           data-testid="ssh-tab"
           tabIndex={sshActive || (openTasks.length === 0 && reviewState === null) ? 0 : -1}
           onClick={() => activateSshConsole()}
-          onKeyDown={(e) => onTabKeyDown(e, openTasks.length + (reviewState !== null ? 1 : 0))}
-          title={
-            connections.find((c) => c.id === sshConsoleCid) !== undefined
-              ? `${connections.find((c) => c.id === sshConsoleCid)!.user}@${connections.find((c) => c.id === sshConsoleCid)!.host}`
-              : tr('ssh.viewEmptyTitle')
+          onKeyDown={(e) =>
+            onTabKeyDown(e, openTasks.length + (reviewState !== null ? 1 : 0))
           }
+          title={tr('ssh.viewEmptyTitle')}
         >
           <span className="ssh-tab-icon" aria-hidden="true">
             ▣
           </span>
-          <span className="tab-name">
-            {sshConsoleCid !== null
-              ? tr('ssh.tabLabel', {
-                  name: connections.find((c) => c.id === sshConsoleCid)?.name ?? ''
-                })
-              : 'SSH'}
-          </span>
+          <span className="tab-name">SSH</span>
           <button
             type="button"
             className="tab-close"

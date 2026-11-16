@@ -361,6 +361,11 @@ export interface ConnectionRecord {
    * 缺省 'dev'（存量档案零迁移）。
    */
   kind?: 'dev' | 'ssh'
+  /**
+   * 连接分组（目录）名（v2.1.6：连接管理按目录整理——SSH 视图侧栏按此分节；
+   * 空/缺省=「未分组」）。仅影响展示收纳，不参与任何连接逻辑。
+   */
+  group?: string
 }
 
 /**

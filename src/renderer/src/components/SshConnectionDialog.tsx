@@ -45,6 +45,14 @@ export function SshConnectionDialog({
   const [user, setUser] = useState(initial?.user ?? '')
   const [authMethod, setAuthMethod] = useState<'key' | 'password'>(initial?.authMethod ?? 'key')
   const [keyPath, setKeyPath] = useState(initial?.keyPath ?? '')
+  /** v2.1.6 连接分组（目录）：空=未分组（选择器须回稳定引用——数组每次新建会死循环） */
+  const [group, setGroup] = useState(initial?.group ?? '')
+  const allConnections = useAppStore((s) => s.connections)
+  const knownGroups: string[] = []
+  for (const c of allConnections) {
+    if (c.group !== undefined && c.group !== '' && !knownGroups.includes(c.group))
+      knownGroups.push(c.group)
+  }
   /** 明文密码/私钥口令（不回显；留空=保持原值，仅非空时随保存单程传递） */
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -118,6 +126,7 @@ export function SshConnectionDialog({
       user: user.trim(),
       authMethod,
       ...(authMethod === 'key' ? { keyPath: keyPath.trim() } : {}),
+      ...(group.trim() !== '' ? { group: group.trim().slice(0, 40) } : {}),
       // 明文仅经 IPC 单程传递（main 侧读取后即刻 safeStorage 加密）；留空=保持原值
       ...(password !== '' ? { password } : {}),
       createdAt: initial?.createdAt ?? new Date().toISOString(),
@@ -215,6 +224,26 @@ export function SshConnectionDialog({
               onBlur={() => touch('name')}
             />
           )}
+          <div className="form-row">
+            <span className="form-label">{t('conn.groupLabel')}</span>
+            <div className="form-control">
+              <input
+                className="settings-input grow"
+                type="text"
+                list="cwb-ssh-conn-groups"
+                aria-label={t('conn.groupLabel')}
+                placeholder={t('ssh.serverGroupNone')}
+                title={t('conn.groupHint')}
+                value={group}
+                onChange={(e) => setGroup(e.target.value)}
+              />
+              <datalist id="cwb-ssh-conn-groups">
+                {knownGroups.map((g) => (
+                  <option key={g} value={g} />
+                ))}
+              </datalist>
+            </div>
+          </div>
           {fieldInput(
             'host',
             <input

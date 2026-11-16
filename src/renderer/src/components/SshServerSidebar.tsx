@@ -112,16 +112,22 @@ export function SshServerSidebar() {
     return () => window.removeEventListener('keydown', onKey)
   }, [setSidebarCollapsed])
 
-  // ── 过滤与分组 ──
+  // ── 过滤与分组（v2.1.6：按目录/分组收纳——连接档案的 group 字段；空=未分组）──
   const q = query.trim().toLowerCase()
   const match = (c: ConnectionRecord): boolean =>
     q === '' ||
     c.name.toLowerCase().includes(q) ||
     c.host.toLowerCase().includes(q) ||
-    c.user.toLowerCase().includes(q)
-  const pureConns = connections.filter((c) => c.kind === 'ssh' && match(c))
-  const devConns = connections.filter((c) => c.kind !== 'ssh' && match(c))
-  const noMatch = q !== '' && pureConns.length === 0 && devConns.length === 0
+    c.user.toLowerCase().includes(q) ||
+    (c.group ?? '').toLowerCase().includes(q)
+  const matched = connections.filter(match)
+  // 命名组按名称排序在前；未分组垫底
+  const folderNames = [...new Set(matched.map((c) => c.group ?? '').filter((g) => g !== ''))].sort((a, b) => a.localeCompare(b))
+  const folders: Array<{ name: string; conns: ConnectionRecord[] }> = [
+    ...folderNames.map((name) => ({ name, conns: matched.filter((c) => (c.group ?? '') === name) })),
+    { name: '', conns: matched.filter((c) => (c.group ?? '') === '') }
+  ].filter((f) => f.conns.length > 0)
+  const noMatch = q !== '' && matched.length === 0
 
   const openNewDialog = (): void => {
     setDialogInitial(null)
@@ -259,41 +265,30 @@ export function SshServerSidebar() {
           ) : noMatch ? (
             <div className="search-empty">{t('tree.noMatch')}</div>
           ) : (
-            <>
-              {pureConns.length > 0 && (
-                <div className="ssh-srv-group" data-group="pure">
-                  <div className="ssh-srv-group-title">
-                    {t('ssh.serverGroupPure')} <span className="ssh-srv-count">×{pureConns.length}</span>
-                  </div>
-                  <ServerRows
-                    conns={pureConns}
-                    sshConsoleCid={sshConsoleCid}
-                    stateOf={stateOf}
-                    openMenuKey={openMenuKey}
-                    setOpenKey={setOpenMenuKey}
-                    onOpen={openEditDialog}
-                    setDeleting={setDeleting}
-                  />
+            folders.map((f) => (
+              <div
+                key={f.name}
+                className="ssh-srv-group"
+                data-group={f.name === '' ? 'default' : f.name}
+              >
+                <div
+                  className="ssh-srv-group-title"
+                  aria-label={t('ssh.serverGroupCountAria', { name: f.name === '' ? t('ssh.serverGroupNone') : f.name, count: f.conns.length })}
+                >
+                  <span aria-hidden="true">📁</span> {f.name === '' ? t('ssh.serverGroupNone') : f.name}
+                  <span className="ssh-srv-count">×{f.conns.length}</span>
                 </div>
-              )}
-              {devConns.length > 0 && (
-                <div className="ssh-srv-group" data-group="dev">
-                  <div className="ssh-srv-group-title">
-                    {t('ssh.serverGroupDev')} <span className="ssh-srv-count">×{devConns.length}</span>
-                    <span className="ssh-srv-group-hint">{t('ssh.serverGroupDevHint')}</span>
-                  </div>
-                  <ServerRows
-                    conns={devConns}
-                    sshConsoleCid={sshConsoleCid}
-                    stateOf={stateOf}
-                    openMenuKey={openMenuKey}
-                    setOpenKey={setOpenMenuKey}
-                    onOpen={openEditDialog}
-                    setDeleting={setDeleting}
-                  />
-                </div>
-              )}
-            </>
+                <ServerRows
+                  conns={f.conns}
+                  sshConsoleCid={sshConsoleCid}
+                  stateOf={stateOf}
+                  openMenuKey={openMenuKey}
+                  setOpenKey={setOpenMenuKey}
+                  onOpen={openEditDialog}
+                  setDeleting={setDeleting}
+                />
+              </div>
+            ))
           )}
         </div>
       </aside>
@@ -405,7 +400,15 @@ function ServerRow({
       >
         <span className="ssh-srv-name">
           {conn.name}
-          {conn.kind !== 'ssh' && <span className="ssh-srv-kind">DEV</span>}
+          {conn.kind === 'ssh' ? (
+            <span className="ssh-srv-kind" title={t('ssh.kindBadgeSsh')}>
+              SSH
+            </span>
+          ) : (
+            <span className="ssh-srv-kind" title={t('ssh.serverGroupDevHint')}>
+              DEV
+            </span>
+          )}
         </span>
         <span className="ssh-srv-addr">
           {conn.user}@{conn.host}:{conn.port}

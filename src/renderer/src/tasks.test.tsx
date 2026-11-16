@@ -221,7 +221,8 @@ describe('任务行操作（S6-B：⋯ 溢出菜单 + 单行化）', () => {
     const api = await renderWithProject(gitProject, [runner])
     fireEvent.click((taskRow('tr') as HTMLElement).querySelector('.task-main') as HTMLElement)
     const tab = await screen.findByRole('tab')
-    expect(within(tab).getByText('runner')).toBeDefined()
+    // v2.1.6：任务 tab 标题=项目名-任务名
+    expect(within(tab).getByText('GitProj-runner')).toBeDefined()
     fireEvent.click(within(tab).getByRole('button', { name: '×' }))
     await waitFor(() => expect(screen.queryByRole('tab')).toBeNull())
     expect(taskRow('tr')).toBeDefined() // 任务行仍在（可恢复）
@@ -314,7 +315,7 @@ describe('项目树折叠（v0.1.2 行为保持：CSS 隐藏保挂载）', () =>
     fireEvent.click(within(node).getByRole('button', { name: /折叠 GitProj 的任务/ }))
     await waitFor(() => expect(children.style.display).toBe('none'))
     expect(screen.getByRole('tab')).toBeDefined() // tab 与终端面板不受折叠影响
-    expect(within(screen.getByRole('tab')).getByText('runner')).toBeDefined()
+    expect(within(screen.getByRole('tab')).getByText('GitProj-runner')).toBeDefined()
   })
 })
 

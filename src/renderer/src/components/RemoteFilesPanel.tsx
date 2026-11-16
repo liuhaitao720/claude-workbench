@@ -135,7 +135,9 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
   const followEnabled = useAppStore((s) => s.sshFollowEnabled)
   useEffect(() => {
     if (follow === null || follow.connectionId !== connectionId) return
-    // 显式定位（项目菜单/任务上下文）恒导航；OSC 7 跟随受开关门控
+    // 显式定位（项目菜单/任务上下文）恒导航；OSC 7 跟随受开关门控。
+    // v2.1.6 语义（用户需求）：面板手动切目录后终端没动（OSC 同路径，SshTermPane
+    // 去重不产 seq）不拽回；终端真 cd 了（路径变）这里直接跟到新目录。
     if (follow.source === 'explicit' || followEnabled) load(follow.path, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 跟随按 seq 导航
   }, [follow?.seq, connectionId])

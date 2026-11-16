@@ -30,6 +30,7 @@ beforeEach(() => {
     sshOpenCids: [],
     sshDeadCids: [],
     sshFollowDir: null,
+    sshFollowEnabled: true,
     reviewState: null,
     reviewActive: false,
     reviewHint: null,
@@ -380,38 +381,120 @@ describe('v2.1.2 ③ bootstrap 就绪门（修「打开即缓冲区打印、需 
     expect(useAppStore.getState().sshConsoleCid).toBe('c2')
     await act(async () => {}) // openSshShell(B) 已决、B 门已挂
     expect(api.closeSshShell).not.toHaveBeenCalledWith('c1')
-    // 推进 10s：A 的 8s 兜底照常触发——注入落在 A 自己的台；B（rail 裸进，无目录意图）从不注入
+    // 推进 10s：A 的 8s 兜底照常触发——A 定向打开（cd+钩子）；B 裸进只装跟随
+    // 钩子（v2.1.6：跟随默认可用）、不改目录
     act(() => {
       vi.advanceTimersByTime(10_000)
     })
-    expect(
-      vi.mocked(api.writeSshShell).mock.calls.filter(
-        (c) => c[0] === 'c1' && c[1].includes('PROMPT_COMMAND')
-      )
-    ).toHaveLength(1)
-    expect(
-      vi.mocked(api.writeSshShell).mock.calls.some(
-        (c) => c[0] === 'c2' && c[1].includes('PROMPT_COMMAND')
-      )
-    ).toBe(false)
+    const c1Boots = vi.mocked(api.writeSshShell).mock.calls.filter(
+      (c) => c[0] === 'c1' && c[1].includes('PROMPT_COMMAND')
+    )
+    expect(c1Boots).toHaveLength(1)
+    expect(c1Boots[0]![1]).toContain("cd '/home/dev/r'")
+    const c2Boots = vi.mocked(api.writeSshShell).mock.calls.filter(
+      (c) => c[0] === 'c2' && c[1].includes('PROMPT_COMMAND')
+    )
+    expect(c2Boots).toHaveLength(1)
+    expect(c2Boots[0]![1]).not.toContain('cd ')
   })
 })
 
-describe('v2.1.5 注入只服务「定向打开」（用户指令：不是从开发窗口来就不注入）', () => {
-  it('Ctrl+Shift+S 裸进 SSH 终端（无任务/项目上下文）→ 从不写 shell（无 cd、无 PROMPT_COMMAND）', async () => {
+describe('v2.1.6 注入语义：cd 只随定向打开；跟随钩子每次开台都装', () => {
+  it('Ctrl+Shift+S 裸进 SSH 终端（无任务/项目上下文）→ 只装跟随钩子（PROMPT_COMMAND），不发 cd', async () => {
     const api = await renderApp()
     fireEvent.keyDown(window, { key: 'S', ctrlKey: true, shiftKey: true })
     await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c1'))
     await act(async () => {})
     const emit = vi.mocked(api.onSshData).mock.calls[0]?.[0]
     expect(emit).toBeDefined()
-    // 提示符拍也不该触发任何注入
+    // 提示符拍触发注入：只有钩子行（不改目录——满足「裸进不注入改目录脚本」）
     act(() => emit!({ connectionId: 'c1', data: '\r\nuser@vm:~$ ' }))
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 700))
+    await waitFor(() => {
+      expect(
+        vi.mocked(api.writeSshShell).mock.calls.some(
+          (c) => c[0] === 'c1' && c[1].includes('PROMPT_COMMAND')
+        )
+      ).toBe(true)
     })
-    expect(vi.mocked(api.writeSshShell).mock.calls).toHaveLength(0)
-    expect(useAppStore.getState().sshFollowDir).toBe(null)
+    expect(
+      vi.mocked(api.writeSshShell).mock.calls.some((c) => c[0] === 'c1' && c[1].includes('cd '))
+    ).toBe(false)
+    expect(useAppStore.getState().sshFollowDir).toBe(null) // 钩子未回报前不导航
+    // 钩子回报 cwd → 面板跟随导航（跟随默认可用）
+    act(() => emit!({ connectionId: 'c1', data: '\u001b]7;file://h/home/liuhait1\u0007' }))
+    await waitFor(() => expect(useAppStore.getState().sshFollowDir?.path).toBe('/home/liuhait1'))
+  })
+
+  it('面板手动切目录后：终端没动（OSC 同路径）不拽回；终端真 cd（新路径）直接跟过去', async () => {
+    const api = await renderApp()
+    fireEvent.click(screen.getByTestId('btn-ssh-rail'))
+    await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c1'))
+    await act(async () => {})
+    const emit = vi.mocked(api.onSshData).mock.calls[0]?.[0]
+    expect(emit).toBeDefined()
+    // 终端 cd 后回报 cwd=/home/dev/r → 面板跟随导航（真 OSC 处理器→store→面板）
+    act(() => emit!({ connectionId: 'c1', data: '\u001b]7;file://h/home/dev/r\u0007' }))
+    await waitFor(() => expect(api.listRemoteFiles).toHaveBeenCalledWith('c1', '/home/dev/r'))
+    // 面板手动切走（🏠 回家目录）——面板自身发起，不经跟随
+    vi.mocked(api.listRemoteFiles).mockClear()
+    fireEvent.click(screen.getByText('🏠'))
+    await waitFor(() => expect(api.listRemoteFiles).toHaveBeenCalled())
+    // 终端没动：OSC 再报同一 cwd——去重不产 seq，面板不被拽回（无新导航）
+    vi.mocked(api.listRemoteFiles).mockClear()
+    act(() => emit!({ connectionId: 'c1', data: '\u001b]7;file://h/home/dev/r\u0007' }))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    expect(api.listRemoteFiles).not.toHaveBeenCalled()
+    // 终端真 cd 到 /tmp → 直接跟到新目录
+    act(() => emit!({ connectionId: 'c1', data: '\u001b]7;file://h/tmp\u0007' }))
+    await waitFor(() => expect(api.listRemoteFiles).toHaveBeenCalledWith('c1', '/tmp'))
+  })
+})
+
+describe('v2.1.6 每台独立 tab + 任务 tab 标题', () => {
+  afterEach(cleanup)
+
+  it('两台各一个 tab：互切不重开 shell；× 只关该台；全关退出 SSH 视图', async () => {
+    const api = await renderApp()
+    fireEvent.click(screen.getByTestId('btn-ssh-rail'))
+    await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c1'))
+    // 换 c2：两台各一个 tab（c2 活跃带 ssh-tab testid；c1 靠 data-connection-id 寻）
+    const select = screen.getByRole('combobox', { name: '目标连接' }) as HTMLSelectElement
+    await act(async () => {
+      fireEvent.change(select, { target: { value: 'c2' } })
+    })
+    await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c2'))
+    const tab1 = document.querySelector('.ssh-tab[data-connection-id="c1"]') as HTMLElement
+    const tab2 = screen.getByTestId('ssh-tab')
+    expect(tab1.getAttribute('aria-selected')).toBe('false')
+    expect(tab2.getAttribute('aria-selected')).toBe('true')
+    expect(tab2.textContent).toContain('VM-Test')
+    // 点 c1 tab：切回该台——不重开 shell（c1 仍只有最初那一次 open）
+    const c1Opens = () =>
+      vi.mocked(api.openSshShell).mock.calls.filter((c) => c[0] === 'c1').length
+    const before = c1Opens()
+    fireEvent.click(tab1)
+    await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c1'))
+    expect(c1Opens()).toBe(before)
+    expect(screen.getByTestId('ssh-tab').textContent).toContain('VM-Dev')
+    // × 关 c2 台：只断 c2 的 shell，c1 台保留且成为当前台
+    const closeBtn2 = within(document.querySelector('.ssh-tab[data-connection-id="c2"]') as HTMLElement).getByText('×')
+    fireEvent.click(closeBtn2)
+    await waitFor(() => expect(useAppStore.getState().sshOpenCids).toEqual(['c1']))
+    expect(api.closeSshShell).toHaveBeenCalledWith('c2')
+    expect(useAppStore.getState().sshConsoleCid).toBe('c1')
+    expect(document.querySelector('.ssh-tab[data-connection-id="c2"]')).toBeNull()
+    // × 关最后一台：退出 SSH 视图（tab 全消）
+    fireEvent.click(within(screen.getByTestId('ssh-tab')).getByText('×'))
+    await waitFor(() => expect(useAppStore.getState().sshActive).toBe(false))
+    expect(useAppStore.getState().sshConsoleCid).toBeNull()
+    expect(screen.queryByTestId('ssh-tab')).toBeNull()
+  })
+
+  it('任务 tab 标题=项目名-任务名（项目缺失回落任务名）', async () => {
+    await renderApp()
+    expect(screen.getByRole('tab', { name: /R-跑着/ })).toBeDefined()
   })
 })
 
