@@ -43,6 +43,55 @@ export const DEFAULT_ANSWER_CONFIG: AnswerConfig = {
   pagePort: 0
 }
 
+/** Stop 桶节流窗（1.5=A：同任务 60 秒合并） */
+export const STOP_THROTTLE_MS = 60 * 1000
+/** Stop→exit 合并窗（1.7=A：10 秒内到达的退出合并为一条） */
+export const STOP_MERGE_MS = 10 * 1000
+/** 任务退出后桶表保留时长（容忍迟到 hook；1.18） */
+export const BUCKET_CLEANUP_MS = 60 * 1000
+/** 摘要单行上限（D1/A2） */
+const SUMMARY_MAX_CHARS = 120
+
+/** 推送任务元数据（名称/项目/起始时刻；ipc 从 tasks/projects 派生） */
+export interface NotifyTaskMeta {
+  name?: string
+  projectName?: string
+  /** 任务创建时刻（epoch ms） */
+  startedAt?: number
+}
+
+export type NotifyOutcome =
+  | 'pushed'
+  | 'skipped-disabled'
+  | 'skipped-debounced'
+  | 'skipped-flag'
+  | 'ignored'
+
+/**
+ * 回答摘要归一化（D1/A2，与 server/src/notify.ts 同语义）：去代码块 → 压空白 →
+ * 单行截断 120 字符。摘要只进 webhook 文案，不落盘不进日志（G4）。
+ */
+export function summarizeAssistantMessage(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const text = raw
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (text === '') return undefined
+  return text.length > SUMMARY_MAX_CHARS ? `${text.slice(0, SUMMARY_MAX_CHARS - 1)}…` : text
+}
+
+/** 耗时格式：<1h=mm:ss，否则 h:mm:ss（与 server/src/notify.ts 同语义） */
+export function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const mm = String(m).padStart(2, '0')
+  const ss = String(s).padStart(2, '0')
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`
+}
+
 export interface NotifyServiceOptions {
   /** 配置文件路径（组合根注入 join(userData, 'notify.json')） */
   file: string
@@ -52,6 +101,8 @@ export interface NotifyServiceOptions {
   now?: () => number
   /** 任务显示名查找（推送文案含任务名；缺省用 taskId 前 8 位） */
   taskNameOf?: (taskId: string) => string | undefined
+  /** v2.2.0 任务元数据（项目名/起始时刻；缺省回退 taskNameOf 且无耗时） */
+  taskMetaOf?: (taskId: string) => NotifyTaskMeta | undefined
   /** v1.2.0 文案语言来源（缺省读 main 进程级 mainLanguage()；测试可注入固定值） */
   language?: () => Language
 }
@@ -211,6 +262,9 @@ export class NotifyService {
    */
   onActivityEvent(event: TaskActivityEvent, configOverride?: NotifyConfig): void {
     if (event.activity !== 'awaiting') return
+    // events.awaiting 开关只对本地配置生效（远程 override=VM 侧文件，开关值未取回——
+    // 保持旧行为全量推送，避免跨端配置语义猜测）
+    if (configOverride === undefined && !this.getEvents().awaiting) return
     const config = configOverride ?? this.load()
     if (!config.enabled || config.url.length === 0) {
       this.recordTrail(event.taskId, 'skipped', config.enabled ? 'no url' : 'disabled')
@@ -226,6 +280,90 @@ export class NotifyService {
     })
     const text = this.t('notify.awaiting', { name, when })
     void this.push(config, text, event.taskId)
+  }
+
+  /**
+   * hook 事件入口（v2.2.0 本地任务 A 链）：Stop/StopFailure 触发完成/异常推送。
+   * `SubagentStop` 显式忽略——子 agent 的停止不推送（用户 2026-11-16 指令）。
+   * 返回值供测试断言；Stop 的 'pushed' = 已排入 10 秒合并窗（真正 POST 在窗到期）。
+   */
+  onHookEvent(
+    taskId: string,
+    event: string,
+    bodyText?: string,
+    configOverride?: NotifyConfig
+  ): NotifyOutcome {
+    if (event === 'SubagentStop') return 'ignored'
+    if (event !== 'Stop' && event !== 'StopFailure') return 'ignored'
+    const config = configOverride ?? this.load()
+    if (!config.enabled || config.url.length === 0) return 'skipped-disabled'
+    // 开关只对本地配置生效（远程 override=VM 侧文件，其 events 开关未取回——保持全量）
+    const flags = configOverride === undefined ? this.getEvents() : undefined
+    const at = this.now()
+    if (event === 'Stop') {
+      if (flags !== undefined && !flags.stop) return 'skipped-flag'
+      const last = this.stopAt.get(taskId)
+      if (last !== undefined && at - last < STOP_THROTTLE_MS) return 'skipped-debounced'
+      this.stopAt.set(taskId, at)
+      this.armStopMerge(taskId, config, at, parseHookBody(bodyText))
+      return 'pushed'
+    }
+    // StopFailure：异常结束必推（terminal，不节流）
+    if (flags !== undefined && !flags.stopFailure) return 'skipped-flag'
+    this.cancelPendingStop(taskId)
+    const detail = pickFailureLine(parseHookBody(bodyText))
+    void this.push(config, this.failureText(taskId, at, detail), taskId)
+    return 'pushed'
+  }
+
+  /**
+   * 任务退出/显式停止入口（本地任务 markStatus 调用；v2.2.0）。
+   * 10 秒合并窗内的 Stop 与本次退出合并为一条（1.7）；否则穿透节流必推（1.6）。
+   * exitCode：0=正常，>0=异常，undefined/-1=未知（中性「已退出」，不误报异常）。
+   */
+  onTaskExit(
+    taskId: string,
+    exitCode: number | undefined,
+    stopped: boolean,
+    configOverride?: NotifyConfig
+  ): NotifyOutcome {
+    const config = configOverride ?? this.load()
+    this.scheduleCleanup(taskId)
+    const pending = this.cancelPendingStop(taskId)
+    if (!config.enabled || config.url.length === 0) return 'skipped-disabled'
+    // 开关只对本地配置生效（远程 override=VM 侧文件，见 onHookEvent 同注）
+    if (configOverride === undefined && !this.getEvents().exit) return 'skipped-flag'
+    const at = this.now()
+    const code = exitCode ?? -1
+    void this.push(
+      config,
+      pending !== undefined
+        ? this.mergedExitText(taskId, at, code, stopped, pending.summary)
+        : this.exitText(taskId, at, code, stopped),
+      taskId
+    )
+    return 'pushed'
+  }
+
+  /** 应用退出前把 10 秒窗内的 Stop 立即推掉（不丢消息），并清理定时器 */
+  flush(): void {
+    const config = this.load()
+    for (const [taskId, pending] of [...this.pendingStops]) {
+      clearTimeout(pending.timer)
+      this.pendingStops.delete(taskId)
+      if (config.enabled && config.url.length > 0) {
+        void this.push(config, this.stopText(taskId, pending.at, pending.summary), taskId)
+      }
+    }
+    this.dispose()
+  }
+
+  /** 丢弃全部定时器（不推送；进程退出路径） */
+  dispose(): void {
+    for (const [, p] of this.pendingStops) clearTimeout(p.timer)
+    this.pendingStops.clear()
+    for (const [, t] of this.cleanupTimers) clearTimeout(t)
+    this.cleanupTimers.clear()
   }
 
   /** 以指定配置立即推送（远程「测试推送」用——本地测试走 sendTest） */
@@ -253,6 +391,121 @@ export class NotifyService {
 
   /** taskId → 最近一次推送时刻（防抖表） */
   private readonly lastPushAt = new Map<string, number>()
+  /** v2.2.0 stop 桶（60 秒/任务；终态不受它限制——1.6 穿透） */
+  private readonly stopAt = new Map<string, number>()
+  /** v2.2.0 10 秒合并窗待推的 Stop（1.7） */
+  private readonly pendingStops = new Map<string, PendingStop>()
+  /** v2.2.0 任务退出后桶表清理定时器（1.18） */
+  private readonly cleanupTimers = new Map<string, NodeJS.Timeout>()
+
+  // ── v2.2.0 节流/合并/文案 ──────────────────────────────────────────
+
+  private armStopMerge(
+    taskId: string,
+    config: NotifyConfig,
+    at: number,
+    body: Record<string, unknown> | undefined
+  ): void {
+    const summary = summarizeAssistantMessage(body?.['last_assistant_message'])
+    const prev = this.pendingStops.get(taskId)
+    if (prev !== undefined) clearTimeout(prev.timer)
+    const timer = setTimeout(() => {
+      this.pendingStops.delete(taskId)
+      void this.push(config, this.stopText(taskId, at, summary), taskId)
+    }, STOP_MERGE_MS)
+    timer.unref?.()
+    this.pendingStops.set(taskId, { timer, at, ...(summary !== undefined ? { summary } : {}) })
+  }
+
+  private cancelPendingStop(taskId: string): PendingStop | undefined {
+    const pending = this.pendingStops.get(taskId)
+    if (pending !== undefined) {
+      clearTimeout(pending.timer)
+      this.pendingStops.delete(taskId)
+    }
+    return pending
+  }
+
+  /** 退出后 60 秒清理桶表（容忍迟到 hook；1.18） */
+  private scheduleCleanup(taskId: string): void {
+    const existing = this.cleanupTimers.get(taskId)
+    if (existing !== undefined) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      this.cleanupTimers.delete(taskId)
+      this.lastPushAt.delete(taskId)
+      this.stopAt.delete(taskId)
+    }, BUCKET_CLEANUP_MS)
+    timer.unref?.()
+    this.cleanupTimers.set(taskId, timer)
+  }
+
+  /** 任务标签：「名称（项目）」；名称缺省 taskId 前 8 位 */
+  private label(taskId: string): string {
+    const meta = this.opts.taskMetaOf?.(taskId)
+    const name = meta?.name ?? this.opts.taskNameOf?.(taskId) ?? taskId.slice(0, 8)
+    return meta?.projectName !== undefined && meta.projectName !== ''
+      ? `${name}（${meta.projectName}）`
+      : name
+  }
+
+  /** `> 耗时 mm:ss · 时间` 行；无起始时刻则只给时间 */
+  private metaLine(taskId: string, at: number): string {
+    const when = new Date(at).toLocaleString(this.language() === 'en' ? 'en-US' : 'zh-CN', {
+      hour12: false
+    })
+    const startedAt = this.opts.taskMetaOf?.(taskId)?.startedAt
+    if (startedAt === undefined || !Number.isFinite(startedAt) || at < startedAt) {
+      return this.t('notify.metaTime', { when })
+    }
+    return this.t('notify.metaLine', { duration: formatDuration(at - startedAt), when })
+  }
+
+  private stopText(taskId: string, at: number, summary?: string): string {
+    const lines = [this.t('notify.completed', { name: this.label(taskId) })]
+    if (summary !== undefined) lines.push(this.t('notify.summaryLine', { summary }))
+    lines.push(this.metaLine(taskId, at))
+    return lines.join('\n')
+  }
+
+  private failureText(taskId: string, at: number, detail?: string): string {
+    const lines = [this.t('notify.failedTurn', { name: this.label(taskId) })]
+    if (detail !== undefined) lines.push(this.t('notify.errorLine', { error: detail }))
+    lines.push(this.metaLine(taskId, at))
+    return lines.join('\n')
+  }
+
+  private mergedExitText(
+    taskId: string,
+    at: number,
+    exitCode: number,
+    stopped: boolean,
+    summary?: string
+  ): string {
+    const name = this.label(taskId)
+    const status = stopped
+      ? this.t('notify.completedAndStopped', { name })
+      : exitCode === 0
+        ? this.t('notify.completedAndExit', { name })
+        : exitCode < 0
+          ? this.t('notify.completedAndExit', { name }) // 退出码未知：中性表述
+          : this.t('notify.failedExit', { name, code: exitCode })
+    const lines = [status]
+    if (summary !== undefined) lines.push(this.t('notify.summaryLine', { summary }))
+    lines.push(this.metaLine(taskId, at))
+    return lines.join('\n')
+  }
+
+  private exitText(taskId: string, at: number, exitCode: number, stopped: boolean): string {
+    const name = this.label(taskId)
+    const status = stopped
+      ? this.t('notify.stopped', { name })
+      : exitCode === 0 || exitCode < 0
+        ? this.t('notify.exited', { name })
+        : this.t('notify.abnormalExit', { name, code: exitCode })
+    return `${status}\n${this.metaLine(taskId, at)}`
+  }
+
+  // ── 发送 ─────────────────────────────────────────────────────────────
 
   /** 推送（失败静默 + console.error——旁路提醒不阻塞状态机）；v2.0.1 留痕（设置页诊断） */
   private async push(config: NotifyConfig, text: string, taskId?: string): Promise<void> {
@@ -345,6 +598,42 @@ export class NotifyService {
 
 function isPlainObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** 10 秒合并窗内的 Stop（summary=body 的 last_assistant_message 摘要） */
+interface PendingStop {
+  timer: NodeJS.Timeout
+  at: number
+  summary?: string
+}
+
+/** 解析 hook body（容错：非法 JSON → undefined；不记内容） */
+function parseHookBody(bodyText: string | undefined): Record<string, unknown> | undefined {
+  if (bodyText === undefined || bodyText === '') return undefined
+  try {
+    const parsed: unknown = JSON.parse(bodyText)
+    return isPlainObj(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** StopFailure 错误首行（字段形态未实测——逐候选取值，全部缺失=undefined） */
+function pickFailureLine(body: Record<string, unknown> | undefined): string | undefined {
+  if (body === undefined) return undefined
+  for (const key of ['error', 'message', 'last_assistant_message']) {
+    const raw = body[key]
+    const text =
+      typeof raw === 'string'
+        ? raw
+        : isPlainObj(raw) && typeof raw['message'] === 'string'
+          ? raw['message']
+          : undefined
+    if (text === undefined) continue
+    const line = text.split('\n', 1)[0]!.trim()
+    if (line !== '') return summarizeAssistantMessage(line)
+  }
+  return undefined
 }
 
 /** 只保留布尔字段（部分更新防注入非布尔值） */

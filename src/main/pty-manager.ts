@@ -146,7 +146,8 @@ export function invalidateClaudePathCache(): void {
 
 export interface PtyManagerCallbacks {
   onData: (event: PtyDataEvent) => void
-  onExit: (taskId: string) => void
+  /** exitCode 透传（v2.2.0 推送文案：0=完成，非 0=异常） */
+  onExit: (taskId: string, exitCode?: number) => void
 }
 
 /**
@@ -209,9 +210,9 @@ export class PtyManager implements PtyBackend {
     })
     this.ptys.set(taskId, pty)
     pty.onData((data) => this.callbacks.onData({ taskId, data }))
-    pty.onExit(() => {
+    pty.onExit((event) => {
       this.ptys.delete(taskId)
-      this.callbacks.onExit(taskId)
+      this.callbacks.onExit(taskId, event.exitCode)
     })
   }
 

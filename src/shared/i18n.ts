@@ -560,6 +560,19 @@ export const zh = {
   'notify.urlIsAdminPage':
     '这是企业微信机器人的管理页地址，不是 Webhook 推送地址。请在 群设置 → 群机器人 → 复制 Webhook 地址（形如 https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...）',
   'notify.urlScheme': 'URL 须以 http:// 或 https:// 开头',
+  // v2.2.0 完成/停止推送（1.1~1.12）
+  'notify.completed': '【SSH Workbench】任务「{name}」本轮完成',
+  'notify.completedAndExit': '【SSH Workbench】任务「{name}」本轮完成并退出',
+  'notify.completedAndStopped': '【SSH Workbench】任务「{name}」本轮完成并已停止',
+  'notify.failedTurn': '【SSH Workbench】任务「{name}」本轮异常结束',
+  'notify.failedExit': '【SSH Workbench】任务「{name}」本轮异常退出（code {code}）',
+  'notify.exited': '【SSH Workbench】任务「{name}」已退出',
+  'notify.abnormalExit': '【SSH Workbench】任务「{name}」异常退出（code {code}）',
+  'notify.stopped': '【SSH Workbench】任务「{name}」已停止',
+  'notify.summaryLine': '> 摘要：{summary}',
+  'notify.errorLine': '> 错误：{error}',
+  'notify.metaLine': '> 耗时 {duration} · {when}',
+  'notify.metaTime': '> {when}',
 
   // ── main 侧：CLI 命令校验 ────────────────────────────────
   'cli.errEmpty': '命令为空',
@@ -1277,6 +1290,18 @@ export const en: Record<MessageKey, string> = {
   'notify.urlIsAdminPage':
     'This is the WeCom bot management page, not a webhook URL. Copy the webhook from Group Settings → Group Bots (it looks like https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...)',
   'notify.urlScheme': 'URL must start with http:// or https://',
+  'notify.completed': '[SSH Workbench] Task "{name}" finished this turn',
+  'notify.completedAndExit': '[SSH Workbench] Task "{name}" finished this turn and exited',
+  'notify.completedAndStopped': '[SSH Workbench] Task "{name}" finished this turn and was stopped',
+  'notify.failedTurn': '[SSH Workbench] Task "{name}" ended the turn with an error',
+  'notify.failedExit': '[SSH Workbench] Task "{name}" exited after an error (code {code})',
+  'notify.exited': '[SSH Workbench] Task "{name}" exited',
+  'notify.abnormalExit': '[SSH Workbench] Task "{name}" exited abnormally (code {code})',
+  'notify.stopped': '[SSH Workbench] Task "{name}" stopped',
+  'notify.summaryLine': '> Summary: {summary}',
+  'notify.errorLine': '> Error: {error}',
+  'notify.metaLine': '> Duration {duration} · {when}',
+  'notify.metaTime': '> {when}',
 
   'cli.errEmpty': 'Command is empty',
   'cli.errNewline': 'Command contains a newline (multi-statement injection rejected)',

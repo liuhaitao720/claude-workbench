@@ -85,11 +85,15 @@ const SESSION_MARKER_VARS = [
 const REPLAY_MAX_BYTES = 1_500_000
 /** 环形缓冲容量（全量回放预算 + 余量；>容量丢最旧——超长会话保最近 2MB） */
 const RING_CAPACITY_BYTES = 2_000_000
+/** 退出后元数据暂存时长（与推送桶清理窗口一致；1.18） */
+const RETIRED_META_TTL_MS = 60_000
 
 interface Entry {
   taskId: string
   /** v2.0.2 任务显示名（spawn req.name；服务器侧推送文案用） */
   name?: string
+  /** v2.2.0 项目显示名（spawn req.projectName；推送文案「任务（项目）」用） */
+  projectName?: string
   pty: PtyProcess
   /** 数据订阅（task.data 推送对象=当前 attach 的 sink） */
   sinks: Set<TaskSink>
@@ -110,6 +114,14 @@ export class TaskRegistry {
   /** 创建中的 taskId（spawn 含 PATH 发现异步段——跨连接并发同 id 的原子性护栏） */
   private readonly spawning = new Set<string>()
   private extraPathDirs: string[] | null = null
+  /**
+   * v2.2.0：退出后元数据暂存（60 秒）——Stop hook 可能晚于 PTY 退出到达，
+   * 推送文案仍需要名称/项目/起始时刻（1.18 桶表清理同窗口）。
+   */
+  private readonly retired = new Map<
+    string,
+    { name?: string; projectName?: string; startedAt: string; timer: NodeJS.Timeout }
+  >()
 
   constructor(
     private readonly events: TaskRegistryEvents = {},
@@ -118,7 +130,20 @@ export class TaskRegistry {
 
   /** v2.0.2：任务显示名（服务器侧推送文案；未注册=undefined） */
   nameOf(taskId: string): string | undefined {
-    return this.entries.get(taskId)?.name
+    return this.entries.get(taskId)?.name ?? this.retired.get(taskId)?.name
+  }
+
+  /** v2.2.0：任务项目名（推送文案用；未注册/未传=undefined） */
+  projectNameOf(taskId: string): string | undefined {
+    return this.entries.get(taskId)?.projectName ?? this.retired.get(taskId)?.projectName
+  }
+
+  /** v2.2.0：任务创建时刻（epoch ms；推送耗时用；未注册=undefined） */
+  startedAtOf(taskId: string): number | undefined {
+    const iso = this.entries.get(taskId)?.startedAt ?? this.retired.get(taskId)?.startedAt
+    if (iso === undefined) return undefined
+    const t = Date.parse(iso)
+    return Number.isFinite(t) ? t : undefined
   }
 
   /** task.spawn：不存在则创建；已存在=幂等拒绝（契约语义）。返回 pid。 */
@@ -142,6 +167,9 @@ export class TaskRegistry {
       const entry: Entry = {
         taskId: req.taskId,
         ...(req.name !== undefined && req.name !== '' ? { name: req.name } : {}),
+        ...(req.projectName !== undefined && req.projectName !== ''
+          ? { projectName: req.projectName }
+          : {}),
         pty,
         sinks: new Set(),
         lifecycleSinks: new Set(),
@@ -244,12 +272,14 @@ export class TaskRegistry {
     return this.entries.has(taskId)
   }
 
-  /** 丢弃全部 replay 定时器（进程退出前清理用；不杀 PTY） */
+  /** 丢弃全部 replay/元数据暂存定时器（进程退出前清理用；不杀 PTY） */
   disposeTimers(): void {
     for (const entry of this.entries.values()) {
       if (entry.replayTimer !== null) clearTimeout(entry.replayTimer)
       entry.replayTimer = null
     }
+    for (const [, rec] of this.retired) clearTimeout(rec.timer)
+    this.retired.clear()
   }
 
   private require(taskId: string): Entry {
@@ -270,10 +300,26 @@ export class TaskRegistry {
     if (this.entries.get(entry.taskId) !== entry) return
     if (entry.replayTimer !== null) clearTimeout(entry.replayTimer)
     this.entries.delete(entry.taskId)
+    // v2.2.0：元数据暂存 60 秒（迟到 Stop hook 的推送文案仍需名称/项目/耗时）
+    this.retainMetadata(entry)
     // 生命周期通知：曾 attach 的全部 sink（当前是否 detach 不影响——退出是任务
     // 终态，客户端须能落 exited 状态）
     for (const sink of entry.lifecycleSinks) sink.onExit(entry.taskId, exitCode)
     this.events.onTaskExit?.(entry.taskId, exitCode)
+  }
+
+  /** 退出元数据暂存（60 秒后清理；定时器 unref 不阻塞进程退出） */
+  private retainMetadata(entry: Entry): void {
+    const prev = this.retired.get(entry.taskId)
+    if (prev !== undefined) clearTimeout(prev.timer)
+    const record = {
+      ...(entry.name !== undefined ? { name: entry.name } : {}),
+      ...(entry.projectName !== undefined ? { projectName: entry.projectName } : {}),
+      startedAt: entry.startedAt
+    }
+    const timer = setTimeout(() => this.retired.delete(entry.taskId), RETIRED_META_TTL_MS)
+    timer.unref?.()
+    this.retired.set(entry.taskId, { ...record, timer })
   }
 
   /**

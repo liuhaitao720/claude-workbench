@@ -228,11 +228,11 @@ export class RemotePtyManager implements PtyBackend {
   private transportEvents(): ServerClientEvents {
     return {
       onData: (taskId, chunk) => this.opts.callbacks.onData({ taskId, data: chunk }),
-      onExit: (taskId) => {
+      onExit: (taskId, exitCode) => {
         const known = this.tasks.delete(taskId)
         this.lastSize.delete(taskId)
         this.pendingKills.delete(taskId) // 停止意图已生效（退出到达）
-        if (known) this.opts.callbacks.onExit(taskId)
+        if (known) this.opts.callbacks.onExit(taskId, exitCode)
       },
       onLog: (level, message) => this.log(level, message),
       // v2.0.2 hook 回放（推送服务器侧化）：server 转发的 hook 事件回放进本机
@@ -415,7 +415,8 @@ export class RemotePtyManager implements PtyBackend {
           // 断连期间任务已退出（server 注册表已清）——合成退出，落 markStatus('exited')
           this.tasks.delete(taskId)
           this.lastSize.delete(taskId)
-          this.opts.callbacks.onExit(taskId)
+          // 真实退出码不可得：-1=未知（推送文案按「已退出」中性表述，不误报异常）
+          this.opts.callbacks.onExit(taskId, -1)
         }
       }
     } catch (err) {
@@ -474,6 +475,18 @@ export function versionAtLeast(a: string, b: string): boolean {
 
 /** hooks 服务器侧直收的最低 server 版本（/hook 路由 + hook.event 转发 + 侧推送） */
 const SERVER_HOOK_MIN_VERSION = '0.1.1'
+/** 服务器侧推送「完成/停止/退出」的最低版本（capability 缺失时的版本兜底） */
+const SERVER_PUSH_EVENTS_MIN_VERSION = '0.2.0'
+
+/** server.capabilities 应答形状（3.3=A：客户端按能力开关，不靠版本号猜） */
+export interface ServerCapabilities {
+  /** server 自身推送 readying + 完成/停止/退出（v0.2.0+） */
+  pushEvents: boolean
+  /** 手机答复（hook 挂起代答）可用 */
+  answer: boolean
+  /** 应答页/隧道可用 */
+  answerPage: boolean
+}
 
 export class RemotePtyHub {
   private readonly opts: RemotePtyHubOptions
@@ -483,6 +496,10 @@ export class RemotePtyHub {
   private readonly hookPortInFlight = new Map<string, Promise<number>>()
   /** v2.0.2 server 版本缓存（connectionId → version；hook URL 基址/推送门控） */
   private readonly serverVersions = new Map<string, string>()
+  /** v2.2.0 能力缓存（成功才缓存；失败逐次重试——旧 server 会以 unknown frame 拒绝） */
+  private readonly serverCaps = new Map<string, ServerCapabilities>()
+  /** 能力探测并发去重（同连接多事件同时触发只发一次帧） */
+  private readonly serverCapsInFlight = new Map<string, Promise<ServerCapabilities | null>>()
 
   constructor(opts: RemotePtyHubOptions) {
     this.opts = opts
@@ -560,6 +577,51 @@ export class RemotePtyHub {
   serverPushesNotifyFor(connectionId: string): boolean {
     const v = this.serverVersions.get(connectionId)
     return v !== undefined && versionAtLeast(v, SERVER_HOOK_MIN_VERSION)
+  }
+
+  /**
+   * v2.2.0：server 是否自己推送「完成/停止/退出」（能力 pushEvents）。
+   * 能力缺失（server <0.2.0 不认识该帧）→ 版本兜底；均未知=否（客户端补推）。
+   * 客户端据此避免远程任务双推。
+   */
+  async serverPushesCompletionFor(connectionId: string): Promise<boolean> {
+    const caps = await this.serverCapabilitiesOf(connectionId)
+    if (caps !== null) return caps.pushEvents
+    const v = await this.serverVersionOf(connectionId)
+    return v !== null && versionAtLeast(v, SERVER_PUSH_EVENTS_MIN_VERSION)
+  }
+
+  /** v2.2.0：手机答复能力（answer；本地任务挂起与设置页入口据此开关） */
+  async serverSupportsAnswerFor(connectionId: string): Promise<boolean> {
+    const caps = await this.serverCapabilitiesOf(connectionId)
+    return caps !== null && caps.answer === true
+  }
+
+  /** 能力探测（缓存；旧 server 拒绝帧 → null，不缓存） */
+  async serverCapabilitiesOf(connectionId: string): Promise<ServerCapabilities | null> {
+    const cached = this.serverCaps.get(connectionId)
+    if (cached !== undefined) return cached
+    const inFlight = this.serverCapsInFlight.get(connectionId)
+    if (inFlight !== undefined) return inFlight
+    const p = (async (): Promise<ServerCapabilities | null> => {
+      try {
+        const m = this.managerFor(connectionId)
+        const payload = await m.request<Record<string, unknown>>({ type: 'server.capabilities' })
+        const caps: ServerCapabilities = {
+          pushEvents: payload?.['pushEvents'] === true,
+          answer: payload?.['answer'] === true,
+          answerPage: payload?.['answerPage'] === true
+        }
+        this.serverCaps.set(connectionId, caps)
+        return caps
+      } catch {
+        return null // 旧 server：帧被拒/超时——按能力缺失处理（版本兜底）
+      } finally {
+        this.serverCapsInFlight.delete(connectionId)
+      }
+    })()
+    this.serverCapsInFlight.set(connectionId, p)
+    return p
   }
 
   /** server 版本（缓存；失败=null=未知→按旧 server 回退） */

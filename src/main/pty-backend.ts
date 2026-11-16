@@ -16,7 +16,11 @@ import type { PtyDataEvent } from '../shared/types'
 /** PTY 输出/退出外送回调（PtyManagerCallbacks 的结构化镜像，两侧独立演化） */
 export interface PtyBackendCallbacks {
   onData: (event: PtyDataEvent) => void
-  onExit: (taskId: string) => void
+  /**
+   * 任务进程退出。exitCode 可选：v2.2.0 推送文案需要退出码（0=正常；非 0=异常），
+   * 远程对账「任务已消亡」路径拿不到真实码（-1=未知）。
+   */
+  onExit: (taskId: string, exitCode?: number) => void
 }
 
 export interface PtyBackend {

@@ -81,4 +81,30 @@ describe('v2.0.2 /hook 接收口 → hook.event 转发 + 服务器侧推送', ()
     expect(res.status).toBe(200)
     expect(await res.text()).toContain('"server":"cwb-server"')
   })
+
+  it('v2.2.0：POST body 完整透传给服务器侧推送（Stop 摘要来源）', async () => {
+    const port = (server as unknown as { port: number }).port
+    const calls: Array<[string, string, string | undefined]> = []
+    const orig = server.notifier.onHookEvent.bind(server.notifier)
+    server.notifier.onHookEvent = (taskId, event, body) => {
+      calls.push([taskId, event, body])
+      return 'ignored'
+    }
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/hook/Stop?t=t-body&e=2`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ last_assistant_message: 'PONG' })
+      })
+      expect(res.status).toBe(200)
+      expect(await res.text()).toBe('')
+      await new Promise((r) => setTimeout(r, 150))
+      expect(calls).toHaveLength(1)
+      expect(calls[0]![0]).toBe('t-body')
+      expect(calls[0]![1]).toBe('Stop')
+      expect(JSON.parse(calls[0]![2] ?? '{}')).toMatchObject({ last_assistant_message: 'PONG' })
+    } finally {
+      server.notifier.onHookEvent = orig
+    }
+  })
 })

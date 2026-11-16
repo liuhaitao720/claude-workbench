@@ -443,11 +443,13 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
    * 唯一的 running→终态迁移路径（显式 stop 与 PTY onExit 共用；幂等，防双写双播）。
    * v0.3.2：区分终态——stopTask 落 'stopped'，非显式停止的 onExit 落 'exited'（跟踪会话异常退出）。
    */
-  const markStatus = (taskId: string, status: 'stopped' | 'exited'): void => {
+  const markStatus = (taskId: string, status: 'stopped' | 'exited', exitCode?: number): void => {
     const task = tasks.get(taskId)
     if (!task || task.status !== 'running') return
     const updated = tasks.upsert({ ...task, status, lastActiveAt: new Date().toISOString() })
     broadcastTaskUpdate(updated)
+    // v2.2.0 A 链：终态推送（stopped=显式停止；exited=进程退出，exitCode 透传）
+    routeNotifyExit(taskId, status, status === 'stopped' ? 0 : (exitCode ?? -1))
     // v2.0.2 任务结束审查提示（AI 开发完成 → toast [审查]）；尽力而为失败静默
     maybeReviewHint(task)
   }
@@ -519,6 +521,19 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   const notify = new NotifyService({
     file: join(baseDir, 'notify.json'),
     taskNameOf: (taskId) => tasks.get(taskId)?.name,
+    // v2.2.0 推送文案：项目名 + 耗时（tasks/projects 派生；任务删除后仍按 taskId 前 8 位）
+    taskMetaOf: (taskId) => {
+      const task = tasks.get(taskId)
+      if (task === undefined) return {}
+      const startedAt = Date.parse(task.createdAt)
+      return {
+        ...(task.name !== undefined && task.name !== '' ? { name: task.name } : {}),
+        ...(projects.get(task.projectId)?.name !== undefined
+          ? { projectName: projects.get(task.projectId)!.name }
+          : {}),
+        ...(Number.isFinite(startedAt) ? { startedAt } : {})
+      }
+    },
     language: mainLanguage
   })
   // v1.4 模型服务 provider 档案：userData/providers.json（apiKey 属凭据仅存本地）
@@ -590,7 +605,9 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     // 在用却不刷新 → 项目树「按最近活跃倒序」的键失真（新任务压过昨恢复但在用的
     // 老任务）。用户真实交互信号（提交提示/轮次完成等 hook）到达时节流 touch——
     // 30s 粒度足够排序且不放大 tasks.json 写盘。
-    onHookEvent: (taskId) => {
+    onHookEvent: (taskId, event, body) => {
+      // v2.2.0 A 链：Stop/StopFailure → 完成/异常推送（SubagentStop 在 notify 内部忽略）
+      routeNotifyHookEvent(taskId, event, body)
       const task = tasks.get(taskId)
       if (!task || task.status !== 'running') return
       const now = Date.now()
@@ -614,8 +631,8 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     broadcast(IpcChannels.PtyData, event)
     options.onPtyData?.(event)
   }
-  const ptyOnExit = (taskId: string): void => {
-    markStatus(taskId, 'exited')
+  const ptyOnExit = (taskId: string, exitCode?: number): void => {
+    markStatus(taskId, 'exited', exitCode)
   }
   const localPty = new PtyManager({
     onData: ptyOnData,
@@ -654,8 +671,28 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   }
 
   // v1.7.0 远程通知分流（用户指令：本地和远程都要 webhook 通知）：远程任务的
-  // awaiting 事件取 VM 侧 ~/.cwb/notify.json 触发（缓存+写穿失效；远端无配置=
-  // 不推送，绝不回落本地配置——两侧配置语义隔离）；本地任务走本地配置（不变）。
+  // 推送取 VM 侧 ~/.cwb/notify.json 触发（缓存+写穿失效；远端无配置=不推送，
+  // 绝不回落本地配置——两侧配置语义隔离）；本地任务走本地配置（不变）。
+  /** 远端无配置/读取失败时的哨兵（enabled=false → 内部走 skipped 分支） */
+  const DISABLED_NOTIFY: NotifyConfig = { url: '', enabled: false, channel: 'generic' }
+
+  /** 远程任务 notify 配置解析（60s 缓存；失败缓存 null 且本次不推送） */
+  function withRemoteNotifyConfig(cid: string, fn: (cfg: NotifyConfig) => void): void {
+    const cached = remoteNotifyCache.get(cid)
+    if (cached !== undefined && Date.now() - cached.at < REMOTE_NOTIFY_CACHE_TTL_MS) {
+      fn(cached.cfg ?? DISABLED_NOTIFY)
+      return
+    }
+    void readRemoteNotify(connection, cid)
+      .then((cfg) => {
+        remoteNotifyCache.set(cid, { cfg, at: Date.now() })
+        fn(cfg ?? DISABLED_NOTIFY)
+      })
+      .catch(() => {
+        remoteNotifyCache.set(cid, { cfg: null, at: Date.now() })
+      })
+  }
+
   function routeNotifyActivity(e: TaskActivityEvent): void {
     if (e.activity !== 'awaiting') return
     const cid = connectionIdOfTask(e.taskId)
@@ -666,19 +703,39 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     // v2.0.2 推送服务器侧化：server ≥0.1.1 时 webhook 由 server 就地推送
     // （VM 侧 ~/.cwb/notify.json + VM 网络直达；客户端离线照常）——客户端不再重复推
     if (remotePty.serverPushesNotifyFor(cid)) return
-    const cached = remoteNotifyCache.get(cid)
-    if (cached !== undefined && Date.now() - cached.at < REMOTE_NOTIFY_CACHE_TTL_MS) {
-      notify.onActivityEvent(e, cached.cfg ?? { url: '', enabled: false, channel: 'generic' })
+    withRemoteNotifyConfig(cid, (cfg) => notify.onActivityEvent(e, cfg))
+  }
+
+  /**
+   * v2.2.0 A 链（完成/停止/退出推送）hook 分流：
+   * - 本地任务：本地 notify.json（Stop/StopFailure → 完成/异常文案）；
+   * - 远程任务：server ≥0.2.0（能力 pushEvents）就地推送 → 客户端不重复；
+   *   旧 server 由客户端按 VM 侧配置补推（配置语义与 awaiting 同源）。
+   */
+  function routeNotifyHookEvent(taskId: string, event: string, body: string): void {
+    const cid = connectionIdOfTask(taskId)
+    if (cid === undefined) {
+      notify.onHookEvent(taskId, event, body)
       return
     }
-    void readRemoteNotify(connection, cid)
-      .then((cfg) => {
-        remoteNotifyCache.set(cid, { cfg, at: Date.now() })
-        notify.onActivityEvent(e, cfg)
-      })
-      .catch(() => {
-        remoteNotifyCache.set(cid, { cfg: null, at: Date.now() })
-      })
+    void remotePty.serverPushesCompletionFor(cid).then((serverPushes) => {
+      if (serverPushes) return
+      withRemoteNotifyConfig(cid, (cfg) => notify.onHookEvent(taskId, event, body, cfg))
+    })
+  }
+
+  /** v2.2.0 A 链：任务终态（markStatus 调用）→ 完成并退出/停止/异常退出文案 */
+  function routeNotifyExit(taskId: string, status: 'stopped' | 'exited', exitCode: number): void {
+    const stopped = status === 'stopped'
+    const cid = connectionIdOfTask(taskId)
+    if (cid === undefined) {
+      notify.onTaskExit(taskId, exitCode, stopped)
+      return
+    }
+    void remotePty.serverPushesCompletionFor(cid).then((serverPushes) => {
+      if (serverPushes) return
+      withRemoteNotifyConfig(cid, (cfg) => notify.onTaskExit(taskId, exitCode, stopped, cfg))
+    })
   }
   // ctx.pty = 路由后端（本地/远程按 connectionId 分派；spawn 前的显式远程分支
   // 直接用 remotePty.managerFor——记录未落盘时路由查不到归属）

@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ServerNotifier,
   buildNotifyPayload,
+  formatDuration,
   inferChannel,
   isAwaitingHookEvent,
   loadNotifyConfig,
   loadNotifyExtras,
+  summarizeAssistantMessage,
   DEFAULT_ANSWER_CONFIG,
   DEFAULT_EVENT_FLAGS
 } from '../notify'
@@ -63,16 +65,18 @@ describe('配置读取（~/.cwb/notify.json 容错）', () => {
 })
 
 describe('触发门控与防抖', () => {
-  it('仅 awaiting 三源触发（Stop/UserPromptSubmit 忽略）；同任务 5 分钟防抖；跨任务独立', () => {
+  it('仅 awaiting 三源触发（Stop 走合并窗/UserPromptSubmit 忽略）；同任务 5 分钟防抖；跨任务独立', () => {
     writeConfig({ url: 'https://hook.example/x', enabled: true })
     const n = makeNotifier()
-    expect(n.onHookEvent('t1', 'Stop')).toBe('ignored')
+    expect(n.onHookEvent('t1', 'Stop')).toBe('pushed') // v2.2.0：排入 10s 合并窗，不立即发
     expect(n.onHookEvent('t1', 'UserPromptSubmit')).toBe('ignored')
+    expect(n.onHookEvent('t1', 'SubagentStop')).toBe('ignored') // 子 agent 停止不推送
     expect(n.onHookEvent('t1', 'PermissionRequest')).toBe('pushed')
     clockNow += 60_000
     expect(n.onHookEvent('t1', 'Elicitation')).toBe('skipped-debounced')
     expect(n.onHookEvent('t2', 'PreToolUse')).toBe('pushed') // 跨任务独立
     expect(pushed).toHaveLength(2)
+    n.dispose()
   })
 
   it('禁用/无 URL → skipped-disabled；payload 含任务名（spawn 注册名）与时间', async () => {
@@ -154,5 +158,139 @@ describe('loadNotifyExtras（v2.2.0 events/answer 配置层）', () => {
     })
     expect(loadNotifyExtras(home).events.stop).toBe(false)
     expect(loadNotifyExtras(home).answer.enabled).toBe(true)
+  })
+})
+
+describe('v2.2.0 完成/停止推送（分桶/10s 合并/终态穿透）', () => {
+  const text = (i: number): string => String(pushed[i]!.body.text)
+  const enable = (extra: Record<string, unknown> = {}): void =>
+    writeConfig({ url: 'https://hook.example/x', enabled: true, ...extra })
+
+  afterEach(() => vi.useRealTimers())
+
+  it('Stop 60 秒节流：窗内丢弃（仅留桶），窗后重推', () => {
+    enable()
+    vi.useFakeTimers()
+    const n = makeNotifier()
+    expect(n.onHookEvent('t1', 'Stop', '{"last_assistant_message":"PONG"}')).toBe('pushed')
+    clockNow += 30_000
+    expect(n.onHookEvent('t1', 'Stop')).toBe('skipped-debounced')
+    clockNow += 40_000 // 距首次 70s
+    expect(n.onHookEvent('t1', 'Stop')).toBe('pushed')
+    n.dispose()
+  })
+
+  it('10 秒合并：Stop + 退出 → 一条「完成并退出」，摘要去代码块/压空白', () => {
+    enable()
+    vi.useFakeTimers()
+    const n = makeNotifier()
+    n.onHookEvent('t1', 'Stop', '{"last_assistant_message":"done: ```js\\nx\\n``` ok"}')
+    clockNow += 5_000
+    expect(n.onTaskExit('t1', 0, false)).toBe('pushed')
+    expect(pushed).toHaveLength(1)
+    expect(text(0)).toContain('本轮完成并退出')
+    expect(text(0)).toContain('> 摘要：done: ok')
+    vi.advanceTimersByTime(10_000) // 定时器已取消——不得产生第二条
+    expect(pushed).toHaveLength(1)
+  })
+
+  it('终态穿透（1.6）：Stop 已推后退出仍必推', () => {
+    enable()
+    vi.useFakeTimers()
+    const n = makeNotifier()
+    n.onHookEvent('t1', 'Stop')
+    vi.advanceTimersByTime(10_000)
+    expect(pushed).toHaveLength(1)
+    expect(text(0)).toContain('本轮完成')
+    clockNow += 1_000
+    expect(n.onTaskExit('t1', 0, false)).toBe('pushed')
+    expect(pushed).toHaveLength(2)
+    expect(text(1)).toContain('已退出')
+  })
+
+  it('退出码映射：非 0 → 异常退出（code N）；显式停止 → 已停止', () => {
+    enable()
+    const n = makeNotifier()
+    n.onTaskExit('t1', 1, false)
+    n.onTaskExit('t2', 0, true)
+    expect(text(0)).toContain('异常退出（code 1）')
+    expect(text(1)).toContain('已停止')
+    n.dispose()
+  })
+
+  it('awaiting 与 stop 分桶（1.14 回归点）：Stop 后 60 秒内 awaiting 照推', () => {
+    enable()
+    vi.useFakeTimers()
+    const n = makeNotifier()
+    n.onHookEvent('t1', 'Stop')
+    clockNow += 5_000
+    expect(n.onHookEvent('t1', 'PermissionRequest')).toBe('pushed')
+    vi.advanceTimersByTime(10_000)
+    expect(pushed).toHaveLength(2)
+    expect(text(0)).toContain('等待你的答复')
+    expect(text(1)).toContain('本轮完成')
+    n.dispose()
+  })
+
+  it('StopFailure：不节流、带错误首行（terminal 桶）', () => {
+    enable()
+    const n = makeNotifier()
+    n.onHookEvent('t1', 'StopFailure', '{"error":{"message":"rate limited\\nretry later"}}')
+    clockNow += 1_000
+    n.onHookEvent('t1', 'StopFailure', '{"message":"second\\nmore"}')
+    expect(pushed).toHaveLength(2)
+    expect(text(0)).toContain('本轮异常结束')
+    expect(text(0)).toContain('> 错误：rate limited')
+    expect(text(1)).toContain('> 错误：second')
+    n.dispose()
+  })
+
+  it('events 开关关闭 → skipped-flag（awaiting 保持默认开）', () => {
+    enable({ events: { stop: false, exit: false, stopFailure: false } })
+    const n = makeNotifier()
+    expect(n.onHookEvent('t1', 'Stop')).toBe('skipped-flag')
+    expect(n.onHookEvent('t1', 'StopFailure')).toBe('skipped-flag')
+    expect(n.onTaskExit('t1', 0, false)).toBe('skipped-flag')
+    expect(n.onHookEvent('t1', 'PermissionRequest')).toBe('pushed')
+    n.dispose()
+  })
+
+  it('flush：停机前把合并窗内的 Stop 补推', () => {
+    enable()
+    vi.useFakeTimers()
+    const n = makeNotifier()
+    n.onHookEvent('t1', 'Stop')
+    expect(pushed).toHaveLength(0)
+    n.flush()
+    expect(pushed).toHaveLength(1)
+    expect(text(0)).toContain('本轮完成')
+  })
+
+  it('文案含项目名与耗时（metaOf）', () => {
+    enable()
+    const n = new ServerNotifier({
+      home,
+      fetchImpl: (async (_url: string, init?: RequestInit) => {
+        pushed.push({ url: _url, body: JSON.parse(String(init?.body)) as Record<string, unknown> })
+        return new Response('{"ok":1}')
+      }) as typeof fetch,
+      now: () => clockNow,
+      metaOf: () => ({ name: '登录重构', projectName: 'web-app', startedAt: clockNow - 151_000 })
+    })
+    n.onTaskExit('t1', 0, false)
+    expect(text(0)).toContain('登录重构（web-app）')
+    expect(text(0)).toContain('> 耗时 02:31')
+    n.dispose()
+  })
+
+  it('摘要归一化与耗时格式', () => {
+    const long = summarizeAssistantMessage('x'.repeat(300))
+    expect(long).toHaveLength(120)
+    expect(long!.endsWith('…')).toBe(true)
+    expect(summarizeAssistantMessage('a\n\nb\t c')).toBe('a b c')
+    expect(summarizeAssistantMessage(undefined)).toBeUndefined()
+    expect(summarizeAssistantMessage('```\nonly code\n```')).toBeUndefined()
+    expect(formatDuration(151_000)).toBe('02:31')
+    expect(formatDuration(3_725_000)).toBe('1:02:05')
   })
 })

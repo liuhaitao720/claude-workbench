@@ -548,6 +548,45 @@ describe('registerIpcHandlers（electron mock：记录型 ipcMain + 广播窗口
     expect(await invoke<NotifyConfig>(IpcChannels.NotifyGet, undefined)).toEqual(saved)
   })
 
+  it('v2.2.0 A 链：本地 Stop hook + 显式停止 → 合并推送一条完成并停止（不做 Git/网络真调用）', async () => {
+    const realFetch = globalThis.fetch
+    const pushMock = vi.fn(async (_url: unknown, _init: unknown) => ({ ok: true, status: 200 }) as Response)
+    vi.stubGlobal('fetch', pushMock)
+    try {
+      await invoke(
+        IpcChannels.NotifySet,
+        undefined,
+        'https://qyapi.weixin.qq.com/send?key=k',
+        true
+      )
+      const proj = await invoke<ProjectRecord>(IpcChannels.ProjectsAdd, h.tempDir)
+      const task = await invoke<TaskRecord>(IpcChannels.TasksCreate, proj.id, '推送任务', {
+        isolation: 'shared'
+      })
+      const parsed = JSON.parse(readFileSync(settingsPathOf(task.id), 'utf8')) as {
+        hooks: { Stop: Array<{ hooks: Array<{ url: string }> }> }
+      }
+      const url = parsed.hooks.Stop[0]?.hooks[0]?.url as string
+      const res = await realFetch(url, {
+        method: 'POST',
+        body: JSON.stringify({ last_assistant_message: '改了 3 个文件' })
+      })
+      expect(res.status).toBe(200)
+
+      // 显式停止：10 秒合并窗内的 Stop 与本终态合并为一条（立即推，不等定时器）
+      await invoke(IpcChannels.TasksStop, task.id)
+      await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1), { timeout: 5_000, interval: 20 })
+      const init = pushMock.mock.calls[0]?.[1] as RequestInit
+      const text = (JSON.parse(String(init.body)) as { markdown: { content: string } }).markdown.content
+      expect(text).toContain('本轮完成并已停止')
+      expect(text).toContain('推送任务')
+      expect(text).toContain('改了 3 个文件')
+    } finally {
+      vi.unstubAllGlobals()
+      expect(globalThis.fetch).toBe(realFetch)
+    }
+  })
+
   // ── v1.4 模型服务 provider ─────────────────────────────────────────────
   it('v1.4 Providers CRUD：默认空；保存（校验+归一+uuid）/设默认/删除（默认清空）；非法入参拒绝', async () => {
     expect(await invoke(IpcChannels.ProvidersList)).toEqual({ providers: [] })

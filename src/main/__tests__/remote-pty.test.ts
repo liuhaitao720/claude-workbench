@@ -33,6 +33,8 @@ class FakeTransport implements ServerTransport {
   listPayload: Array<Record<string, unknown>> = []
   /** v2.0.2 server.version 回执（缺省 0.1.1=支持 hook 服务器侧直收） */
   versionPayload: string = '0.1.1'
+  /** v2.2.0 server.capabilities 回执；null=旧 server（帧被拒 → request 抛错） */
+  capsPayload: { pushEvents: boolean; answer: boolean; answerPage: boolean } | null = null
   /** connect() 行为（缺省成功） */
   connectImpl: () => Promise<void> = async () => {
     this.connected = true
@@ -57,6 +59,11 @@ class FakeTransport implements ServerTransport {
     if (frame.type === 'task.list') return this.listPayload as T
     if (frame.type === 'task.spawn') return { taskId: frame.req.taskId, pid: 4242 } as T
     if (frame.type === 'server.version') return { version: this.versionPayload } as T
+    if (frame.type === 'server.capabilities') {
+      // 旧 server 不认识该帧：request 拒绝（生产=帧校验失败）
+      if (this.capsPayload === null) throw new Error('unknown frame: server.capabilities')
+      return this.capsPayload as T
+    }
     return undefined as T
   }
 
@@ -503,5 +510,75 @@ describe('v2.0.2 推送服务器侧化（hook URL 基址门控 + hook.event 回�
     expect(received[0]).toBe('/hook/UserPromptSubmit?e=7&t=th-1')
     hub.disposeAll()
     sinkServer.close()
+  })
+})
+
+describe('v2.2.0 能力协商（server.capabilities 优先 + 版本回退 + 失败不缓存）', () => {
+  function makeCapsHub(o: {
+    version?: string
+    caps?: { pushEvents: boolean; answer: boolean; answerPage: boolean } | null
+  }): { hub: RemotePtyHub; transport: FakeTransport } {
+    const transport = new FakeTransport()
+    if (o.version !== undefined) transport.versionPayload = o.version
+    if (o.caps !== undefined) transport.capsPayload = o.caps
+    const hub = new RemotePtyHub({
+      connection: new FakeConnection().asManager(),
+      callbacks: { onData: () => {}, onExit: () => {} },
+      onServerLog: () => {},
+      transportFactory: (events) => {
+        transport.bind(events)
+        return transport
+      }
+    })
+    return { hub, transport }
+  }
+
+  it('能力帧优先：pushEvents=false 覆盖版本推断（version 0.2.0 也不双推）；结果缓存', async () => {
+    const { hub, transport } = makeCapsHub({
+      version: '0.2.0',
+      caps: { pushEvents: false, answer: true, answerPage: true }
+    })
+    await expect(hub.serverPushesCompletionFor('c1')).resolves.toBe(false)
+    await expect(hub.serverSupportsAnswerFor('c1')).resolves.toBe(true)
+    expect(transport.framesOf('server.capabilities')).toHaveLength(1) // 缓存：只探一次
+    expect(transport.framesOf('server.version')).toHaveLength(0) // 能力可用时不查版本
+    hub.disposeAll()
+  })
+
+  it('能力帧缺失（旧 server 拒绝）：版本兜底——0.2.0→server 推；0.1.5→客户端补推；answer 不可用', async () => {
+    const newer = makeCapsHub({ version: '0.2.0' })
+    await expect(newer.hub.serverPushesCompletionFor('c1')).resolves.toBe(true)
+    await expect(newer.hub.serverSupportsAnswerFor('c1')).resolves.toBe(false)
+    newer.hub.disposeAll()
+
+    const older = makeCapsHub({ version: '0.1.5' })
+    await expect(older.hub.serverPushesCompletionFor('c2')).resolves.toBe(false)
+    older.hub.disposeAll()
+
+    // 版本未知：保守按旧 server（客户端补推）
+    const failing = new FakeTransport()
+    failing.connectImpl = async () => {
+      throw new Error('unreachable')
+    }
+    const hubF = new RemotePtyHub({
+      connection: new FakeConnection().asManager(),
+      callbacks: { onData: () => {}, onExit: () => {} },
+      onServerLog: () => {},
+      transportFactory: (events) => {
+        failing.bind(events)
+        return failing
+      }
+    })
+    await expect(hubF.serverPushesCompletionFor('c3')).resolves.toBe(false)
+    hubF.disposeAll()
+  })
+
+  it('能力探测失败不缓存：server 升级后下一事件重新探测成功', async () => {
+    const { hub, transport } = makeCapsHub({ version: '0.1.5', caps: null })
+    await expect(hub.serverPushesCompletionFor('c1')).resolves.toBe(false)
+    transport.capsPayload = { pushEvents: true, answer: false, answerPage: false }
+    await expect(hub.serverPushesCompletionFor('c1')).resolves.toBe(true)
+    expect(transport.framesOf('server.capabilities')).toHaveLength(2)
+    hub.disposeAll()
   })
 })

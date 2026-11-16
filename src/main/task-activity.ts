@@ -53,8 +53,9 @@ export interface TaskActivityOptions {
    * 采纳的 hook 事件外送（2.0.2 任务排序根因修复：lastActiveAt 只在建/恢复/停止时
    * 写——长跑任务持续在用却不刷新，项目树倒序键失真。ipc 侧据此节流 touch
    * lastActiveAt，使「最近使用」真实反映用户交互；epoch 校验同 activity 口径）。
+   * v2.2.0：附带原始 body（Stop 摘要来源；只进推送文案，不落盘不进日志）。
    */
-  onHookEvent?: (taskId: string, event: string) => void
+  onHookEvent?: (taskId: string, event: string, body: string) => void
   /** 时间源（测试注入；缺省 Date.now） */
   now?: () => number
 }
@@ -101,6 +102,8 @@ export interface TaskActivityHandle {
   noteBytes(taskId: string): void
   /** 用户键入（v0.4.2 输入回显抑制信号；ipc ptyWrite 全量调用） */
   noteUserInput(taskId: string): void
+  /** v2.2.0 桌面在场判定（2.16）：最近键入时刻（epoch ms；0=从未；不存内容） */
+  lastInputAt(taskId: string): number
   /** 本地 Esc（ptyWrite 恰为单字符 \x1b）：当前裁决为 busy → 合成 idle */
   onEsc(taskId: string): void
   /** 当前裁决结果（未知任务 undefined） */
@@ -307,7 +310,7 @@ export function startTaskActivityServer(opts: TaskActivityOptions): TaskActivity
       st.backgroundWork = nonEmptyArray(parsed?.['background_tasks']) || nonEmptyArray(parsed?.['session_crons'])
     }
     setActivity(st, taskId, target, 'hook')
-    opts.onHookEvent?.(taskId, event)
+    opts.onHookEvent?.(taskId, event, body)
   }
 
   const tickTimer = setInterval(() => {
@@ -385,6 +388,10 @@ export function startTaskActivityServer(opts: TaskActivityOptions): TaskActivity
     },
     noteUserInput(taskId) {
       ensureState(taskId).lastUserInputAt = now()
+    },
+    /** v2.2.0 桌面在场判定（2.16）：最近键入时刻（0=从未；不存内容） */
+    lastInputAt(taskId: string) {
+      return states.get(taskId)?.lastUserInputAt ?? 0
     },
     onEsc(taskId) {
       const st = states.get(taskId)

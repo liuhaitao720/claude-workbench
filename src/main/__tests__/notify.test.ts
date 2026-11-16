@@ -10,7 +10,15 @@ import type { NotifyConfig, TaskActivityEvent } from '../../shared/types'
  * 调用计数/参数一律读 fetchImpl.mock.calls（mockXxxOnce 会绕过记录型实现）。
  */
 
-import { NotifyService, buildNotifyPayload, inferChannel, validateWebhookUrl, PUSH_DEBOUNCE_MS } from '../notify'
+import {
+  NotifyService,
+  buildNotifyPayload,
+  inferChannel,
+  validateWebhookUrl,
+  PUSH_DEBOUNCE_MS,
+  STOP_MERGE_MS,
+  STOP_THROTTLE_MS
+} from '../notify'
 
 describe('inferChannel / buildNotifyPayload（三通道形状）', () => {
   it('按 URL 域名推断通道', () => {
@@ -338,5 +346,185 @@ describe('v2.2.0 配置扩展（events/answer + read-modify-write）', () => {
     expect(svc.getEvents().exit).toBe(false)
     expect(svc.getAnswer().presenceMin).toBe(3)
     expect(svc.getConfig()).toEqual({ url: 'https://example.com/x', enabled: true, channel: 'generic' })
+  })
+})
+
+describe('v2.2.0 T2 完成/停止/异常推送（hook + 终态）', () => {
+  let tempDir: string
+  let file: string
+  let clockNow: number
+  let fetchImpl: ReturnType<typeof vi.fn>
+
+  const WEBHOOK = 'https://qyapi.weixin.qq.com/send?key=k'
+  /** 构造服务（每用例独立防抖/合并态；taskNameOf 固定 t-1 显示名） */
+  const newSvc = (extra?: {
+    taskMetaOf?: (taskId: string) => { name?: string; projectName?: string; startedAt?: number }
+  }): NotifyService =>
+    new NotifyService({
+      file,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => clockNow,
+      taskNameOf: (id) => (id === 't-1' ? '重构登录' : undefined),
+      ...(extra?.taskMetaOf !== undefined ? { taskMetaOf: extra.taskMetaOf } : {})
+    })
+
+  const callCount = (): number => fetchImpl.mock.calls.length
+  const textOf = (n: number): string => {
+    const c = fetchImpl.mock.calls[n]
+    if (!c) throw new Error(`no fetch call #${n}`)
+    const body = JSON.parse(String((c[1] as RequestInit).body)) as {
+      markdown: { content: string }
+    }
+    return body.markdown.content
+  }
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'cwb-notify-t2-'))
+    file = join(tempDir, 'notify.json')
+    clockNow = 1_000_000
+    fetchImpl = vi.fn(async (_url: string, _init: RequestInit) => ({ ok: true, status: 200 } as Response))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  it('Stop 排队 10s 合并窗（窗内不推）；到期推一条「本轮完成」+ 单行摘要', () => {
+    vi.useFakeTimers()
+    const svc = newSvc()
+    svc.setWebhook(WEBHOOK, true)
+    expect(svc.onHookEvent('t-1', 'Stop', JSON.stringify({ last_assistant_message: '改了 3 个文件\n见上' }))).toBe(
+      'pushed'
+    )
+    expect(callCount()).toBe(0)
+    clockNow += STOP_MERGE_MS
+    vi.advanceTimersByTime(STOP_MERGE_MS)
+    expect(callCount()).toBe(1)
+    const text = textOf(0)
+    expect(text).toContain('本轮完成')
+    expect(text).toContain('重构登录')
+    expect(text).toContain('摘要：改了 3 个文件 见上')
+  })
+
+  it('Stop→exit 10s 内合并为一条「本轮完成并退出」（含摘要，不重复推）', () => {
+    const svc = newSvc()
+    svc.setWebhook(WEBHOOK, true)
+    svc.onHookEvent('t-1', 'Stop', JSON.stringify({ last_assistant_message: '已完成' }))
+    expect(svc.onTaskExit('t-1', 0, false)).toBe('pushed')
+    expect(callCount()).toBe(1)
+    const text = textOf(0)
+    expect(text).toContain('本轮完成并退出')
+    expect(text).toContain('已完成')
+  })
+
+  it('SubagentStop / 其他 hook 事件：显式忽略（子 agent 停止不推送）', () => {
+    vi.useFakeTimers()
+    const svc = newSvc()
+    svc.setWebhook(WEBHOOK, true)
+    expect(svc.onHookEvent('t-1', 'SubagentStop', '{}')).toBe('ignored')
+    expect(svc.onHookEvent('t-1', 'PreToolUse', '{}')).toBe('ignored')
+    expect(svc.onHookEvent('t-1', 'UserPromptSubmit', '{}')).toBe('ignored')
+    vi.advanceTimersByTime(STOP_MERGE_MS)
+    expect(callCount()).toBe(0)
+  })
+
+  it('Stop 60s 节流：同任务窗内第二次 skipped-debounced（只推一条）', () => {
+    vi.useFakeTimers()
+    const svc = newSvc()
+    svc.setWebhook(WEBHOOK, true)
+    expect(svc.onHookEvent('t-1', 'Stop')).toBe('pushed')
+    clockNow += 1_000
+    expect(svc.onHookEvent('t-1', 'Stop')).toBe('skipped-debounced')
+    vi.advanceTimersByTime(STOP_MERGE_MS)
+    expect(callCount()).toBe(1)
+    // 窗过期后恢复
+    clockNow += STOP_THROTTLE_MS
+    expect(svc.onHookEvent('t-1', 'Stop')).toBe('pushed')
+  })
+
+  it('StopFailure：立即推送「本轮异常结束」并取消待推 Stop（不给旧摘要）', () => {
+    vi.useFakeTimers()
+    const svc = newSvc()
+    svc.setWebhook(WEBHOOK, true)
+    svc.onHookEvent('t-1', 'Stop', JSON.stringify({ last_assistant_message: '旧摘要' }))
+    expect(svc.onHookEvent('t-1', 'StopFailure', JSON.stringify({ error: 'API 500 超限' }))).toBe('pushed')
+    expect(callCount()).toBe(1)
+    const text = textOf(0)
+    expect(text).toContain('本轮异常结束')
+    expect(text).toContain('错误：API 500 超限')
+    expect(text).not.toContain('旧摘要')
+    vi.advanceTimersByTime(STOP_MERGE_MS)
+    expect(callCount()).toBe(1)
+  })
+
+  it('exit 文案：stopped=已停止；exitCode 0/未知=已退出；>0=异常退出（code N）', () => {
+    const cases: Array<{ exitCode: number | undefined; stopped: boolean; want: string }> = [
+      { exitCode: 0, stopped: true, want: '已停止' },
+      { exitCode: 0, stopped: false, want: '已退出' },
+      { exitCode: undefined, stopped: false, want: '已退出' },
+      { exitCode: 2, stopped: false, want: '异常退出（code 2）' }
+    ]
+    for (const c of cases) {
+      const svc = newSvc()
+      svc.setWebhook(WEBHOOK, true)
+      expect(svc.onTaskExit('t-1', c.exitCode, c.stopped)).toBe('pushed')
+      expect(textOf(callCount() - 1)).toContain(c.want)
+    }
+  })
+
+  it('事件开关：stop/stopFailure/exit 关闭 → skipped-flag（不发请求）', () => {
+    const svc = newSvc()
+    svc.setWebhook(WEBHOOK, true)
+    svc.setEvents({ stop: false })
+    expect(svc.onHookEvent('t-1', 'Stop')).toBe('skipped-flag')
+    svc.setEvents({ stopFailure: false })
+    expect(svc.onHookEvent('t-1', 'StopFailure')).toBe('skipped-flag')
+    svc.setEvents({ exit: false })
+    expect(svc.onTaskExit('t-1', 0, false)).toBe('skipped-flag')
+    expect(callCount()).toBe(0)
+  })
+
+  it('未启用/空 URL：skipped-disabled；flush 在退出前把窗内 Stop 推掉', () => {
+    const off = newSvc()
+    expect(off.onHookEvent('t-1', 'Stop')).toBe('skipped-disabled')
+    expect(off.onTaskExit('t-1', 0, false)).toBe('skipped-disabled')
+
+    vi.useFakeTimers()
+    const svc = newSvc()
+    svc.setWebhook(WEBHOOK, true)
+    svc.onHookEvent('t-1', 'Stop', JSON.stringify({ last_assistant_message: '收尾' }))
+    svc.flush()
+    expect(callCount()).toBe(1)
+    expect(textOf(0)).toContain('收尾')
+    vi.advanceTimersByTime(STOP_MERGE_MS)
+    expect(callCount()).toBe(1) // 定时器已清理，不重复推
+  })
+
+  it('远程 override：用 VM 侧配置推送且不受本地 events 开关影响', () => {
+    const svc = newSvc()
+    // 本地未配置（enabled=false）+ 本地关掉 stop——override 仍推
+    svc.setEvents({ stop: false })
+    const remote: NotifyConfig = { url: 'https://oapi.dingtalk.com/robot/send?x=1', enabled: true, channel: 'dingtalk' }
+    expect(svc.onHookEvent('t-1', 'Stop', undefined, remote)).toBe('pushed')
+    expect(svc.onTaskExit('t-1', 0, false, remote)).toBe('pushed')
+    expect(callCount()).toBe(1) // Stop 被 exit 合并
+    expect((fetchImpl.mock.calls[0]![0] as string)).toBe(remote.url)
+    expect(textOf(0)).toContain('本轮完成并退出')
+  })
+
+  it('taskMetaOf：文案含「名称（项目）」与耗时 mm:ss；缺起始时刻只给时间', () => {
+    const svc = newSvc({
+      taskMetaOf: () => ({ name: '重构登录', projectName: 'claude-workbench', startedAt: clockNow - 65_000 })
+    })
+    svc.setWebhook(WEBHOOK, true)
+    svc.onTaskExit('t-1', 0, false)
+    const text = textOf(0)
+    expect(text).toContain('重构登录（claude-workbench）')
+    expect(text).toContain('耗时 01:05')
+
+    const svc2 = newSvc({ taskMetaOf: () => ({ name: '备用' }) })
+    svc2.setWebhook(WEBHOOK, true)
+    svc2.onTaskExit('t-1', 0, false)
+    expect(textOf(1)).not.toContain('> 耗时')
   })
 })

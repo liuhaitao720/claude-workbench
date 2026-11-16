@@ -23,6 +23,7 @@ const CLIENT_FRAMES: ClientFrame[] = [
       cols: 120,
       rows: 40,
       settingsPath: '/home/dev/.cwb-server/task-abc.settings.json',
+      projectName: 'web-app',
       envDenylist: ['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY']
     }
   },

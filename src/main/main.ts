@@ -1101,6 +1101,8 @@ app.on('before-quit', (event) => {
   try {
     currentCtx?.pty.killAllTrees()
     currentCtx?.cli.killAllTrees()
+    // v2.2.0：10 秒合并窗内的「完成」推送先推掉（退出即弃会丢消息）
+    currentCtx?.notify.flush()
   } catch {
     // 杀进程失败不阻断退出（残留风险低于无法退出）
   }

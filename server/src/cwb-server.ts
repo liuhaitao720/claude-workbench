@@ -77,6 +77,9 @@ export interface CwbServerOptions {
 export const DEFAULT_PORT = 17_717
 export const DEFAULT_HOST = '127.0.0.1'
 
+/** hook 请求体读取上限（64KB；超出截断——摘要字段通常远小于此） */
+const HOOK_BODY_MAX_BYTES = 64 * 1024
+
 export class CwbServer {
   readonly registry: TaskRegistry
   private readonly wss: WebSocketServer
@@ -89,6 +92,8 @@ export class CwbServer {
   readonly log: LogFn
   /** v2.0.2 服务器侧 webhook 推送器（测试直用） */
   readonly notifier: ServerNotifier
+  /** 显式停止意图（task.kill 先记，退出回调取用——1.12 stopped 与 exited 分流） */
+  private readonly stopIntent = new Set<string>()
   private shuttingDown = false
   private boundPort: number | undefined
 
@@ -110,13 +115,28 @@ export class CwbServer {
     })
     this.registry = new TaskRegistry({
       onTaskSpawn: (taskId, pid) => this.log('info', `task spawned (${taskId}, pid ${pid})`),
-      onTaskExit: (taskId, exitCode) => this.log('info', `task exited (${taskId}, code ${exitCode})`)
+      onTaskExit: (taskId, exitCode) => {
+        this.log('info', `task exited (${taskId}, code ${exitCode})`)
+        // v2.2.0 完成/停止推送：退出是终态事件（1.3/1.6），与 10 秒内的 Stop 合并
+        if (!this.shuttingDown) {
+          this.notifier.onTaskExit(taskId, exitCode, this.stopIntent.delete(taskId))
+        }
+      }
     })
     // v2.0.2 服务器侧 webhook 推送（用户指令：推送+URL 全落服务器端）——
     // hook 直达 server 后由 server 读 ~/.cwb/notify.json 就地推送；客户端离线照常
     this.notifier = new ServerNotifier({
       home: opts.notifyHome ?? process.env['HOME'] ?? '/root',
-      taskNameOf: (taskId) => this.registry.nameOf(taskId),
+      metaOf: (taskId) => {
+        const name = this.registry.nameOf(taskId)
+        const projectName = this.registry.projectNameOf(taskId)
+        const startedAt = this.registry.startedAtOf(taskId)
+        return {
+          ...(name !== undefined ? { name } : {}),
+          ...(projectName !== undefined ? { projectName } : {}),
+          ...(startedAt !== undefined ? { startedAt } : {})
+        }
+      },
       log: (level, message) => this.log(level, message)
     })
     this.http = createServer((req, res) => {
@@ -136,8 +156,15 @@ export class CwbServer {
     this.wss.on('connection', (ws) => this.handleConnection(ws))
   }
 
-  /** hook POST：URL 解析 → 丢弃 body → 帧转发（在线客户端）+ 服务器侧推送 */
-  private handleHookPost(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): void {
+  /**
+   * hook POST：URL 解析 → 收 body（≤64KB）→ 2xx 空体 → 帧转发（在线客户端）+
+   * 服务器侧推送（v2.2.0：body 供 Stop 摘要；B 链挂起在 T3 接入此方法）。
+   * 一律 200 空体（不干扰 claude 授权流、不触发重试——与客户端接收端同语义）。
+   */
+  private handleHookPost(
+    req: import('node:http').IncomingMessage,
+    res: import('node:http').ServerResponse
+  ): void {
     const url = req.url ?? ''
     const event = url.slice('/hook/'.length).split('?')[0] ?? ''
     let query: URLSearchParams
@@ -150,19 +177,36 @@ export class CwbServer {
     }
     const taskId = query.get('t') ?? ''
     const eRaw = query.get('e')
-    // body 丢弃（hook payload 不消费；连接即刻收口防悬挂）
-    req.resume()
-    res.statusCode = 200
-    res.end()
-    if (taskId === '' || eRaw === null) return
-    const epoch = Number(eRaw)
-    if (!Number.isInteger(epoch)) return
-    // 转发给全部在线客户端（单客户端假设；epoch/任务校验由客户端接收端做）
-    for (const ws of this.wss?.clients ?? []) {
-      this.send(ws, { type: 'hook.event', taskId, event, epoch })
+    const epoch = eRaw === null ? Number.NaN : Number(eRaw)
+    const chunks: Buffer[] = []
+    let total = 0
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      res.statusCode = 200
+      res.end()
+      if (taskId === '' || !Number.isInteger(epoch)) return
+      const body = Buffer.concat(chunks).toString('utf8')
+      // 转发给全部在线客户端（单客户端假设；epoch/任务校验由客户端接收端做）
+      for (const ws of this.wss?.clients ?? []) {
+        this.send(ws, { type: 'hook.event', taskId, event, epoch })
+      }
+      // 服务器侧推送（旁路——吞错不阻塞）
+      this.notifier.onHookEvent(taskId, event, body)
     }
-    // 服务器侧推送（旁路——吞错不阻塞）
-    this.notifier.onHookEvent(taskId, event)
+    req.on('data', (chunk: Buffer) => {
+      total += chunk.length
+      if (total <= HOOK_BODY_MAX_BYTES) chunks.push(chunk)
+    })
+    req.on('end', finish)
+    req.on('error', finish)
+    req.on('aborted', finish)
+  }
+
+  /** 记录显式停止意图（task.kill 先记，退出回调取用——区分 stopped 与 exited） */
+  noteStopIntent(taskId: string): void {
+    this.stopIntent.add(taskId)
   }
 
   /** 监听（返回实际端口——port=0 时为 OS 动态分配） */
@@ -246,6 +290,8 @@ export class CwbServer {
     if (this.shuttingDown) return
     this.shuttingDown = true
     for (const ws of this.wss.clients) this.send(ws, { type: 'conn.closed', reason })
+    // 10 秒合并窗内未发的 Stop 在停机前补推（不丢消息）；随后清空全部定时器
+    this.notifier.flush()
     this.registry.disposeTimers()
     for (const ws of this.wss.clients) ws.close(1001, reason)
     // 恶劣客户端不响应 close 时限时兜底（2s——不因单个连接卡死停机/升级替换）
@@ -311,6 +357,8 @@ function createHandlers(server: CwbServer, ctx: FrameContext): Record<ClientFram
     },
     'task.kill': (frame, c) => {
       if (frame.type !== 'task.kill') return
+      // 先记停止意图（退出回调据此推「已停止」而非「已退出」）
+      server.noteStopIntent(frame.taskId)
       registry.kill(frame.taskId)
       replyOk(c, frame.rid, { taskId: frame.taskId })
     },
