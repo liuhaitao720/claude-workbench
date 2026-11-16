@@ -56,6 +56,15 @@ export interface TaskActivityOptions {
    * v2.2.0：附带原始 body（Stop 摘要来源；只进推送文案，不落盘不进日志）。
    */
   onHookEvent?: (taskId: string, event: string, body: string) => void
+  /**
+   * v2.2.0 手机答复（B 链，本地任务）：可作答 hook 到达时回调，返回 Promise 表示
+   * 「挂起等待」——HTTP 响应延迟到 Promise 落定；resolve null=空响应回落 TUI，
+   * resolve 决策 JSON=写回 claude。未提供/不可作答路径=立即 200（行为不变）。
+   * timeout 与 claude settings 中这些 hook 的 3600s 对齐。
+   */
+  onPending?: (
+    req: { taskId: string; event: string; body: string }
+  ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null
   /** 时间源（测试注入；缺省 Date.now） */
   now?: () => number
 }
@@ -148,6 +157,10 @@ const BUSY_HOLD_MS = 1_500
 const TICK_MS = 1_000
 /** hook body 上限（防御任意本地进程的垃圾输入） */
 const MAX_BODY_BYTES = 1_000_000
+/** 可延迟作答的 hook 事件（与 shared/answer-decision 的可答复集一致） */
+const ANSWERABLE_EVENTS = new Set(['PermissionRequest', 'PreToolUse'])
+/** 作答等待 hook 超时（秒；claude settings，设计 §6——其余保持 3s） */
+const ANSWER_HOOK_TIMEOUT_SEC = 3600
 
 export function startTaskActivityServer(opts: TaskActivityOptions): TaskActivityHandle {
   const now = opts.now ?? Date.now
@@ -254,10 +267,25 @@ export function startTaskActivityServer(opts: TaskActivityOptions): TaskActivity
           return
         }
         const body = await readBody(req)
-        // 无论是否采纳，一律 200 空体——不干扰 claude 授权流、不触发重试
+        // v2.2.0 B 链：可作答 hook 可延迟响应（手机答复）；其余一律 200 空体——
+        // 不干扰 claude 授权流、不触发重试
+        const accepted = applyHook(match[1] ?? '', url, body)
+        if (accepted !== null && ANSWERABLE_EVENTS.has(accepted.event) && opts.onPending !== undefined) {
+          let decision: Record<string, unknown> | null = null
+          try {
+            decision = await opts.onPending(accepted)
+          } catch {
+            decision = null // 挂起失败=回落 TUI（绝不卡住 claude）
+          }
+          if (decision !== null) {
+            res.statusCode = 200
+            res.setHeader('content-type', 'application/json')
+            res.end(JSON.stringify(decision))
+            return
+          }
+        }
         res.statusCode = 200
         res.end()
-        applyHook(match[1] ?? '', url, body)
       } catch {
         try {
           res.statusCode = 400
@@ -288,22 +316,26 @@ export function startTaskActivityServer(opts: TaskActivityOptions): TaskActivity
     })
   }
 
-  function applyHook(event: string, rawUrl: string, body: string): void {
+  function applyHook(
+    event: string,
+    rawUrl: string,
+    body: string
+  ): { taskId: string; event: string; body: string } | null {
     const target = HOOK_EVENT_ACTIVITIES[event]
-    if (target === undefined) return
+    if (target === undefined) return null
     // URL 不含 e/t 或 epoch 不匹配 → 忽略（旧 PTY 迟到 hook）
     let query: URLSearchParams
     try {
       query = new URL(rawUrl, `http://127.0.0.1:${port}`).searchParams
     } catch {
-      return
+      return null
     }
     const taskId = query.get('t')
     const epochRaw = query.get('e')
-    if (!taskId || epochRaw === null) return
+    if (!taskId || epochRaw === null) return null
     const epoch = Number(epochRaw)
     const st = states.get(taskId)
-    if (!st || !Number.isInteger(epoch) || epoch !== st.epoch) return
+    if (!st || !Number.isInteger(epoch) || epoch !== st.epoch) return null
     if (event === 'Stop') {
       // payload 含 background_tasks/session_crons 非空 → 记录标志（仍 idle；展示取舍见 concerns）
       const parsed = parseJsonRecord(body)
@@ -311,6 +343,7 @@ export function startTaskActivityServer(opts: TaskActivityOptions): TaskActivity
     }
     setActivity(st, taskId, target, 'hook')
     opts.onHookEvent?.(taskId, event, body)
+    return { taskId, event, body }
   }
 
   const tickTimer = setInterval(() => {
@@ -338,7 +371,8 @@ export function startTaskActivityServer(opts: TaskActivityOptions): TaskActivity
           {
             type: 'http',
             url: `${base}/hook/${event}?e=${epoch}&t=${encodeURIComponent(taskId)}`,
-            timeout: 3
+            // v2.2.0：可作答 hook 挂起等手机答复（3600s）；其余保持 3s 旁路超时
+            timeout: ANSWERABLE_EVENTS.has(event) ? ANSWER_HOOK_TIMEOUT_SEC : 3
           }
         ]
       })

@@ -1,6 +1,18 @@
 import type { ConnectionManager } from './ssh/connection-manager'
-import type { NotifyConfig } from '../shared/types'
-import { inferChannel, validateWebhookUrl } from './notify'
+import type {
+  AnswerConfig,
+  NotifyConfig,
+  NotifyEventFlags,
+  NotifySettingsView
+} from '../shared/types'
+import {
+  inferChannel,
+  mergeAnswerConfig,
+  mergeEventFlags,
+  normalizeAnswerConfig,
+  normalizeEventFlags,
+  validateWebhookUrl
+} from './notify'
 import type { Language } from '../shared/i18n'
 
 /**
@@ -96,4 +108,77 @@ async function readRawJson(
     /* 缺失/损坏 → 空对象 */
   }
   return {}
+}
+
+/** 远端 notify.json 原始对象（缺目录/文件 → {}） */
+async function readRemoteRaw(
+  mgr: ConnectionManager,
+  cid: string
+): Promise<Record<string, unknown>> {
+  const home = await remoteHome(mgr, cid)
+  const sftp = await mgr.sftp(cid)
+  return readRawJson(sftp, `${home}/${REMOTE_FILE_REL}`)
+}
+
+/** 远端 notify.json 整对象写回（目录权限 700；调用方先读-改） */
+async function writeRemoteRaw(
+  mgr: ConnectionManager,
+  cid: string,
+  raw: Record<string, unknown>
+): Promise<void> {
+  const home = await remoteHome(mgr, cid)
+  const prep = await mgr.exec(
+    cid,
+    `mkdir -p "$HOME/${REMOTE_DIR_REL}" && chmod 700 "$HOME/${REMOTE_DIR_REL}" && printf ok`
+  )
+  if (prep.code !== 0 || !prep.stdout.includes('ok')) {
+    throw new Error(`remote notify dir prepare failed (exit ${prep.code})`)
+  }
+  const sftp = await mgr.sftp(cid)
+  await sftp.writeFile(`${home}/${REMOTE_FILE_REL}`, JSON.stringify(raw, null, 2))
+}
+
+/**
+ * v2.2.0 远端设置聚合读（webhook + 事件开关 + 手机答复）：与本地 NotifyService
+ * 同归一化语义；缺失/损坏逐段回落缺省。
+ */
+export async function readRemoteNotifySettings(
+  mgr: ConnectionManager,
+  cid: string
+): Promise<NotifySettingsView> {
+  const raw = await readRemoteRaw(mgr, cid)
+  const url = typeof raw['url'] === 'string' ? raw['url'] : ''
+  return {
+    config: {
+      url,
+      enabled: raw['enabled'] === true && url.length > 0,
+      channel: url !== '' ? inferChannel(url) : 'generic'
+    },
+    events: normalizeEventFlags(raw['events']),
+    answer: normalizeAnswerConfig(raw['answer'])
+  }
+}
+
+/** 远端事件开关部分更新（read-modify-write 保留其余段） */
+export async function writeRemoteNotifyEvents(
+  mgr: ConnectionManager,
+  cid: string,
+  patch: Partial<NotifyEventFlags>
+): Promise<NotifyEventFlags> {
+  const raw = await readRemoteRaw(mgr, cid)
+  const next = mergeEventFlags(normalizeEventFlags(raw['events']), patch)
+  await writeRemoteRaw(mgr, cid, { ...raw, events: next })
+  return next
+}
+
+/** 远端手机答复配置部分更新（数值越界抛错；隧道固定 cloudflare） */
+export async function writeRemoteNotifyAnswer(
+  mgr: ConnectionManager,
+  cid: string,
+  patch: Partial<AnswerConfig>
+): Promise<AnswerConfig> {
+  const raw = await readRemoteRaw(mgr, cid)
+  const next = mergeAnswerConfig(normalizeAnswerConfig(raw['answer']), patch)
+  await writeRemoteRaw(mgr, cid, { ...raw, answer: next })
+  return next
 }

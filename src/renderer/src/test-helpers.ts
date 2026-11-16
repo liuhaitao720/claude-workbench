@@ -1,5 +1,9 @@
 import { vi } from 'vitest'
 import type { ConnectionTestResult,
+  AnswerConfig,
+  AnswerPendingInfo,
+  AnswerResolvedEvent,
+  AnswerRuntimeState,
   AppSettings,
   AppUpdateProgressEvent,
   CliOutputEvent,
@@ -8,6 +12,7 @@ import type { ConnectionTestResult,
   CreateTaskOptions,
   CWBApi,
   NotifyConfig,
+  NotifyEventFlags,
   ProjectRecord,
   ProviderConfig,
   PtyDataEvent,
@@ -109,6 +114,10 @@ export type CwbApiMock = Omit<CWBApi, 'addProject' | 'testConnection'> & {
   transfersProgressCallbacks: Array<(items: TransferItem[]) => void>
   /** v2.0.1 捕获的 onNotifyTrail 回调（通知留痕事件） */
   notifyTrailCallbacks: Array<(e: never) => void>
+  /** v2.2.0 捕获的手机答复回调（横幅/已处理/通道状态） */
+  answerPendingCallbacks: Array<(e: AnswerPendingInfo) => void>
+  answerResolvedCallbacks: Array<(e: AnswerResolvedEvent) => void>
+  answerStateCallbacks: Array<(e: AnswerRuntimeState) => void>
   /** 捕获的 onTaskUpdate 回调 */
   taskUpdateCallbacks: Array<(t: TaskUpdateEvent) => void>
   /** 捕获的 onTaskActivity 回调（v3.2） */
@@ -141,6 +150,10 @@ export type CwbApiMock = Omit<CWBApi, 'addProject' | 'testConnection'> & {
  *  S6：connections/appSettings 同理预置（侧栏分组树与持久化键消费）。 */
 const transfersProgressCbs: Array<(items: TransferItem[]) => void> = []
 const notifyTrailCbs: Array<(e: never) => void> = []
+/** v2.2.0 手机答复回调捕获 */
+const answerPendingCbs: Array<(e: AnswerPendingInfo) => void> = []
+const answerResolvedCbs: Array<(e: AnswerResolvedEvent) => void> = []
+const answerStateCbs: Array<(e: AnswerRuntimeState) => void> = []
 /** v2.1.0 SSH 纯终端回调捕获 */
 const sshDataCallbacks: Array<(e: SshDataEvent) => void> = []
 const sshClosedCallbacks: Array<(e: SshClosedEvent) => void> = []
@@ -404,6 +417,48 @@ export function installCwbMock(
     retryTransfer: vi.fn(async () => undefined),
     transfersProgressCallbacks: transfersProgressCbs,
     notifyTrailCallbacks: notifyTrailCbs,
+    answerPendingCallbacks: answerPendingCbs,
+    answerResolvedCallbacks: answerResolvedCbs,
+    answerStateCallbacks: answerStateCbs,
+    getNotifySettings: vi.fn(async () => ({
+      config: { url: '', enabled: false, channel: 'wecom' } as NotifyConfig,
+      events: { awaiting: true, stop: true, stopFailure: true, exit: true },
+      answer: {
+        enabled: false,
+        ttlSec: 900,
+        presenceMin: 5,
+        tunnel: 'cloudflare',
+        pagePort: 0
+      } as AnswerConfig
+    })),
+    setNotifyEvents: vi.fn(async (patch: Partial<NotifyEventFlags>) => ({
+      awaiting: true,
+      stop: true,
+      stopFailure: true,
+      exit: true,
+      ...patch
+    })),
+    setAnswerConfig: vi.fn(async (patch: Partial<AnswerConfig>) => ({
+      enabled: false,
+      ttlSec: 900,
+      presenceMin: 5,
+      tunnel: 'cloudflare' as const,
+      pagePort: 0,
+      ...patch
+    })),
+    cancelAnswer: vi.fn(async () => {}),
+    onAnswerPending: vi.fn((cb: (e: AnswerPendingInfo) => void) => {
+      answerPendingCbs.push(cb)
+      return () => {}
+    }),
+    onAnswerResolved: vi.fn((cb: (e: AnswerResolvedEvent) => void) => {
+      answerResolvedCbs.push(cb)
+      return () => {}
+    }),
+    onAnswerState: vi.fn((cb: (e: AnswerRuntimeState) => void) => {
+      answerStateCbs.push(cb)
+      return () => {}
+    }),
     getNotifyTrail: vi.fn(async () => ({ trail: [], localEnabled: true })),
     onNotifyTrail: vi.fn((cb: (e: never) => void) => {
       notifyTrailCbs.push(cb)

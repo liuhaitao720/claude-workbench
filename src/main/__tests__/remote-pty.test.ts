@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ClientFrame, ServerFrame } from '../../shared/remote-protocol'
+import type { AnswerChoice, AnswerPendingView } from '../../shared/answer-decision'
 import type { ConnectionStateChangedEvent, PtyDataEvent } from '../../shared/types'
 import type { PtyBackendCallbacks } from '../pty-backend'
 import {
@@ -95,6 +96,22 @@ class FakeTransport implements ServerTransport {
         return
       case 'hook.event':
         this.events.onHookEvent?.(frame.taskId, frame.event, frame.epoch)
+        return
+      // v2.2.0 手机答复帧（镜像 server-client 分发）
+      case 'answer.pending':
+        this.events.onAnswerPending?.(frame.pending, frame.url)
+        return
+      case 'answer.submit':
+        this.events.onAnswerSubmit?.(frame.pendingId, frame.choice)
+        return
+      case 'answer.resolved':
+        this.events.onAnswerResolved?.(frame.pendingId, frame.taskId, frame.by, frame.action)
+        return
+      case 'answer.stop':
+        this.events.onAnswerStop?.(frame.taskId)
+        return
+      case 'answer.state':
+        this.events.onAnswerState?.(frame.state)
         return
       default:
         return
@@ -579,6 +596,129 @@ describe('v2.2.0 能力协商（server.capabilities 优先 + 版本回退 + 失�
     transport.capsPayload = { pushEvents: true, answer: false, answerPage: false }
     await expect(hub.serverPushesCompletionFor('c1')).resolves.toBe(true)
     expect(transport.framesOf('server.capabilities')).toHaveLength(2)
+    hub.disposeAll()
+  })
+})
+
+describe('v2.2.0 答复/在线帧（manager.send / hub.sendFrame / broadcastPresence / answer 回调带 connectionId）', () => {
+  function makeAnswerHub(): {
+    hub: RemotePtyHub
+    transport: FakeTransport
+    got: {
+      pending: Array<[string, AnswerPendingView, string | undefined]>
+      submit: Array<[string, string, AnswerChoice]>
+      resolved: Array<[string, string | undefined, string, string, string]>
+      stop: Array<[string, string]>
+      state: Array<[string, unknown]>
+    }
+  } {
+    const transport = new FakeTransport()
+    const got = {
+      pending: [] as Array<[string, AnswerPendingView, string | undefined]>,
+      submit: [] as Array<[string, string, AnswerChoice]>,
+      resolved: [] as Array<[string, string | undefined, string, string, string]>,
+      stop: [] as Array<[string, string]>,
+      state: [] as Array<[string, unknown]>
+    }
+    const hub = new RemotePtyHub({
+      connection: new FakeConnection().asManager(),
+      callbacks: { onData: () => {}, onExit: () => {} },
+      onServerLog: () => {},
+      transportFactory: (events) => {
+        transport.bind(events)
+        return transport
+      },
+      answer: {
+        onPending: (cid, p, url) => got.pending.push([cid, p, url]),
+        onSubmit: (cid, id, c) => got.submit.push([cid, id, c]),
+        onResolved: (cid, id, taskId, by, action) => got.resolved.push([cid, id, taskId, by, action]),
+        onStop: (cid, taskId) => got.stop.push([cid, taskId]),
+        onState: (cid, s) => got.state.push([cid, s])
+      }
+    })
+    return { hub, transport, got }
+  }
+
+  const view: AnswerPendingView = {
+    pendingId: 'p1',
+    taskId: 't1',
+    event: 'PermissionRequest',
+    kind: 'permission',
+    taskName: '任务A',
+    questions: [
+      { question: '允许 Bash？', header: '权限', options: [{ label: '允许' }, { label: '拒绝' }] }
+    ]
+  }
+
+  it('manager.send：传输未建/未连 → false；就绪后送出 presence 帧', async () => {
+    const { hub, transport } = makeAnswerHub()
+    // 首次 managerFor 只是懒建，传输尚未建立
+    expect(hub.sendFrame('c1', { type: 'presence', lastInputAt: 123, focused: true })).toBe(false)
+    expect(transport.framesOf('presence')).toHaveLength(0)
+
+    await hub.ensureConnected('c1')
+    expect(hub.sendFrame('c1', { type: 'presence', lastInputAt: 456, focused: false })).toBe(true)
+    expect(transport.framesOf('presence')).toEqual([
+      { type: 'presence', lastInputAt: 456, focused: false }
+    ])
+    hub.disposeAll()
+  })
+
+  it('broadcastPresence：仅送到已连接连接，返回送出数', async () => {
+    const { hub, transport } = makeAnswerHub()
+    await hub.ensureConnected('c1')
+    hub.managerFor('c2') // 懒建但未连接 → 不计
+    expect(hub.broadcastPresence(789, true)).toBe(1)
+    expect(transport.framesOf('presence')).toEqual([
+      { type: 'presence', lastInputAt: 789, focused: true }
+    ])
+    hub.disposeAll()
+  })
+
+  it('answer 帧回调：manager 侧桥接到 hub 层并附 connectionId', async () => {
+    const { hub, transport, got } = makeAnswerHub()
+    await hub.ensureConnected('c1')
+
+    transport.emit({ type: 'answer.pending', pending: view, url: 'https://x.trycloudflare.com' })
+    transport.emit({ type: 'answer.submit', pendingId: 'p1', choice: { kind: 'permission', action: 'allow' } })
+    transport.emit({
+      type: 'answer.resolved',
+      pendingId: 'p1',
+      taskId: 't1',
+      by: 'phone',
+      action: 'answered'
+    })
+    transport.emit({ type: 'answer.stop', taskId: 't1' })
+    transport.emit({
+      type: 'answer.state',
+      state: { enabled: true, tunnel: 'up', baseUrl: 'https://x', pendingCount: 0 }
+    })
+
+    expect(got.pending).toEqual([['c1', view, 'https://x.trycloudflare.com']])
+    expect(got.submit).toEqual([['c1', 'p1', { kind: 'permission', action: 'allow' }]])
+    expect(got.resolved).toEqual([['c1', 'p1', 't1', 'phone', 'answered']])
+    expect(got.stop).toEqual([['c1', 't1']])
+    expect(got.state[0]![0]).toBe('c1')
+    expect(got.state[0]![1]).toMatchObject({ tunnel: 'up', pendingCount: 0 })
+    hub.disposeAll()
+  })
+
+  it('未配置 answer 回调时 answer 帧静默丢弃（旧组合根不崩）', async () => {
+    const transport = new FakeTransport()
+    const hub = new RemotePtyHub({
+      connection: new FakeConnection().asManager(),
+      callbacks: { onData: () => {}, onExit: () => {} },
+      onServerLog: () => {},
+      transportFactory: (events) => {
+        transport.bind(events)
+        return transport
+      }
+    })
+    await hub.ensureConnected('c1')
+    expect(() => {
+      transport.emit({ type: 'answer.pending', pending: view })
+      transport.emit({ type: 'answer.stop', taskId: 't1' })
+    }).not.toThrow()
     hub.disposeAll()
   })
 })

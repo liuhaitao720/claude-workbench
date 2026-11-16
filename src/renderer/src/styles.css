@@ -3061,6 +3061,29 @@ button {
   color: var(--text-1);
 }
 
+/* v2.2.0 手机答复横幅（左下角浮层；挂起即出现，resolved 自动消失） */
+.answer-banner {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 460px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-2);
+  background: var(--bg-dialog);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  color: var(--text-1);
+}
+.answer-banner-head { font-weight: 600; }
+.answer-banner-item { display: flex; align-items: center; gap: 10px; }
+.answer-banner-meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.answer-banner-acts { display: flex; gap: 6px; flex-shrink: 0; }
+
 /* v2.0.3 右缘竖条按钮堆（审查改动 + 远程文件）：原单按钮样式拆为堆叠——
    首个保上半圆角、末个保下半圆角、相邻去上边框；单独时维持原整圆角 */
 .rail-stack { display: flex; flex-direction: column; align-self: flex-start; margin-top: 44px; }

@@ -61,7 +61,7 @@ describe('server 与 settings 注入', () => {
     expect((await postHook('UserPromptSubmit', 'unknown-task', 1)).status).toBe(200)
   })
 
-  it('buildSettings：原子写 6 事件 hooks 文件（URL 含端口/epoch/taskId；PreToolUse 带 matcher；timeout=3）', async () => {
+  it('buildSettings：原子写 6 事件 hooks 文件（URL 含端口/epoch/taskId；PreToolUse 带 matcher；可作答 3600s / 其余 3s）', async () => {
     handle.noteSpawn('t1')
     const path = await handle.buildSettings('t1')
     expect(path).toBe(join(settingsDir, 't1.json'))
@@ -75,7 +75,9 @@ describe('server 与 settings 注入', () => {
     for (const [event, group] of Object.entries(parsed.hooks)) {
       const entry = group[0]?.hooks[0]
       expect(entry?.type, event).toBe('http')
-      expect(entry?.timeout, event).toBe(3)
+      // v2.2.0：可作答 hook（手机答复）挂起等待 3600s，其余保持 3s 旁路超时
+      const answerable = event === 'PermissionRequest' || event === 'PreToolUse'
+      expect(entry?.timeout, event).toBe(answerable ? 3600 : 3)
       expect(entry?.url).toContain(`/hook/${event}?e=1&t=t1`)
     }
     expect(parsed.hooks.PreToolUse?.[0]?.matcher).toBe('AskUserQuestion|ExitPlanMode')
@@ -357,5 +359,111 @@ describe('v0.4.5 busy 滞回（防切换 tab 等瞬态翻转闪绿）', () => {
     advance(1_300) // 距最后确认 1600ms > 1.5s → 正常降 idle
     handle.tick()
     expect(handle.current('t-hyst')).toBe('idle')
+  })
+})
+
+describe('v2.2.0 本地任务手机答复：hook 延迟响应（onPending）', () => {
+  /** 等待「挂起已登记」——onPending 被调用即 HTTP 响应被推迟 */
+  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    let resolve!: (v: T) => void
+    const promise = new Promise<T>((r) => {
+      resolve = r
+    })
+    return { promise, resolve }
+  }
+
+  it('可作答事件：onPending 返回决策 JSON → 200 application/json；其 body 原样透传', async () => {
+    const seen: Array<{ taskId: string; event: string; body: string }> = []
+    const gate = deferred<Record<string, unknown> | null>()
+    const h = startTaskActivityServer({
+      settingsDir,
+      now: () => clockNow,
+      onPending: (req) => {
+        seen.push(req)
+        return gate.promise
+      }
+    })
+    await h.ready()
+    try {
+      h.noteSpawn('t-l1')
+      const body = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls' } })
+      const p = fetch(`http://127.0.0.1:${h.port}/hook/PermissionRequest?e=1&t=t-l1`, {
+        method: 'POST',
+        body
+      })
+      // 响应必须等 onPending 落定（延迟成立）
+      const settled = await Promise.race([p.then(() => 'done'), new Promise((r) => setTimeout(() => r('pending'), 50))])
+      expect(settled).toBe('pending')
+      expect(seen).toEqual([{ taskId: 't-l1', event: 'PermissionRequest', body }])
+      expect(h.current('t-l1')).toBe('awaiting') // activity 照旧裁决
+
+      const decision = {
+        hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } }
+      }
+      gate.resolve(decision)
+      const res = await p
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toContain('application/json')
+      expect(await res.json()).toEqual(decision)
+    } finally {
+      h.dispose()
+    }
+  })
+
+  it('onPending 返回 null / 抛错 → 200 空体（回落 TUI，不卡 claude）', async () => {
+    const h = startTaskActivityServer({
+      settingsDir,
+      now: () => clockNow,
+      onPending: (req) => {
+        if (req.event === 'PreToolUse') throw new Error('boom')
+        return null
+      }
+    })
+    await h.ready()
+    try {
+      h.noteSpawn('t-l2')
+      const a = await fetch(`http://127.0.0.1:${h.port}/hook/PermissionRequest?e=1&t=t-l2`, {
+        method: 'POST',
+        body: '{}'
+      })
+      expect(a.status).toBe(200)
+      expect(await a.text()).toBe('')
+      const b = await fetch(`http://127.0.0.1:${h.port}/hook/PreToolUse?e=1&t=t-l2`, {
+        method: 'POST',
+        body: '{}'
+      })
+      expect(b.status).toBe(200)
+      expect(await b.text()).toBe('')
+    } finally {
+      h.dispose()
+    }
+  })
+
+  it('非可作答事件/被丢弃 hook 不走 onPending（立即 200）；未配置 onPending 时行为不变', async () => {
+    const calls: string[] = []
+    const h = startTaskActivityServer({
+      settingsDir,
+      now: () => clockNow,
+      onPending: (req) => {
+        calls.push(req.event)
+        return null
+      }
+    })
+    await h.ready()
+    try {
+      h.noteSpawn('t-l3') // epoch 1
+      await fetch(`http://127.0.0.1:${h.port}/hook/Elicitation?e=1&t=t-l3`, { method: 'POST', body: '{}' })
+      await fetch(`http://127.0.0.1:${h.port}/hook/Stop?e=1&t=t-l3`, { method: 'POST', body: '{}' })
+      // 旧 epoch（被丢弃）的可作答 hook 不挂起
+      await fetch(`http://127.0.0.1:${h.port}/hook/PermissionRequest?e=0&t=t-l3`, { method: 'POST', body: '{}' })
+      expect(calls).toEqual([])
+    } finally {
+      h.dispose()
+    }
+    // 全局 handle（无 onPending）：立即 200 空体
+    handle.noteSpawn('t-l4')
+    const res = await postHook('PermissionRequest', 't-l4', 1)
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('')
   })
 })

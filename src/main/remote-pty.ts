@@ -1,6 +1,13 @@
 import { createConnection } from 'node:net'
 import type { RemoteServerLogEvent } from '../shared/types'
 import type { ClientFrame } from '../shared/remote-protocol'
+import type {
+  AnswerChoice,
+  AnswerPendingView,
+  AnswerResolvedAction,
+  AnswerResolvedBy,
+  AnswerStateView
+} from '../shared/remote-protocol'
 import type { PtyBackend, PtyBackendCallbacks } from './pty-backend'
 import type { ConnectionManager } from './ssh/connection-manager'
 import { ServerClient, CWB_SERVER_PORT, type ServerClientEvents, type ServerTransport } from './server-client'
@@ -64,6 +71,28 @@ interface RemoteTaskEntry {
   attached: boolean
 }
 
+/**
+ * v2.2.0 手机答复帧回调（manager 面；hub 绑定 connectionId 后外送）。
+ * 全部可选——旧 server 不发这些帧，缺省忽略。
+ */
+export interface RemoteAnswerCallbacks {
+  /** server 持有/确认挂起（桌面横幅；url=手机页面地址） */
+  onPending?: (pending: AnswerPendingView, url?: string) => void
+  /** 本地任务答案回送（客户端 resolve 挂起的 hook） */
+  onSubmit?: (pendingId: string, choice: AnswerChoice) => void
+  /** 已处理（手机/桌面/系统） */
+  onResolved?: (
+    pendingId: string | undefined,
+    taskId: string,
+    by: AnswerResolvedBy,
+    action: AnswerResolvedAction
+  ) => void
+  /** 手机请求停止本地任务 */
+  onStop?: (taskId: string) => void
+  /** 答复通道状态（隧道/挂起计数） */
+  onState?: (state: AnswerStateView) => void
+}
+
 export interface RemotePtyManagerOptions {
   connectionId: string
   connection: ConnectionManager
@@ -93,6 +122,8 @@ export interface RemotePtyManagerOptions {
    * 保活任务永远无人 attach → 首开空白（关掉重开偶发可见是后续路径副作用）。
    */
   runningTaskIds?: () => string[]
+  /** v2.2.0 手机答复帧回调（hub 绑定 connectionId 后透传） */
+  answer?: RemoteAnswerCallbacks
 }
 
 export class RemotePtyManager implements PtyBackend {
@@ -212,6 +243,18 @@ export class RemotePtyManager implements PtyBackend {
     return t.request<T>(frame)
   }
 
+  /**
+   * 即发即忘帧（v2.2.0 presence / answer.pending / answer.cancel）。
+   * 传输未就绪/已断 → 丢弃（presence 下一拍重发；answer 链路由上层超时回落）。
+   * 返回是否已送出（测试/上层可选判断）。
+   */
+  send(frame: ClientFrame): boolean {
+    const t = this.transport
+    if (t === null || !t.connected) return false
+    t.send(frame)
+    return true
+  }
+
   /** 测试/编排收尾（不在 PtyBackend 契约面） */
   dispose(): void {
     this.unsubState?.()
@@ -241,6 +284,29 @@ export class RemotePtyManager implements PtyBackend {
       onHookEvent: (taskId, event, epoch) => {
         void this.relayHookEvent(taskId, event, epoch)
       },
+      // v2.2.0 手机答复帧：本连接回送（桌面横幅/本地挂起 resolve/停止）
+      ...(this.opts.answer?.onPending !== undefined
+        ? { onAnswerPending: (p: AnswerPendingView, url?: string) => this.opts.answer!.onPending!(p, url) }
+        : {}),
+      ...(this.opts.answer?.onSubmit !== undefined
+        ? { onAnswerSubmit: (id: string, c: AnswerChoice) => this.opts.answer!.onSubmit!(id, c) }
+        : {}),
+      ...(this.opts.answer?.onResolved !== undefined
+        ? {
+            onAnswerResolved: (
+              id: string | undefined,
+              taskId: string,
+              by: AnswerResolvedBy,
+              action: AnswerResolvedAction
+            ) => this.opts.answer!.onResolved!(id, taskId, by, action)
+          }
+        : {}),
+      ...(this.opts.answer?.onStop !== undefined
+        ? { onAnswerStop: (taskId: string) => this.opts.answer!.onStop!(taskId) }
+        : {}),
+      ...(this.opts.answer?.onState !== undefined
+        ? { onAnswerState: (s: AnswerStateView) => this.opts.answer!.onState!(s) }
+        : {}),
       onClosed: () => {
         // WS 断开（server 主动/网络）：标记 detached——重连由 ConnectionManager
         // 状态机驱动（scheduleReconcile），注册表保留维持 running 语义
@@ -460,6 +526,23 @@ export interface RemotePtyHubOptions {
   hookPortPicker?: () => number
   /** 传输工厂透传（v2.0.2 测试注入；缺省=每 manager 自建 ServerClient） */
   transportFactory?: (events: ServerClientEvents) => ServerTransport
+  /** v2.2.0 手机答复帧回调（带 connectionId——ipc 转 renderer 与本地挂起链） */
+  answer?: RemoteAnswerHubCallbacks
+}
+
+/** v2.2.0 手机答复帧回调（hub 面：首参 connectionId） */
+export interface RemoteAnswerHubCallbacks {
+  onPending?: (connectionId: string, pending: AnswerPendingView, url?: string) => void
+  onSubmit?: (connectionId: string, pendingId: string, choice: AnswerChoice) => void
+  onResolved?: (
+    connectionId: string,
+    pendingId: string | undefined,
+    taskId: string,
+    by: AnswerResolvedBy,
+    action: AnswerResolvedAction
+  ) => void
+  onStop?: (connectionId: string, taskId: string) => void
+  onState?: (connectionId: string, state: AnswerStateView) => void
 }
 
 /** server 版本比较（a≥b；点分数字逐段） */
@@ -532,6 +615,10 @@ export class RemotePtyHub {
           : {}),
         ...(this.opts.requestTimeoutMs !== undefined
           ? { requestTimeoutMs: this.opts.requestTimeoutMs }
+          : {}),
+        // v2.2.0：手机答复帧回调绑定本连接 id
+        ...(this.opts.answer !== undefined
+          ? { answer: this.bindAnswerCallbacks(connectionId) }
           : {})
       })
       this.managers.set(connectionId, m)
@@ -551,6 +638,54 @@ export class RemotePtyHub {
   /** 代理帧透传（proxy.status/config.get/config.set；payload 形状=server 侧终态） */
   async proxyRequest<T = unknown>(connectionId: string, frame: ClientFrame): Promise<T> {
     return this.managerFor(connectionId).request<T>(frame)
+  }
+
+  /** v2.2.0：即发即忘帧到指定连接（answer.pending / answer.cancel）；未连返回 false */
+  sendFrame(connectionId: string, frame: ClientFrame): boolean {
+    return this.managerFor(connectionId).send(frame)
+  }
+
+  /**
+   * v2.2.0 桌面在场播报（2.16）：向所有已连接 server 发 presence（键入节流 5s /
+   * 30s 心跳由调用方调度）。返回实际送出的连接数（未连接的不计）。
+   */
+  broadcastPresence(lastInputAt: number, focused: boolean): number {
+    let sent = 0
+    for (const m of this.managers.values()) {
+      if (m.send({ type: 'presence', lastInputAt, focused })) sent += 1
+    }
+    return sent
+  }
+
+  private bindAnswerCallbacks(connectionId: string): RemoteAnswerCallbacks {
+    const cb = this.opts.answer!
+    return {
+      ...(cb.onPending !== undefined
+        ? { onPending: (p: AnswerPendingView, url?: string) => cb.onPending!(connectionId, p, url) }
+        : {}),
+      ...(cb.onSubmit !== undefined
+        ? {
+            onSubmit: (pendingId: string, choice: AnswerChoice) =>
+              cb.onSubmit!(connectionId, pendingId, choice)
+          }
+        : {}),
+      ...(cb.onResolved !== undefined
+        ? {
+            onResolved: (
+              pendingId: string | undefined,
+              taskId: string,
+              by: AnswerResolvedBy,
+              action: AnswerResolvedAction
+            ) => cb.onResolved!(connectionId, pendingId, taskId, by, action)
+          }
+        : {}),
+      ...(cb.onStop !== undefined
+        ? { onStop: (taskId: string) => cb.onStop!(connectionId, taskId) }
+        : {}),
+      ...(cb.onState !== undefined
+        ? { onState: (s: AnswerStateView) => cb.onState!(connectionId, s) }
+        : {})
+    }
   }
 
   /**
@@ -595,6 +730,19 @@ export class RemotePtyHub {
   async serverSupportsAnswerFor(connectionId: string): Promise<boolean> {
     const caps = await this.serverCapabilitiesOf(connectionId)
     return caps !== null && caps.answer === true
+  }
+
+  /**
+   * v2.2.0：可承载本地任务答复的连接（已连接 + 能力 answer=true；取首个）。
+   * 无可用连接 → undefined（A11：不挂起，立即 200 回落 TUI）。
+   * 按已有 manager 迭代——ipc 在 ConnectionsConnect 时 ensureConnected 建 manager，
+   * 会话中 token 轮换/切换由 ConnectionManager 重连，manager 保留。
+   */
+  async answerConnectionId(): Promise<string | undefined> {
+    for (const cid of [...this.managers.keys()]) {
+      if (await this.serverSupportsAnswerFor(cid)) return cid
+    }
+    return undefined
   }
 
   /** 能力探测（缓存；旧 server 拒绝帧 → null，不缓存） */

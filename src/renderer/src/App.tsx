@@ -9,6 +9,7 @@ import { SettingsDialog } from './components/SettingsDialog'
 import { ServerInstallDialog } from './components/ServerInstallDialog'
 import { ConnectErrorToast, HostKeyConfirmDialog } from './components/HostKeyConfirmDialog'
 import { ReviewHintToast } from './components/DiffReview'
+import { AnswerBanner, AnswerNoticeToast } from './components/AnswerBanner'
 import { useI18n, syncLanguageToMain } from './i18n'
 
 /** ?smoke=1：--smoke 冒烟模式下 main 注入的 URL query（模块加载时解析一次，运行期不变） */
@@ -225,6 +226,9 @@ export function App() {
       <ConnectErrorToast />
       {/* v2.0.2 任务结束审查提示（main ReviewHint 推送；10s 自动收起） */}
       <ReviewHintToast />
+      {/* v2.2.0 手机答复：待答复横幅 + 「已由手机答复」提示 */}
+      <AnswerBanner />
+      <AnswerNoticeToast />
     </div>
   )
 }

@@ -282,6 +282,15 @@ describe('AnswerService：上限与释放路径', () => {
     const held = h.svc.holdLocal(LOCAL_VIEW, (pendingId, choice) => sent.push([pendingId, choice]))!
     expect(held).not.toBeNull()
     expect(held.pending.taskName).toBe('本地任务')
+    expect(held.pending.pendingId).not.toBe('') // 空 id → server 生成
+
+    // 客户端生成 pendingId（A 帧关联）→ 原样沿用（换 taskId 避免 2.14 同任务同 kind 取代）
+    const heldClient = h.svc.holdLocal(
+      { ...LOCAL_VIEW, taskId: 't-local-2', pendingId: 'client-pending-1' },
+      () => {}
+    )!
+    expect(heldClient.pending.pendingId).toBe('client-pending-1')
+    expect(h.svc.cancelPending('client-pending-1', 'desktop')).toBe(true)
 
     const choice: AnswerChoice = { kind: 'permission', action: 'deny' }
     expect(h.svc.submit(h.svc.tokenOf(held.pending.pendingId)!, held.pending.pendingId, choice)).toBe('ok')

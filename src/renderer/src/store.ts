@@ -1,5 +1,8 @@
 import { create } from 'zustand'
 import type {
+  AnswerPendingInfo,
+  AnswerResolvedEvent,
+  AnswerRuntimeState,
   AppUpdateInfo,
   ConnectionRecord,
   ConnectionRuntimeState,
@@ -501,6 +504,24 @@ interface AppState {
   /** 关闭审查提示 toast */
   dismissReviewHint: () => void
 
+  // ── v2.2.0 手机答复（待答复横幅 + 通道状态）────────────────────────────
+  /** 待答复条目（本地挂起与远程挂起合并；resolved 到达按 pendingId 清除） */
+  answerPendings: AnswerPendingInfo[]
+  /** 通道状态（key=connectionId；'local'=本地配置视角） */
+  answerStates: Record<string, AnswerRuntimeState>
+  /** 最近一次「已由手机答复」提示（toast 消费；点击/超时清除） */
+  answerNotice: AnswerResolvedEvent | null
+  /** 收到待答复（去重并入横幅） */
+  applyAnswerPending: (info: AnswerPendingInfo) => void
+  /** 已处理（清横幅 + 手机作答提示） */
+  applyAnswerResolved: (e: AnswerResolvedEvent) => void
+  /** 通道状态更新 */
+  applyAnswerState: (s: AnswerRuntimeState) => void
+  /** 桌面中止挂起（「回电脑处理」；乐观清横幅，失败靠 resolved 广播兜底） */
+  cancelAnswer: (pendingId?: string, taskId?: string, cid?: string) => void
+  /** 关闭「已由手机答复」提示 */
+  dismissAnswerNotice: () => void
+
   // ── v2.1.0 SSH 纯终端（不启 claude CLI——裸 shell + 文件面板分栏）────────
   /** SSH 控制台目标连接（null=未开；单槽——TabBar 虚拟 tab「SSH」） */
   sshConsoleCid: string | null
@@ -997,6 +1018,45 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   dismissReviewHint: () => set({ reviewHint: null }),
 
+  // ── v2.2.0 手机答复 ────────────────────────────────────────────────
+  applyAnswerPending: (info) => {
+    set((s) => {
+      // 同 pendingId 幂等（本地挂起：回执与本地上行各来一次）
+      if (s.answerPendings.some((p) => p.pending.pendingId === info.pending.pendingId)) return s
+      return { answerPendings: [...s.answerPendings, info] }
+    })
+  },
+  applyAnswerResolved: (e) => {
+    set((s) => ({
+      answerPendings: s.answerPendings.filter(
+        (p) =>
+          !(
+            (e.pendingId !== undefined
+              ? p.pending.pendingId === e.pendingId
+              : p.pending.taskId === e.taskId)
+          )
+      ),
+      answerNotice: e.by === 'phone' && e.action === 'answered' ? e : s.answerNotice
+    }))
+  },
+  applyAnswerState: (s0) => {
+    const key = s0.connectionId ?? 'local'
+    set((s) => ({ answerStates: { ...s.answerStates, [key]: s0 } }))
+  },
+  cancelAnswer: (pendingId, taskId, cid) => {
+    set((s) => ({
+      answerPendings: s.answerPendings.filter(
+        (p) =>
+          !(
+            (pendingId !== undefined && p.pending.pendingId === pendingId) ||
+            (pendingId === undefined && taskId !== undefined && p.pending.taskId === taskId)
+          )
+      )
+    }))
+    void window.cwb.cancelAnswer(pendingId, taskId, cid)
+  },
+  dismissAnswerNotice: () => set({ answerNotice: null }),
+
   // ── v2.1.0 SSH 纯终端 ──────────────────────────────────────────────
   openSshConsole: async (connectionId, dir) => {
     if (get().connections.every((c) => c.id !== connectionId)) return
@@ -1407,6 +1467,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   reviewState: null,
   reviewActive: false,
   reviewHint: null,
+  answerPendings: [],
+  answerStates: {},
+  answerNotice: null,
   sshConsoleCid: null,
   sshActive: false,
   sshSessionDead: false,
@@ -1557,6 +1620,16 @@ export function initListeners(): () => void {
   const offReviewHint = window.cwb.onReviewHint?.((e) => {
     useAppStore.setState({ reviewHint: e })
   })
+  // v2.2.0 手机答复：待答复横幅 / 已处理 / 通道状态
+  const offAnswerPending = window.cwb.onAnswerPending?.((e) => {
+    useAppStore.getState().applyAnswerPending(e)
+  })
+  const offAnswerResolved = window.cwb.onAnswerResolved?.((e) => {
+    useAppStore.getState().applyAnswerResolved(e)
+  })
+  const offAnswerState = window.cwb.onAnswerState?.((e) => {
+    useAppStore.getState().applyAnswerState(e)
+  })
   // v2.1.0 SSH 纯终端：输出流经 emitSshData（缓冲/冲放）；会话结束关台
   const offSshData = window.cwb.onSshData?.((e) => emitSshData(e))
   const offSshClosed = window.cwb.onSshClosed?.((e: SshClosedEvent) => {
@@ -1581,6 +1654,9 @@ export function initListeners(): () => void {
     offConnState()
     offServerLog()
     offReviewHint?.()
+    offAnswerPending?.()
+    offAnswerResolved?.()
+    offAnswerState?.()
     offSshData?.()
     offSshClosed?.()
   }

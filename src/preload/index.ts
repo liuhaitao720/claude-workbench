@@ -4,6 +4,10 @@ import type {
   AppSettings,
   AppUpdateInfo,
   AppUpdateProgressEvent,
+  AnswerConfig,
+  AnswerPendingInfo,
+  AnswerResolvedEvent,
+  AnswerRuntimeState,
   ConnectionRecord,
   ConnectionStateChangedEvent,
   CWBApi,
@@ -12,6 +16,8 @@ import type {
   DiffListResult,
   LocalProxyStatus,
   NotifyConfig,
+  NotifyEventFlags,
+  NotifySettingsView,
   ProviderConfig,
   ProviderRegistryState,
   RemoteProxyConfig,
@@ -185,6 +191,30 @@ const api: CWBApi = {
   },
   sendTestNotify: (cid?: string) =>
     ipcRenderer.invoke(IpcChannels.NotifyTest, cid) as Promise<{ ok: boolean; error?: string }>,
+  // v2.2.0 推送事件开关 + 手机答复
+  getNotifySettings: (cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.NotifySettingsGet, cid) as Promise<NotifySettingsView>,
+  setNotifyEvents: (patch, cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.NotifyEventsSet, cid, patch) as Promise<NotifyEventFlags>,
+  setAnswerConfig: (patch, cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.AnswerConfigSet, cid, patch) as Promise<AnswerConfig>,
+  cancelAnswer: (pendingId?: string, taskId?: string, cid?: string) =>
+    ipcRenderer.invoke(IpcChannels.AnswerCancel, cid, pendingId, taskId) as Promise<void>,
+  onAnswerPending: (cb: (e: AnswerPendingInfo) => void) => {
+    const listener = (_e: unknown, ev: AnswerPendingInfo): void => cb(ev)
+    ipcRenderer.on(IpcChannels.AnswerPending, listener as never)
+    return () => ipcRenderer.removeListener(IpcChannels.AnswerPending, listener as never)
+  },
+  onAnswerResolved: (cb: (e: AnswerResolvedEvent) => void) => {
+    const listener = (_e: unknown, ev: AnswerResolvedEvent): void => cb(ev)
+    ipcRenderer.on(IpcChannels.AnswerResolved, listener as never)
+    return () => ipcRenderer.removeListener(IpcChannels.AnswerResolved, listener as never)
+  },
+  onAnswerState: (cb: (e: AnswerRuntimeState) => void) => {
+    const listener = (_e: unknown, ev: AnswerRuntimeState): void => cb(ev)
+    ipcRenderer.on(IpcChannels.AnswerState, listener as never)
+    return () => ipcRenderer.removeListener(IpcChannels.AnswerState, listener as never)
+  },
   // v1.4 模型服务 provider（参考 cc-switch：档案 CRUD + 默认切换；仅配置注入）
   listProviders: (cid?: string) =>
     ipcRenderer.invoke(IpcChannels.ProvidersList, cid) as Promise<ProviderRegistryState>,

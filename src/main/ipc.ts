@@ -5,12 +5,14 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { EVENT_CHANNELS, IpcChannels } from '../shared/ipc-channels'
 import { translate } from '../shared/i18n'
 import type {
+  AnswerConfig,
   AppSettings,
   CliOutputEvent,
   ConnectionStateChangedEvent,
   CreateTaskOptions,
   DiffFileEntry,
   NotifyConfig,
+  NotifyEventFlags,
   ProjectRecord,
   ProviderConfig,
   ProviderRegistryState,
@@ -49,6 +51,8 @@ import {
   setRemoteDefault
 } from './remote-providers'
 import { readRemoteNotify, writeRemoteNotify } from './remote-notify'
+import { readRemoteNotifySettings, writeRemoteNotifyAnswer, writeRemoteNotifyEvents } from './remote-notify'
+import { AnswerBridge } from './answer-bridge'
 import { importRemoteSkillFolder, removeRemoteSkill } from './remote-skills'
 import { FileTransferManager, type TransferItem } from './file-transfer'
 import { createModelsProbe, type ModelsProbeResult } from './provider-models'
@@ -319,6 +323,8 @@ export interface AppContext {
    * 透传（proxy.* 三通道）+ 连接流程健康检查（needInstall 判定）。
    */
   readonly remotePty: RemotePtyHub
+  /** v2.2.0 本地任务手机答复桥（hook 挂起 resolve / presence / 桌面中止） */
+  readonly answer: AnswerBridge
 }
 
 export interface AppContextOptions {
@@ -592,6 +598,8 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   onTaskUpdateHook = () => appUpdate.tryAutoInstall()
   /** 2.0.2 lastActiveAt 节流 touch 的每任务时间戳（见 onHookEvent 注释） */
   const lastActiveTouchAt = new Map<string, number>()
+  /** v2.2.0 本地任务手机答复桥（remotePty 就绪后装配；hook 挂起回调查询此引用） */
+  let answerBridgeRef: AnswerBridge | undefined
   const activity = startTaskActivityServer({
     settingsDir,
     onActivity: (e) => {
@@ -601,6 +609,9 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       // v1.7.0：routeNotifyActivity 按任务归属分流本地/远程（VM ~/.cwb/notify.json）配置
       routeNotifyActivity(e)
     },
+    // v2.2.0 B 链（本地任务手机答复）：可作答 hook 延迟响应——answer 桥完成全部
+    // 门控（配置/不在场/可用连接）后才挂起；桥未就绪/不放行=立即 null 回落 TUI
+    onPending: (req) => answerBridgeRef?.requestHold(req) ?? null,
     // 2.0.2 任务排序根因修复：lastActiveAt 原先只在建/恢复/停止时写，长跑任务持续
     // 在用却不刷新 → 项目树「按最近活跃倒序」的键失真（新任务压过昨恢复但在用的
     // 老任务）。用户真实交互信号（提交提示/轮次完成等 hook）到达时节流 touch——
@@ -660,6 +671,16 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
         if (pc !== undefined && pc.connectionId === cid) out.push(t.id)
       }
       return out
+    },
+    // v2.2.0 手机答复帧：转本地答复桥（本地挂起 resolve / 桌面横幅 / 手机停止）
+    answer: {
+      onPending: (cid, pending, url) => answerBridgeRef?.handleServerPending(cid, pending, url),
+      onSubmit: (cid, pendingId, choice) =>
+        answerBridgeRef?.handleServerSubmit(cid, pendingId, choice),
+      onResolved: (cid, pendingId, taskId, by, action) =>
+        answerBridgeRef?.handleServerResolved(cid, pendingId, taskId, by, action),
+      onStop: (cid, taskId) => answerBridgeRef?.handleServerStop(cid, taskId),
+      onState: (cid, state) => answerBridgeRef?.handleServerState(cid, state)
     }
   })
   /** task→project.connectionId 路由解析（远程=指向 hub 的 per-connection manager） */
@@ -668,6 +689,42 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     if (task === undefined) return undefined
     const cid = projects.get(task.projectId)?.connectionId
     return cid !== undefined && cid !== '' ? cid : undefined
+  }
+
+  // v2.2.0 手机答复桥（本地任务 hook 挂起 + presence 播报 + 桌面中止）
+  const answerBridge: AnswerBridge = new AnswerBridge({
+    getConfig: () => notify.getAnswer(),
+    answerConnection: () => remotePty.answerConnectionId(),
+    sendFrame: (cid, frame) => remotePty.sendFrame(cid, frame),
+    broadcastPresence: (lastInputAt, focused) => remotePty.broadcastPresence(lastInputAt, focused),
+    taskMetaOf: (taskId) => {
+      const task = tasks.get(taskId)
+      const project = task !== undefined ? projects.get(task.projectId) : undefined
+      return {
+        ...(task !== undefined ? { taskName: task.name } : {}),
+        ...(project !== undefined ? { projectName: project.name } : {})
+      }
+    },
+    stopTask: (taskId) => {
+      void stopTask(taskId).catch(() => {
+        /* 手机停止失败静默（任务可能已退出） */
+      })
+    },
+    onPending: (info) => broadcast(IpcChannels.AnswerPending, info),
+    onResolved: (e) => broadcast(IpcChannels.AnswerResolved, e),
+    onState: (s) => broadcast(IpcChannels.AnswerState, s)
+  })
+  answerBridgeRef = answerBridge
+  // 在场心跳：窗口焦点即时播报 + 30s 定时（键入节流在桥内）。
+  // 可选调用：部分集成测试以最小 Electron 替身构造 ctx（无 app.on）。
+  app.on?.('browser-window-focus', () => answerBridge.setFocused(true))
+  app.on?.('browser-window-blur', () => answerBridge.setFocused(false))
+  answerBridge.startPresenceHeartbeat()
+  // 连接断开：本地挂起全部空响应释放（避免桌面永久无框——claude 回落 TUI）
+  if (options.connection !== undefined) {
+    connection.onStateChange((e) => {
+      if (e.state !== 'connected') answerBridge.releaseAll()
+    })
   }
 
   // v1.7.0 远程通知分流（用户指令：本地和远程都要 webhook 通知）：远程任务的
@@ -1347,7 +1404,8 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     fontScanner,
     appUpdate,
     connection,
-    remotePty
+    remotePty,
+    answer: answerBridge
   }
 }
 
@@ -1994,6 +2052,43 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     }
     return ctx.notify.sendTest()
   })
+  // v2.2.0 设置页聚合读 + 事件开关/手机答复写（cid 作用域：本地 userData / VM ~/.cwb）
+  ipcMain.handle(IpcChannels.NotifySettingsGet, async (_e, cid: unknown) => {
+    const c = asCid(cid)
+    if (c !== undefined) return readRemoteNotifySettings(ctx.connection, c)
+    return {
+      config: ctx.notify.getConfig(),
+      events: ctx.notify.getEvents(),
+      answer: ctx.notify.getAnswer()
+    }
+  })
+  ipcMain.handle(IpcChannels.NotifyEventsSet, async (_e, cid: unknown, patch: unknown) => {
+    const p = (typeof patch === 'object' && patch !== null ? patch : {}) as Partial<NotifyEventFlags>
+    const c = asCid(cid)
+    if (c !== undefined) {
+      const next = await writeRemoteNotifyEvents(ctx.connection, c, p)
+      remoteNotifyCache.delete(c) // 写穿失效（VM 侧配置变更即时生效）
+      return next
+    }
+    return ctx.notify.setEvents(p)
+  })
+  ipcMain.handle(IpcChannels.AnswerConfigSet, async (_e, cid: unknown, patch: unknown) => {
+    const p = (typeof patch === 'object' && patch !== null ? patch : {}) as Partial<AnswerConfig>
+    const c = asCid(cid)
+    if (c !== undefined) return writeRemoteNotifyAnswer(ctx.connection, c, p)
+    return ctx.notify.setAnswer(p)
+  })
+  // 桌面中止挂起（「回电脑处理」）：本地挂起立即释放，server 侧 hook 同步释放
+  ipcMain.handle(
+    IpcChannels.AnswerCancel,
+    (_e, cid: unknown, pendingId: unknown, taskId: unknown) => {
+      ctx.answer.cancel(
+        asCid(cid),
+        typeof pendingId === 'string' && pendingId !== '' ? pendingId : undefined,
+        typeof taskId === 'string' && taskId !== '' ? taskId : undefined
+      )
+    }
+  )
   // v1.4 模型服务 provider：档案 CRUD + 默认切换（入参校验拒绝即 invoke reject，renderer 展示错误）
   // v1.7.0（用户指令：本地/远程配置隔离）：模型服务的存储/读取/修改源由 renderer
   // 传显式 connectionId 指定（undefined=本机）——设置中心作用域化后不再依赖
@@ -2153,6 +2248,8 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     }
     // S4 健康检查（SSH 已通前提下）：不可达 → needInstall token 错误（见上方注释）
     await ctx.remotePty.ensureConnected(id)
+    // v2.2.0：连接就绪立即播报桌面在场（server 据此判定手机可否代答）
+    ctx.answer.announcePresence()
   })
   ipcMain.handle(IpcChannels.ConnectionsDisconnect, (_e, id: unknown) => {
     if (typeof id !== 'string' || id === '') {
@@ -2252,6 +2349,8 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   ipcMain.on(IpcChannels.PtyWrite, (_e, taskId: string, data: string) => {
     // v0.4.2 输入回显抑制：记录用户键入时刻（键入后 2s 内的 PTY 字节=TUI 重绘，不点亮 busy）
     activity.noteUserInput(taskId)
+    // v2.2.0 presence：桌面在场信号（节流广播，内容不落盘——只时间戳）
+    ctx.answer.noteInput()
     pty.write(taskId, data)
     // v3.2 本地 Esc 中断检测：恰为单字符 \x1b（方向键 \x1b[A 等多字节序列因长度不等于 1 排除）；
     // 仅当前裁决 busy 时合成 idle——补官方 Stop hook 在 Esc 中断不触发的缺口

@@ -149,6 +149,69 @@ export function buildNotifyPayload(channel: NotifyConfig['channel'], text: strin
   return { text }
 }
 
+/**
+ * notify.json `events` 段归一化（本地/远程共用；缺失/类型不符回落缺省全开）。
+ * 远程路径（remote-notify）与本地 NotifyService 同语义——两端口径唯一。
+ */
+export function normalizeEventFlags(raw: unknown): NotifyEventFlags {
+  const o = isPlainObj(raw) ? raw : {}
+  const flag = (k: keyof NotifyEventFlags): boolean =>
+    typeof o[k] === 'boolean' ? (o[k] as boolean) : DEFAULT_EVENT_FLAGS[k]
+  return {
+    awaiting: flag('awaiting'),
+    stop: flag('stop'),
+    stopFailure: flag('stopFailure'),
+    exit: flag('exit')
+  }
+}
+
+/** notify.json `answer` 段归一化（数值越界回落缺省；隧道固定 cloudflare——2.3f=A） */
+export function normalizeAnswerConfig(raw: unknown): AnswerConfig {
+  const o = isPlainObj(raw) ? raw : {}
+  const int = (v: unknown, def: number, min: number, max: number): number =>
+    typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max ? v : def
+  return {
+    enabled: o['enabled'] === true,
+    ttlSec: int(o['ttlSec'], DEFAULT_ANSWER_CONFIG.ttlSec, 60, 86_400),
+    presenceMin: int(o['presenceMin'], DEFAULT_ANSWER_CONFIG.presenceMin, 1, 1_440),
+    tunnel: 'cloudflare',
+    pagePort: int(o['pagePort'], DEFAULT_ANSWER_CONFIG.pagePort, 0, 65_535)
+  }
+}
+
+/** 事件开关部分更新（pickBooleans 忽略非布尔；本地/远程共用） */
+export function mergeEventFlags(
+  base: NotifyEventFlags,
+  patch: Partial<NotifyEventFlags>
+): NotifyEventFlags {
+  return { ...base, ...pickBooleans(patch) }
+}
+
+/** 手机答复部分更新（数值越界抛错——设置页应给可操作反馈；本地/远程共用） */
+export function mergeAnswerConfig(base: AnswerConfig, patch: Partial<AnswerConfig>): AnswerConfig {
+  const next: AnswerConfig = { ...base, tunnel: 'cloudflare' }
+  if (patch.enabled !== undefined) next.enabled = patch.enabled === true
+  if (patch.ttlSec !== undefined) {
+    if (!Number.isInteger(patch.ttlSec) || patch.ttlSec < 60 || patch.ttlSec > 86_400) {
+      throw new Error('ttlSec out of range (60..86400)')
+    }
+    next.ttlSec = patch.ttlSec
+  }
+  if (patch.presenceMin !== undefined) {
+    if (!Number.isInteger(patch.presenceMin) || patch.presenceMin < 1 || patch.presenceMin > 1_440) {
+      throw new Error('presenceMin out of range (1..1440)')
+    }
+    next.presenceMin = patch.presenceMin
+  }
+  if (patch.pagePort !== undefined) {
+    if (!Number.isInteger(patch.pagePort) || patch.pagePort < 0 || patch.pagePort > 65_535) {
+      throw new Error('pagePort out of range (0..65535)')
+    }
+    next.pagePort = patch.pagePort
+  }
+  return next
+}
+
 export class NotifyService {
   constructor(private readonly opts: NotifyServiceOptions) {}
 
@@ -193,63 +256,24 @@ export class NotifyService {
 
   /** v2.2.0 事件开关（完成/停止/异常/退出推送；缺省全开） */
   getEvents(): NotifyEventFlags {
-    const ev = this.loadRaw()['events']
-    const o = isPlainObj(ev) ? ev : {}
-    const flag = (k: keyof NotifyEventFlags): boolean =>
-      typeof o[k] === 'boolean' ? (o[k] as boolean) : DEFAULT_EVENT_FLAGS[k]
-    return {
-      awaiting: flag('awaiting'),
-      stop: flag('stop'),
-      stopFailure: flag('stopFailure'),
-      exit: flag('exit')
-    }
+    return normalizeEventFlags(this.loadRaw()['events'])
   }
 
   /** 保存事件开关（部分更新，其余字段保留） */
   setEvents(patch: Partial<NotifyEventFlags>): NotifyEventFlags {
-    const next = { ...this.getEvents(), ...pickBooleans(patch) }
+    const next = mergeEventFlags(this.getEvents(), patch)
     this.writeRaw({ ...this.loadRaw(), events: next })
     return next
   }
 
   /** v2.2.0 手机答复配置（缺省关；数值越界回落缺省） */
   getAnswer(): AnswerConfig {
-    const an = this.loadRaw()['answer']
-    const o = isPlainObj(an) ? an : {}
-    const int = (v: unknown, def: number, min: number, max: number): number =>
-      typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max ? v : def
-    return {
-      enabled: o['enabled'] === true,
-      ttlSec: int(o['ttlSec'], DEFAULT_ANSWER_CONFIG.ttlSec, 60, 86_400),
-      presenceMin: int(o['presenceMin'], DEFAULT_ANSWER_CONFIG.presenceMin, 1, 1_440),
-      tunnel: 'cloudflare',
-      pagePort: int(o['pagePort'], DEFAULT_ANSWER_CONFIG.pagePort, 0, 65_535)
-    }
+    return normalizeAnswerConfig(this.loadRaw()['answer'])
   }
 
   /** 保存手机答复配置（部分更新；数值越界抛错——设置页应给可操作反馈） */
   setAnswer(patch: Partial<AnswerConfig>): AnswerConfig {
-    const base = this.getAnswer()
-    const next: AnswerConfig = { ...base, tunnel: 'cloudflare' }
-    if (patch.enabled !== undefined) next.enabled = patch.enabled === true
-    if (patch.ttlSec !== undefined) {
-      if (!Number.isInteger(patch.ttlSec) || patch.ttlSec < 60 || patch.ttlSec > 86_400) {
-        throw new Error('ttlSec out of range (60..86400)')
-      }
-      next.ttlSec = patch.ttlSec
-    }
-    if (patch.presenceMin !== undefined) {
-      if (!Number.isInteger(patch.presenceMin) || patch.presenceMin < 1 || patch.presenceMin > 1_440) {
-        throw new Error('presenceMin out of range (1..1440)')
-      }
-      next.presenceMin = patch.presenceMin
-    }
-    if (patch.pagePort !== undefined) {
-      if (!Number.isInteger(patch.pagePort) || patch.pagePort < 0 || patch.pagePort > 65_535) {
-        throw new Error('pagePort out of range (0..65535)')
-      }
-      next.pagePort = patch.pagePort
-    }
+    const next = mergeAnswerConfig(this.getAnswer(), patch)
     this.writeRaw({ ...this.loadRaw(), answer: next })
     return next
   }

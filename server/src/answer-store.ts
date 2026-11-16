@@ -157,8 +157,10 @@ export class AnswerService {
   ): HeldAnswer | null {
     if (!this.canHold()) return null
     if (!this.withinLimits(view.taskId)) return null
+    // 本地任务：沿用客户端生成的 pendingId（A 帧确认/提交/取消按此关联）；
+    // 缺失或撞车（理论不会发生）则 server 自生成。
     const safe: AnswerPendingView = {
-      pendingId: '',
+      pendingId: view.pendingId ?? '',
       taskId: view.taskId,
       event: view.event,
       kind: view.kind,
@@ -168,7 +170,17 @@ export class AnswerService {
         : {}),
       questions: view.questions
     }
-    return this.create(view.taskId, view.event, safe, 'local', () => {}, undefined, onSubmit, onStop)
+    return this.create(
+      view.taskId,
+      view.event,
+      safe,
+      'local',
+      () => {},
+      undefined,
+      onSubmit,
+      onStop,
+      safe.pendingId
+    )
   }
 
   /** 上限校验（全局 20 / 单任务 5）+ 2.14 同任务同 kind 取代 */
@@ -189,7 +201,8 @@ export class AnswerService {
     reply: (decision: Record<string, unknown> | null) => void,
     parsed?: ParsedAnswerHook,
     onSubmit?: (pendingId: string, choice: AnswerChoice) => void,
-    onStop?: () => void
+    onStop?: () => void,
+    preferredId?: string
   ): HeldAnswer {
     // 2.14：同任务同 kind 新事件取代旧 pending（空响应释放旧 hook）
     for (const p of [...this.pendings.values()]) {
@@ -199,7 +212,13 @@ export class AnswerService {
     }
     const at = this.now()
     const ttlSec = this.opts.config().ttlSec
-    const id = randomUUID()
+    const id =
+      preferredId !== undefined &&
+      preferredId !== '' &&
+      !this.pendings.has(preferredId) &&
+      !this.settled.has(preferredId)
+        ? preferredId
+        : randomUUID()
     const token = randomBytes(32).toString('base64url')
     const finalView: AnswerPendingView = { ...view, pendingId: id }
     let resolve!: (decision: Record<string, unknown> | null) => void

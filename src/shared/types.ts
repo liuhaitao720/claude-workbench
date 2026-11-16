@@ -2,6 +2,7 @@
  * SSH Workbench 跨进程契约（S1.5 主控落骨架）
  * 唯一事实源：doc/design/spec-v1.md §5（v1.3）。契约变更须走主控编译红流程，子任务不得静默修改。
  */
+import type { AnswerPendingView } from './remote-protocol'
 
 /** 项目记录【S2 project-store 写 / S3 侧栏读】 */
 export interface ProjectRecord {
@@ -174,6 +175,41 @@ export interface AnswerConfig {
   tunnel: 'cloudflare'
   /** 应答页监听端口（0=OS 动态分配） */
   pagePort: number
+}
+
+/** v2.2.0 设置页聚合视图（webhook + 事件开关 + 手机答复；cid 缺省=本地） */
+export interface NotifySettingsView {
+  config: NotifyConfig
+  events: NotifyEventFlags
+  answer: AnswerConfig
+}
+
+/** v2.2.0 手机答复通道运行时状态（设置页状态卡/桌面横幅） */
+export interface AnswerRuntimeState {
+  /** 归属连接（本地配置=undefined 或本地连接 cid） */
+  connectionId?: string
+  enabled: boolean
+  tunnel: 'off' | 'starting' | 'up' | 'down' | 'missing'
+  /** 公网入口基址（up 时给出；页面地址 = baseUrl + /a/<token>） */
+  baseUrl?: string
+  pendingCount: number
+}
+
+/** v2.2.0 桌面待答复横幅条目（server 回执/远程挂起通知） */
+export interface AnswerPendingInfo {
+  connectionId?: string
+  pending: AnswerPendingView
+  /** 手机页面地址（隧道可用时） */
+  url?: string
+}
+
+/** v2.2.0 已处理事件（清横幅 + toast「已由手机答复」） */
+export interface AnswerResolvedEvent {
+  connectionId?: string
+  pendingId?: string
+  taskId: string
+  by: 'phone' | 'desktop' | 'system'
+  action: 'answered' | 'cancelled' | 'expired'
 }
 
 /** v2.0 远程文件条目（FilesPanel 列表） */
@@ -787,6 +823,22 @@ export interface CWBApi {
   setNotifyWebhook(url: string, enabled: boolean, cid?: string): Promise<NotifyConfig>
   /** 立即推送测试消息 */
   sendTestNotify(cid?: string): Promise<{ ok: boolean; error?: string }>
+
+  // ── 推送事件开关与手机答复（v2.2.0）───────────────
+  /** 设置页聚合读取：webhook + 事件开关 + 手机答复（cid 缺省=本地文件） */
+  getNotifySettings(cid?: string): Promise<NotifySettingsView>
+  /** 保存事件开关（部分更新；远程 → VM 侧 notify.json read-modify-write） */
+  setNotifyEvents(patch: Partial<NotifyEventFlags>, cid?: string): Promise<NotifyEventFlags>
+  /** 保存手机答复配置（部分更新；数值越界抛错） */
+  setAnswerConfig(patch: Partial<AnswerConfig>, cid?: string): Promise<AnswerConfig>
+  /** 桌面中止挂起（「改本机输入」）：pendingId 与 taskId 二选一/同给 */
+  cancelAnswer(pendingId?: string, taskId?: string, cid?: string): Promise<void>
+  /** 待答复通知（桌面横幅；server 回执与远程任务挂起均经此） */
+  onAnswerPending(cb: (e: AnswerPendingInfo) => void): () => void
+  /** 已处理（手机/桌面/系统）：清横幅 + toast */
+  onAnswerResolved(cb: (e: AnswerResolvedEvent) => void): () => void
+  /** 答复通道状态（隧道/挂起计数；设置页状态卡） */
+  onAnswerState(cb: (e: AnswerRuntimeState) => void): () => void
 
   // ── 模型服务 provider（5，v1.4）─────────────
   /** 全部 provider 档案 + 默认 id（设置中心「模型服务」与新建任务选择的数据源） */

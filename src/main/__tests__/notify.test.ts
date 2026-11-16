@@ -14,7 +14,12 @@ import {
   NotifyService,
   buildNotifyPayload,
   inferChannel,
+  mergeAnswerConfig,
+  mergeEventFlags,
+  normalizeAnswerConfig,
+  normalizeEventFlags,
   validateWebhookUrl,
+  DEFAULT_ANSWER_CONFIG,
   PUSH_DEBOUNCE_MS,
   STOP_MERGE_MS,
   STOP_THROTTLE_MS
@@ -526,5 +531,54 @@ describe('v2.2.0 T2 完成/停止/异常推送（hook + 终态）', () => {
     svc2.setWebhook(WEBHOOK, true)
     svc2.onTaskExit('t-1', 0, false)
     expect(textOf(1)).not.toContain('> 耗时')
+  })
+})
+
+describe('v2.2.0 配置归一化/部分更新（本地与远程共用同一套语义）', () => {
+  it('normalizeEventFlags：非法形状全默认；逐键保留布尔、忽略非布尔', () => {
+    expect(normalizeEventFlags(null)).toEqual({ awaiting: true, stop: true, stopFailure: true, exit: true })
+    expect(normalizeEventFlags({ awaiting: false, stop: 'yes', exit: 0 })).toEqual({
+      awaiting: false,
+      stop: true,
+      stopFailure: true,
+      exit: true
+    })
+  })
+
+  it('normalizeAnswerConfig：越界数值回落缺省；enabled 仅 ===true 生效；隧道固定 cloudflare', () => {
+    expect(normalizeAnswerConfig(undefined)).toEqual(DEFAULT_ANSWER_CONFIG)
+    expect(
+      normalizeAnswerConfig({
+        enabled: 1,
+        ttlSec: 59,
+        presenceMin: 1_441,
+        tunnel: 'ngrok',
+        pagePort: 70_000
+      })
+    ).toEqual({ ...DEFAULT_ANSWER_CONFIG, enabled: false })
+    expect(
+      normalizeAnswerConfig({ enabled: true, ttlSec: 3_600, presenceMin: 30, pagePort: 18_080 })
+    ).toEqual({ enabled: true, ttlSec: 3_600, presenceMin: 30, tunnel: 'cloudflare', pagePort: 18_080 })
+  })
+
+  it('mergeEventFlags：只接受布尔补丁', () => {
+    const base = { awaiting: true, stop: true, stopFailure: true, exit: true }
+    expect(mergeEventFlags(base, { awaiting: false, exit: 'x' as unknown as boolean })).toEqual({
+      awaiting: false,
+      stop: true,
+      stopFailure: true,
+      exit: true
+    })
+  })
+
+  it('mergeAnswerConfig：合法补丁生效；越界抛可操作错误', () => {
+    expect(mergeAnswerConfig(DEFAULT_ANSWER_CONFIG, { enabled: true, ttlSec: 1_800 })).toEqual({
+      ...DEFAULT_ANSWER_CONFIG,
+      enabled: true,
+      ttlSec: 1_800
+    })
+    expect(() => mergeAnswerConfig(DEFAULT_ANSWER_CONFIG, { ttlSec: 30 })).toThrow(/ttlSec/)
+    expect(() => mergeAnswerConfig(DEFAULT_ANSWER_CONFIG, { presenceMin: 0 })).toThrow(/presenceMin/)
+    expect(() => mergeAnswerConfig(DEFAULT_ANSWER_CONFIG, { pagePort: 65_536 })).toThrow(/pagePort/)
   })
 })

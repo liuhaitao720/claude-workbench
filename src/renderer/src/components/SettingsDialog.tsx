@@ -7,6 +7,7 @@ import { CliOutputView } from './CliOutputView'
 import { ConnectionsSection, RemoteProxyPanel } from './ConnectionsSettings'
 import { SettingsScopeBar, NEW_SCOPE } from './SettingsScopeBar'
 import { SkillsSection } from './SkillsSection'
+import { NotifyEventsAnswer } from './NotifyAdvanced'
 import { ServerSection } from './ServerSection'
 import { changeFontFamily, changeFontSize } from './TerminalPanel'
 import { FONT_FAMILY_WHITELIST, loadFontFamily } from '../font-family'
@@ -1678,6 +1679,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   </p>
                 )}
                 <p className="hint-small">{t('settings.notifyHint')}</p>
+                {/* v2.2.0 推送事件开关 + 手机答复（独立子区；写路径按作用域 cid） */}
+                <NotifyEventsAnswer cid={scopeCid} />
                 {/* v2.0.1 推送留痕（用户实测"没收到推送"自诊）：最近 8 次 sent/failed/skipped */}
                 <NotifyTrail />
 

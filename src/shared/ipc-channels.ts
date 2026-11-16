@@ -31,6 +31,11 @@ const HANDLE = {
   NotifySet: 'cwb:notify:set',
   NotifyTest: 'cwb:notify:test',
   NotifyTrailGet: 'cwb:notify:trail',
+  // v2.2.0 推送事件开关 + 手机答复
+  NotifySettingsGet: 'cwb:notify:settings',
+  NotifyEventsSet: 'cwb:notify:events-set',
+  AnswerConfigSet: 'cwb:notify:answer-set',
+  AnswerCancel: 'cwb:answer:cancel',
   // v0.9 应用设置
   SettingsGet: 'cwb:settings:get',
   SettingsSet: 'cwb:settings:set',
@@ -136,7 +141,13 @@ const EVENT = {
   /** v2.1.0 SSH 纯终端输出流（ssh2 shell 通道 → xterm） */
   SshData: 'cwb:event:ssh-data',
   /** v2.1.0 SSH 纯终端会话结束（远端退出/断连/本地关闭） */
-  SshClosed: 'cwb:event:ssh-closed'
+  SshClosed: 'cwb:event:ssh-closed',
+  /** v2.2.0 手机答复：待答复横幅（server 回执/远程挂起） */
+  AnswerPending: 'cwb:event:answer-pending',
+  /** v2.2.0 手机答复：已处理（清横幅 + toast） */
+  AnswerResolved: 'cwb:event:answer-resolved',
+  /** v2.2.0 手机答复：通道状态（隧道/挂起计数） */
+  AnswerState: 'cwb:event:answer-state'
 } as const
 
 export const IpcChannels = { ...HANDLE, ...SEND, ...EVENT } as const

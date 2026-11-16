@@ -331,6 +331,33 @@ export const zh = {
   'settings.notifyNeedUrl': '先填写 URL',
   'settings.notifyHint': 'URL 属凭据，仅保存在本机（userData），不入仓库、不上传',
 
+  // ── v2.2.0 推送事件开关 + 手机答复 ──────────────────────────────
+  'settings.notifyEventsTitle': '推送事件',
+  'settings.notifyEventAwaiting': '等待答复',
+  'settings.notifyEventStop': '每轮完成',
+  'settings.notifyEventStopFailure': '本轮异常结束',
+  'settings.notifyEventExit': '进程退出/停止',
+  'settings.notifyEventsHint': '子任务的停止不推送（仅主任务轮次与进程终态）',
+  'settings.answerTitle': '手机答复',
+  'settings.answerEnable': '允许在手机上答复（经 Cloudflare 隧道暴露应答页）',
+  'settings.answerEnableHint':
+    '开启后：外网手机可经一次性链接答复权限确认/提问（{ttl} 分钟有效）；仅当桌面 {presence} 分钟无键入时才挂起，回到电脑即回落 TUI。',
+  'settings.answerTtl': '链接有效期（秒）',
+  'settings.answerPresence': '桌面在场阈值（分钟）',
+  'settings.answerTunnelOff': '隧道：未启动',
+  'settings.answerTunnelStarting': '隧道：启动中…',
+  'settings.answerTunnelUp': '隧道：就绪（{url}）',
+  'settings.answerTunnelDown': '隧道：中断（自动重试中）',
+  'settings.answerTunnelMissing': '隧道：未找到 cloudflared（放到 ~/.cwb/bin/ 或 PATH）',
+  'settings.answerPendingCount': '当前挂起 {count} 个',
+  'settings.answerNeedServer': '需连接一台 cwb-server ≥0.2.0 才能接收手机答复',
+  'answer.bannerTitle': '等手机答复',
+  'answer.bannerMeta': '{task} · {project}',
+  'answer.bannerQuestionCount': '{count} 个问题',
+  'answer.backToDesktop': '回电脑处理',
+  'answer.openPage': '打开手机页面',
+  'answer.notice': '「{task}」已由手机答复',
+
   // ── v1.4 设置中心「模型服务」──────────────────────────────
   'common.edit': '编辑',
   'settings.providerTitle': '模型服务（API Provider）',
@@ -1060,6 +1087,33 @@ export const en: Record<MessageKey, string> = {
   'settings.notifyNeedUrl': 'Enter a URL first',
   'settings.notifyHint':
     'The URL is a credential: stored locally only (userData), never committed or uploaded',
+
+  // ── v2.2.0 push event flags + phone answering ─────────────────
+  'settings.notifyEventsTitle': 'Push events',
+  'settings.notifyEventAwaiting': 'Waiting for an answer',
+  'settings.notifyEventStop': 'Turn completed',
+  'settings.notifyEventStopFailure': 'Turn failed',
+  'settings.notifyEventExit': 'Process exit / stop',
+  'settings.notifyEventsHint': 'Subagent stops are never pushed (main turn and process exits only)',
+  'settings.answerTitle': 'Answer from phone',
+  'settings.answerEnable': 'Allow answering from a phone (answer page via Cloudflare tunnel)',
+  'settings.answerEnableHint':
+    'When enabled, an external phone can answer permission prompts / questions via a one-time link (valid {ttl} min). Only held when the desktop has had no typing for {presence} min; coming back to the desk falls back to the TUI.',
+  'settings.answerTtl': 'Link lifetime (seconds)',
+  'settings.answerPresence': 'Desktop presence threshold (minutes)',
+  'settings.answerTunnelOff': 'Tunnel: off',
+  'settings.answerTunnelStarting': 'Tunnel: starting…',
+  'settings.answerTunnelUp': 'Tunnel: up ({url})',
+  'settings.answerTunnelDown': 'Tunnel: down (retrying)',
+  'settings.answerTunnelMissing': 'Tunnel: cloudflared not found (put it in ~/.cwb/bin/ or PATH)',
+  'settings.answerPendingCount': '{count} pending',
+  'settings.answerNeedServer': 'A cwb-server >= 0.2.0 connection is required for phone answering',
+  'answer.bannerTitle': 'Waiting for phone answer',
+  'answer.bannerMeta': '{task} · {project}',
+  'answer.bannerQuestionCount': '{count} question(s)',
+  'answer.backToDesktop': 'Answer on desktop',
+  'answer.openPage': 'Open phone page',
+  'answer.notice': '"{task}" answered from phone',
 
   // ── v1.4 Settings: Model Providers ────────────────────────
   'common.edit': 'Edit',
