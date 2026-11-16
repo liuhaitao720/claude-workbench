@@ -249,9 +249,10 @@ export class ServerNotifier {
   /**
    * hook 事件入口（cwb-server /hook 路由调用）。返回值供测试/日志断言。
    * bodyText=原始 POST body（可选；Stop 的 last_assistant_message 用作摘要）。
+   * url=手机答复链接（v2.2.0：挂起成功时由 cwb-server 传入——awaiting 文案带链接）。
    * 注意：Stop 返回 'pushed' 表示已排入 10 秒合并窗，真正 POST 在窗到期时。
    */
-  onHookEvent(taskId: string, event: string, bodyText?: string): PushOutcome {
+  onHookEvent(taskId: string, event: string, bodyText?: string, url?: string): PushOutcome {
     // 子 agent 停止不推送（用户 2026-11-16 指令；settings 未订阅该 hook，此处兜底）
     if (event === 'SubagentStop') return 'ignored'
     const config = loadNotifyConfig(this.opts.home)
@@ -263,7 +264,7 @@ export class ServerNotifier {
       const last = this.awaitingAt.get(taskId)
       if (last !== undefined && at - last < PUSH_DEBOUNCE_MS) return 'skipped-debounced'
       this.awaitingAt.set(taskId, at)
-      this.pushText(config, this.awaitingText(taskId, at), taskId)
+      this.pushText(config, this.awaitingText(taskId, at, url), taskId)
       return 'pushed'
     }
     if (event === 'Stop') {
@@ -395,10 +396,17 @@ export class ServerNotifier {
     return `> 耗时 ${formatDuration(at - startedAt)} · ${when}`
   }
 
-  /** awaiting 文案（保持 v2.0.2 原文案——本地任务答复链接在 T3 追加） */
-  private awaitingText(taskId: string, at: number): string {
+  /**
+   * awaiting 文案：未挂起=原「请回电脑处理」；挂起成功=带链接（1.11/设计 §2.2）。
+   * 链接只在通知渠道可见（token 一次性 + 900s TTL 兜底——2.5/2.6 已确认接受群发风险）。
+   */
+  private awaitingText(taskId: string, at: number, url?: string): string {
     const when = new Date(at).toLocaleString('zh-CN', { hour12: false })
-    return `【SSH Workbench】任务「${this.label(taskId)}」等待你的答复（权限确认/选择），请回电脑处理\n> ${when}`
+    const head = `【SSH Workbench】任务「${this.label(taskId)}」等待你的答复（权限确认/选择）`
+    if (url === undefined || url === '') {
+      return `${head}，请回电脑处理\n> ${when}`
+    }
+    return `${head}\n> 手机答复：${url}\n> ${when}`
   }
 
   private stopText(taskId: string, at: number, summary?: string): string {

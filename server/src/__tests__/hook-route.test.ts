@@ -108,3 +108,207 @@ describe('v2.0.2 /hook 接收口 → hook.event 转发 + 服务器侧推送', ()
     }
   })
 })
+
+/**
+ * v2.2.0 B 链：/hook 延迟响应（手机答复挂起）。
+ * 验收：桌面不在场 + 配置开 + 页面就绪 → hook 不立即 200，而由页面提交释放决策
+ * JSON；任务结束/手机停止/桌面取消 → 空响应回落 TUI；旧客户端/在场时行为不变。
+ */
+describe('v2.2.0 /hook 挂起 → 手机提交 → 决策 JSON', () => {
+  const SURFACE = 'https://test.trycloudflare.com'
+  let home: string
+  let server: CwbServer
+  let ws: WebSocket
+  let frames: ServerFrame[]
+  let port: number
+
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+  async function waitFor(pred: () => boolean, label: string, timeoutMs = 2000): Promise<void> {
+    const started = Date.now()
+    while (!pred()) {
+      if (Date.now() - started > timeoutMs) throw new Error(`timeout waiting for ${label}`)
+      await sleep(20)
+    }
+  }
+
+  function hookUrl(event: string, taskId: string): string {
+    return `http://127.0.0.1:${port}/hook/${event}?t=${taskId}&e=1`
+  }
+
+  function postHook(
+    event: string,
+    taskId: string,
+    body: unknown
+  ): Promise<Awaited<ReturnType<typeof fetch>>> {
+    return fetch(hookUrl(event, taskId), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+  }
+
+  function resolvedFrames(taskId: string): Array<Extract<ServerFrame, { type: 'answer.resolved' }>> {
+    return frames.filter(
+      (f): f is Extract<ServerFrame, { type: 'answer.resolved' }> =>
+        f.type === 'answer.resolved' && f.taskId === taskId
+    )
+  }
+
+  beforeAll(async () => {
+    home = mkdtempSync(join(tmpdir(), 'cwb-server-answer-'))
+    mkdirSync(join(home, '.cwb'), { recursive: true })
+    // 推送不配 url（不触发真实 webhook）；仅打开手机答复
+    writeFileSync(
+      join(home, '.cwb', 'notify.json'),
+      JSON.stringify({ events: {}, answer: { enabled: true, ttlSec: 900, presenceMin: 5 } }),
+      'utf8'
+    )
+    server = new CwbServer({ port: 0, notifyHome: home, log: () => {} })
+    ;({ port } = await server.start())
+    server.answer.setSurface(SURFACE)
+    ws = new WebSocket(`ws://127.0.0.1:${port}`)
+    frames = []
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', resolve)
+      ws.once('error', reject)
+    })
+    ws.on('message', (data) => {
+      try {
+        frames.push(JSON.parse(String(data)) as ServerFrame)
+      } catch {
+        /* 忽略畸形 */
+      }
+    })
+  })
+
+  afterAll(async () => {
+    for (const t of server?.registry.list() ?? []) {
+      try {
+        server.registry.kill(t.taskId)
+      } catch {
+        /* 已退出 */
+      }
+    }
+    ws?.close()
+    await server?.['shutdown']?.().catch(() => {})
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  it('旧客户端在线（从未发 presence）→ 按在场处理：立即 200 空体，不挂起', async () => {
+    const res = await postHook('PermissionRequest', 't-legacy', { tool_name: 'Bash' })
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('')
+    expect(server.answer.count()).toBe(0)
+  })
+
+  it('桌面 5 分钟无键入（presence）→ 挂起；页面提交 → 决策 JSON；重复提交幂等', async () => {
+    // 上报「很久没动」→ 桌面不在场
+    ws.send(JSON.stringify({ type: 'presence', lastInputAt: 1, focused: false }))
+    await sleep(150)
+
+    const resP = postHook('PermissionRequest', 't-hold', { tool_name: 'Bash' })
+    await waitFor(() => server.answer.count() === 1, 'hook 挂起')
+    const pending = server.answer.list().find((p) => p.taskId === 't-hold')!
+    expect(pending).toBeDefined()
+    expect(pending.kind).toBe('permission')
+    const token = server.answer.tokenOf(pending.pendingId)!
+
+    // 延迟响应尚未放行；错误 token 不放行（只看 HTTP 是否已结束）
+    expect(
+      server.answer.submit('x'.repeat(token.length), pending.pendingId, {
+        kind: 'permission',
+        action: 'allow'
+      })
+    ).toBe('unauthorized')
+    const early = await Promise.race([
+      resP.then(() => 'done' as const),
+      sleep(150).then(() => 'pending' as const)
+    ])
+    expect(early).toBe('pending')
+
+    // answer.pending 帧带公网链接（桌面横幅/推送同源）
+    const pendingFrame = frames.find(
+      (f): f is Extract<ServerFrame, { type: 'answer.pending' }> => f.type === 'answer.pending'
+    )
+    expect(pendingFrame?.url).toBe(`${SURFACE}/a/${token}`)
+
+    // 页面提交 allow → claude 收到 PermissionRequest 决策 JSON（A 链）
+    expect(
+      server.answer.submit(token, pending.pendingId, { kind: 'permission', action: 'allow' })
+    ).toBe('ok')
+    const res = await resP
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect(JSON.parse(await res.text())).toEqual({
+      hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } }
+    })
+    await waitFor(() => resolvedFrames('t-hold').length === 1, 'answer.resolved')
+    expect(resolvedFrames('t-hold')[0]).toMatchObject({ by: 'phone', action: 'answered' })
+    expect(
+      server.answer.submit(token, pending.pendingId, { kind: 'permission', action: 'allow' })
+    ).toBe('already-resolved')
+  })
+
+  it('挂起成功时 awaiting 推送文案带手机链接（1.11）', async () => {
+    const calls: Array<{ taskId: string; event: string; url?: string }> = []
+    const orig = server.notifier.onHookEvent
+    server.notifier.onHookEvent = (taskId, event, _body, url) => {
+      calls.push({ taskId, event, ...(url !== undefined ? { url } : {}) })
+      return 'ignored'
+    }
+    try {
+      const resP = postHook('PermissionRequest', 't-link', { tool_name: 'Bash' })
+      await waitFor(() => server.answer.count() === 1, 't-link 挂起')
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.url).toMatch(new RegExp(`^${SURFACE}/a/.+`))
+      const p = server.answer.list()[0]!
+      server.answer.cancelPending(p.pendingId, 'phone')
+      expect(await (await resP).text()).toBe('')
+    } finally {
+      server.notifier.onHookEvent = orig
+    }
+  })
+
+  it('桌面在场（最近键入）→ 不挂起；桌面取消帧 → 空响应回落 TUI', async () => {
+    // 最近键入 → 在场
+    ws.send(JSON.stringify({ type: 'presence', lastInputAt: Date.now(), focused: true }))
+    await sleep(150)
+    const before = server.answer.count()
+    const res = await postHook('PermissionRequest', 't-present', { tool_name: 'Bash' })
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('')
+    expect(server.answer.count()).toBe(before)
+
+    // 回到不在场，挂起后经 answer.cancel 帧释放（桌面「改本机输入」）
+    ws.send(JSON.stringify({ type: 'presence', lastInputAt: 1, focused: false }))
+    await sleep(150)
+    const resP = postHook('PermissionRequest', 't-cancel', { tool_name: 'Bash' })
+    await waitFor(() => server.answer.count() === 1, 't-cancel 挂起')
+    ws.send(JSON.stringify({ type: 'answer.cancel', taskId: 't-cancel' }))
+    expect(await (await resP).text()).toBe('')
+    await waitFor(() => resolvedFrames('t-cancel').length === 1, 'desktop resolved')
+    expect(resolvedFrames('t-cancel')[0]).toMatchObject({ by: 'desktop', action: 'cancelled' })
+  })
+
+  it('手机请求停止（killTask phone）→ 该任务挂起空响应 + 任务退出', async () => {
+    await server.registry.spawn({
+      taskId: 't-kill',
+      argv: ['/bin/sh', '-c', 'sleep 30'],
+      cwd: tmpdir(),
+      cols: 80,
+      rows: 24,
+      name: '待停止任务'
+    })
+    const resP = postHook('PermissionRequest', 't-kill', { tool_name: 'Bash' })
+    await waitFor(
+      () => server.answer.list().some((p) => p.taskId === 't-kill'),
+      't-kill 挂起'
+    )
+    server.killTask('t-kill', 'phone')
+    expect(await (await resP).text()).toBe('')
+    expect(server.answer.list().some((p) => p.taskId === 't-kill')).toBe(false)
+    await waitFor(() => resolvedFrames('t-kill').length === 1, 'phone stop resolved')
+    expect(resolvedFrames('t-kill')[0]).toMatchObject({ by: 'phone', action: 'cancelled' })
+  })
+})

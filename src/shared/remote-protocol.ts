@@ -8,6 +8,20 @@
  */
 
 import type { RemoteProxyConfig } from './types'
+import type { AnswerChoice, AnswerPendingView } from './answer-decision'
+
+/**
+ * 待答复视图与选择模型定义在 answer-decision.ts（server/客户端共用的纯映射模块，
+ * 随本文件一同同步）；此处转出保持契约单一入口。
+ */
+export type {
+  AnswerChoice,
+  AnswerKind,
+  AnswerPendingView,
+  AnswerQuestionOptionView,
+  AnswerQuestionView,
+  AnswerSelection
+} from './answer-decision'
 
 /**
  * 远程任务 spawn 请求【S4 生产（RemotePtyManager.spawn/spawnClaude 经协议下发）/
@@ -49,51 +63,9 @@ export interface RemoteTaskSpawnRequest {
 }
 
 /**
- * 待答复视图（v2.2.0 B 链）：server 解析 hook body 后的归一化模型，页面与桌面
- * 横幅共用。只含问题原文与选项 label（2.11=A——不展示 tool_input 摘要/终端屏）。
+ * 待答复视图（v2.2.0 B 链）：归一化模型定义见 answer-decision.ts（与映射同源）；
+ * 只含问题原文与选项 label（2.11=A——不展示 tool_input 摘要/终端屏）。
  */
-export type AnswerKind = 'permission' | 'question' | 'plan'
-
-export interface AnswerQuestionOptionView {
-  label: string
-  description?: string
-}
-
-export interface AnswerQuestionView {
-  question: string
-  header?: string
-  multiSelect?: boolean
-  options: AnswerQuestionOptionView[]
-}
-
-export interface AnswerPendingView {
-  /** 服务端生成的 pending id（一次性 token 的对外关联键） */
-  pendingId: string
-  taskId: string
-  /** 原始 hook 事件名（PermissionRequest / PreToolUse） */
-  event: string
-  kind: AnswerKind
-  taskName: string
-  projectName?: string
-  questions: AnswerQuestionView[]
-}
-
-/** 手机/桌面提交的选择：索引映射由 server 完成（2.12——不接受任意按键/字段名） */
-export interface AnswerSelection {
-  questionIndex: number
-  /** 选项索引（单选=1 项；多选=有序多项） */
-  optionIndexes?: number[]
-  /** 自由文本（2.10=B；仅作为 answers 值，上限 2000 字符） */
-  text?: string
-}
-
-export interface AnswerChoice {
-  kind: AnswerKind
-  /** permission: allow/deny；plan: approve/reject */
-  action?: 'allow' | 'deny' | 'approve' | 'reject'
-  /** question：每题的选项/自由文本 */
-  selections?: AnswerSelection[]
-}
 
 export type AnswerResolvedBy = 'phone' | 'desktop' | 'system'
 export type AnswerResolvedAction = 'answered' | 'cancelled' | 'expired'

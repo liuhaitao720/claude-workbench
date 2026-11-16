@@ -20,7 +20,8 @@ import type { ClientFrame, ServerFrame } from './shared/remote-protocol'
 import { TaskRegistry, type TaskSink } from './pty-registry'
 import { createRemoteProxy } from './proxy-core'
 import { ConfigStore } from './config-store'
-import { ServerNotifier } from './notify'
+import { ServerNotifier, loadNotifyExtras } from './notify'
+import { AnswerService } from './answer-store'
 
 /** server 版本（package.json 单一事实源；server.version 帧与 S7 升级比对共用） */
 export const VERSION: string = pkg.version
@@ -92,6 +93,14 @@ export class CwbServer {
   readonly log: LogFn
   /** v2.0.2 服务器侧 webhook 推送器（测试直用） */
   readonly notifier: ServerNotifier
+  /** v2.2.0 B 链手机答复 pending 仓库（页面/隧道在 T4 接入） */
+  readonly answer: AnswerService
+  /** 连接级桌面在场状态（v2.2.0 presence 帧；未上报过 presence 的旧客户端按「在场」处理） */
+  private readonly presence = new Map<WebSocket, PresenceState>()
+  /** 已上报过 presence 的连接状态对象（WeakSet——随状态对象回收） */
+  private readonly presenceReported = new WeakSet<PresenceState>()
+  /** notify.json 定位 HOME（answer 配置/presenceMin 读取） */
+  private readonly notifyHome: string
   /** 显式停止意图（task.kill 先记，退出回调取用——1.12 stopped 与 exited 分流） */
   private readonly stopIntent = new Set<string>()
   private shuttingDown = false
@@ -99,6 +108,7 @@ export class CwbServer {
 
   constructor(private readonly opts: CwbServerOptions = {}) {
     this.config = new ConfigStore(opts.configPath)
+    this.notifyHome = opts.notifyHome ?? process.env['HOME'] ?? '/root'
     const baseLog = opts.log ?? defaultLog
     // server.log 帧通道（契约 server→client 帧之一）：本地 stderr 镜像之外，
     // 同步把元数据日志推给在线客户端（S4 桥接为 RemoteServerLog EVENT）。
@@ -117,6 +127,8 @@ export class CwbServer {
       onTaskSpawn: (taskId, pid) => this.log('info', `task spawned (${taskId}, pid ${pid})`),
       onTaskExit: (taskId, exitCode) => {
         this.log('info', `task exited (${taskId}, code ${exitCode})`)
+        // v2.2.0 B 链：任务结束 → 该任务挂起的 hook 全部空响应释放（页面显示任务已结束）
+        this.answer.cancelTask(taskId, 'system')
         // v2.2.0 完成/停止推送：退出是终态事件（1.3/1.6），与 10 秒内的 Stop 合并
         if (!this.shuttingDown) {
           this.notifier.onTaskExit(taskId, exitCode, this.stopIntent.delete(taskId))
@@ -126,7 +138,7 @@ export class CwbServer {
     // v2.0.2 服务器侧 webhook 推送（用户指令：推送+URL 全落服务器端）——
     // hook 直达 server 后由 server 读 ~/.cwb/notify.json 就地推送；客户端离线照常
     this.notifier = new ServerNotifier({
-      home: opts.notifyHome ?? process.env['HOME'] ?? '/root',
+      home: this.notifyHome,
       metaOf: (taskId) => {
         const name = this.registry.nameOf(taskId)
         const projectName = this.registry.projectNameOf(taskId)
@@ -137,6 +149,17 @@ export class CwbServer {
           ...(startedAt !== undefined ? { startedAt } : {})
         }
       },
+      log: (level, message) => this.log(level, message)
+    })
+    // v2.2.0 B 链：手机答复 pending 仓库（页面/隧道就绪由 T4 经 setSurface 注入；
+    // 未注入时 canHold()=false，hook 立即 200 回落 TUI——桌面行为零变化）
+    this.answer = new AnswerService({
+      config: () => {
+        const a = loadNotifyExtras(this.notifyHome).answer
+        return { enabled: a.enabled, ttlSec: a.ttlSec }
+      },
+      surface: () => this.answer.baseUrl,
+      broadcast: (frame) => this.broadcastFrame(frame),
       log: (level, message) => this.log(level, message)
     })
     this.http = createServer((req, res) => {
@@ -181,17 +204,67 @@ export class CwbServer {
     const chunks: Buffer[] = []
     let total = 0
     let settled = false
-    const finish = (): void => {
+    /** finish 只处理一次（end/error/aborted 三事件可能重复触发） */
+    let processed = false
+    const respondEmpty = (): void => {
       if (settled) return
       settled = true
       res.statusCode = 200
       res.end()
-      if (taskId === '' || !Number.isInteger(epoch)) return
+    }
+    const respondDecision = (decision: Record<string, unknown> | null): void => {
+      if (settled) return
+      settled = true
+      if (decision === null) {
+        res.statusCode = 200
+        res.end()
+        return
+      }
+      const payload = JSON.stringify(decision)
+      res.statusCode = 200
+      res.setHeader('content-type', 'application/json')
+      res.end(payload)
+    }
+    const finish = (): void => {
+      if (processed) return
+      processed = true
+      if (taskId === '' || !Number.isInteger(epoch)) {
+        respondEmpty()
+        return
+      }
       const body = Buffer.concat(chunks).toString('utf8')
-      // 转发给全部在线客户端（单客户端假设；epoch/任务校验由客户端接收端做）
+      // 转发给全部在线客户端（activity 状态/桌面横幅；epoch/任务校验由客户端做）
       for (const ws of this.wss?.clients ?? []) {
         this.send(ws, { type: 'hook.event', taskId, event, epoch })
       }
+      // v2.2.0 B 链：桌面不在场 + 配置开 + 页面/隧道就绪 → 挂起 hook 等手机答复
+      const answerCfg = loadNotifyExtras(this.notifyHome).answer
+      if (this.desktopAway(answerCfg.presenceMin)) {
+        const name = this.registry.nameOf(taskId)
+        const projectName = this.registry.projectNameOf(taskId)
+        const held = this.answer.tryHold({
+          taskId,
+          event,
+          bodyText: body,
+          ...(name !== undefined ? { taskName: name } : {}),
+          ...(projectName !== undefined ? { projectName } : {}),
+          reply: respondDecision
+        })
+        if (held !== null) {
+          // 延迟响应：claude 等待页面/桌面释放（hook timeout=3600s，见 settings）。
+          // 客户端放弃等待（超时/任务被杀）→ pending 记 expired，页面显示已过期
+          res.once('close', () => {
+            if (!settled) {
+              settled = true
+              this.answer.abandon(held.pending.pendingId)
+            }
+          })
+          // awaiting 推送带链接（1.11）；已由挂起覆盖，普通文案不带链接
+          this.notifier.onHookEvent(taskId, event, body, held.url)
+          return
+        }
+      }
+      respondEmpty()
       // 服务器侧推送（旁路——吞错不阻塞）
       this.notifier.onHookEvent(taskId, event, body)
     }
@@ -207,6 +280,41 @@ export class CwbServer {
   /** 记录显式停止意图（task.kill 先记，退出回调取用——区分 stopped 与 exited） */
   noteStopIntent(taskId: string): void {
     this.stopIntent.add(taskId)
+  }
+
+  /**
+   * 停止任务（桌面 task.kill 帧 / 手机应答页 /api/stop 共用，v2.2.0）。
+   * 先作废该任务的手机挂起（by 体现来源，供 answer.resolved 展示），再杀 PTY。
+   */
+  killTask(taskId: string, by: 'desktop' | 'phone' = 'desktop'): void {
+    this.noteStopIntent(taskId)
+    this.answer.cancelTask(taskId, by)
+    this.registry.kill(taskId)
+  }
+
+  /** presence 帧到达（该连接为「在场感知」新客户端；旧客户端不发） */
+  markPresenceReported(presence: PresenceState): void {
+    this.presenceReported.add(presence)
+  }
+
+  /**
+   * 桌面是否「不在场」（2.16：客户端在线且最近 presenceMin 分钟有键入=在场）。
+   * - 无在线客户端 → 不在场（手机可代答）；
+   * - 在线但全部是旧客户端（从未发 presence）→ 按在场处理（桌面行为不变）；
+   * - 否则任一在场感知客户端在键入窗内 → 在场。
+   */
+  private desktopAway(presenceMin: number): boolean {
+    const all = [...this.presence.values()]
+    const aware = all.filter((p) => this.presenceReported.has(p))
+    if (aware.length === 0) return all.length === 0
+    const at = Date.now()
+    const windowMs = presenceMin * 60_000
+    return aware.every((p) => at - p.lastInputAt >= windowMs)
+  }
+
+  /** 帧广播（answer.pending/resolved/state；无客户端=静默） */
+  private broadcastFrame(frame: ServerFrame): void {
+    for (const ws of this.wss?.clients ?? []) this.send(ws, frame)
   }
 
   /** 监听（返回实际端口——port=0 时为 OS 动态分配） */
@@ -242,6 +350,7 @@ export class CwbServer {
       // 无 presence 帧的旧客户端：按「在场」处理（不挂起，桌面行为不变）
       presence: { lastInputAt: Number.MAX_SAFE_INTEGER, focused: false }
     }
+    this.presence.set(ws, ctx.presence)
     const handlers = createHandlers(this, ctx)
     // 帧序串行化：handler 存在异步段（spawn 的 PATH 发现/proxy.start 监听），
     // 不串行则后到帧可能先执行（spawn→attach 背靠背时 attach 先跑=unknown task）。
@@ -262,6 +371,7 @@ export class CwbServer {
     ws.on('close', () => {
       // 5.9=b：断连=仅 detach（该连接全部任务停推），PTY 保活继续跑
       this.registry.detachAll(sink)
+      this.presence.delete(ws)
       this.log('info', 'client disconnected (tasks kept alive)')
     })
     ws.on('error', () => {
@@ -289,6 +399,8 @@ export class CwbServer {
   async shutdown(reason = 'server shutting down'): Promise<void> {
     if (this.shuttingDown) return
     this.shuttingDown = true
+    // v2.2.0 B 链：先释放全部手机挂起（空响应），claude 不必等满 hook 超时
+    this.answer.dispose()
     for (const ws of this.wss.clients) this.send(ws, { type: 'conn.closed', reason })
     // 10 秒合并窗内未发的 Stop 在停机前补推（不丢消息）；随后清空全部定时器
     this.notifier.flush()
@@ -357,9 +469,8 @@ function createHandlers(server: CwbServer, ctx: FrameContext): Record<ClientFram
     },
     'task.kill': (frame, c) => {
       if (frame.type !== 'task.kill') return
-      // 先记停止意图（退出回调据此推「已停止」而非「已退出」）
-      server.noteStopIntent(frame.taskId)
-      registry.kill(frame.taskId)
+      // 先记停止意图（退出回调据此推「已停止」而非「已退出」）+ 作废该任务挂起
+      server.killTask(frame.taskId, 'desktop')
       replyOk(c, frame.rid, { taskId: frame.taskId })
     },
     'task.attach': (frame, c) => {
@@ -414,20 +525,24 @@ function createHandlers(server: CwbServer, ctx: FrameContext): Record<ClientFram
       if (frame.type !== 'presence') return
       c.presence.lastInputAt = frame.lastInputAt
       c.presence.focused = frame.focused
+      server.markPresenceReported(c.presence)
     },
     'server.capabilities': (frame, c) => {
       if (frame.type !== 'server.capabilities') return
       replyOk(c, frame.rid, { ...SERVER_CAPABILITIES, version: VERSION })
     },
-    // v2.2.0 B 链（本地任务挂起）：答案页/隧道落地后接入 AnswerService。
-    // 未接入前不建号、不推送——客户端本地 hook 按其自身超时回落 TUI。
-    'answer.pending': (frame) => {
+    // v2.2.0 B 链（本地任务挂起，D5）：客户端已解析 hook 视图 → server 建 token/推送；
+// 答案经 answer.submit 帧回该连接（决策映射由客户端完成）。不可挂起时静默丢弃。
+    'answer.pending': (frame, c) => {
       if (frame.type !== 'answer.pending') return
-      log('info', `answer.pending ignored (answer service unavailable, ${frame.pending.taskId})`)
+      const p = frame.pending
+      server.answer.holdLocal(p, (pendingId, choice) => {
+        c.send({ type: 'answer.submit', pendingId, choice })
+      })
     },
     'answer.cancel': (frame) => {
       if (frame.type !== 'answer.cancel') return
-      log('info', `answer.cancel ignored (answer service unavailable, ${frame.taskId ?? '-'})`)
+      server.answer.cancelFromDesktop(frame.pendingId, frame.taskId)
     }
   }
 }
