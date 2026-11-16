@@ -2,6 +2,20 @@
 
 SSH Workbench 版本更新说明（新版本在前；应用内「设置 → 应用更新」读取本文件展示）。v1.5.0 前产品名为 Claude Workbench。
 
+## 2.2.0
+
+> 推送补全（完成/停止/失败/退出）+ 手机答复：任务挂在提问上时，人在外面也能用手机作答（cwb-server 0.2.0）
+
+- **推送事件补全**（用户需求：任何结束或停止都要推送）：新增 `stop`（Stop hook）、`stopFailure`（StopFailure hook）、`exit`（任务退出）事件推送；**子 agent 停止不推送**（SubagentStop 不订阅）。合并规则：Stop 与随后 10 秒内的退出合成一条「完成并停止」；同任务 Stop 桶 60 秒节流；awaiting 仍 5 分钟防抖。设置页新增四个事件开关（本地与远程任务共用一套语义）
+- **远程任务不再双推**：server ≥0.2.0 由 server 侧推送完成/停止/退出（能力协商 `server.capabilities`，旧 server 按版本回退），客户端只补推旧 server / 本地任务
+- **手机答复（B 链）**：需要用户拍板的 `PermissionRequest` / `AskUserQuestion`（PreToolUse）/ `ExitPlanMode` hook 在桌面离开时**挂起**（最长 1 小时），server 生成一次性 token + 应答页，经 **Cloudflare 快速隧道**（`*.trycloudflare.com`，出站长连接，17717 仍只监听回环）暴露给手机；手机点选后答案回送，claude 继续执行，无需回电脑
+- **桌面体验**：挂起时显示横幅「已挂起等手机」——「打开手机页面」直达应答页，「回电脑处理」立即取消挂起回到 TUI；手机已答复后右下角轻提示；设置页显示通道状态（隧道/挂起数）
+- **手机停止任务**：应答页可直接停止当前任务（远程任务 server 侧 kill，本地任务回送 `answer.stop`）
+- **门控与回落**（fail-open）：答复开关关闭 / 载荷不可结构化映射 / 桌面在场（`presenceMin` 分钟内键入过）/ 无可用 server 连接 → 不挂起，立即 200 回落 TUI；超时、桌面取消、连接断开、任务结束一律空响应释放，绝不悬空
+- **在场心跳**：键入 5 秒节流 + 窗口焦点即时 + 30 秒心跳上报（`presence` 帧），server 据此判断桌面是否离开
+- **安全边界**：待答内容只在内存（不落盘/不进日志/不进审计）；token 一次性 + TTL；只暴露应答页，控制端口永不公网；webhook/密钥仍只存 userData/notify.json 与 VM `~/.cwb/notify.json`
+- cwb-server 0.1.3→**0.2.0**（新增挂起/应答页/隧道管理/推送能力；首连自动升级）
+
 ## 2.1.7
 
 > 远程文件管理两项优化（用户确认设计）：传输记录 FinalShell 式弹窗 + 双击 <5MB 直接编辑保存
