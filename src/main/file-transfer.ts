@@ -103,6 +103,21 @@ export class FileTransferManager {
     })
   }
 
+  /**
+   * v2.1.7 传输弹窗「清空已完成」：修剪 done/error/canceled 项（活动/排队保留）。
+   */
+  pruneFinished(): void {
+    for (const id of [...this.order]) {
+      const it = this.items.get(id)
+      if (it === undefined) continue
+      if (it.status === 'done' || it.status === 'error' || it.status === 'canceled') {
+        this.items.delete(id)
+        const at = this.order.indexOf(id)
+        if (at >= 0) this.order.splice(at, 1)
+      }
+    }
+  }
+
   cancel(id: string): void {
     const it = this.items.get(id)
     if (it === undefined) return

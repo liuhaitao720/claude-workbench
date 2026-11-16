@@ -124,14 +124,17 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
     )
   })
 
-  it('传输条：进度事件驱动渲染（active 进度 + 展开队列 + 取消按钮）', async () => {
+  it('v2.1.7 传输弹窗（FinalShell 式）：右上角按钮 + 角标；新活动自动弹出；聚合进度/队列/取消/清空已完成', async () => {
     const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
     vi.mocked(api.listRemoteFiles).mockResolvedValue({ ok: true, path: '/home/dev', entries: [] })
     vi.mocked(api.listTransfers).mockResolvedValue([])
     render(<App />)
-    await openPanel(api)
-    // 初始无传输 → 传输条不渲染；事件注入后出现
+    const panel = await openPanel(api)
+    // 初始无传输：弹窗不开，底部传输条已不存在
+    expect(screen.queryByTestId('xfer-pop')).toBeNull()
     expect(screen.queryByTestId('transfer-bar')).toBeNull()
+    expect(within(panel).getByTestId('btn-xfer-pop')).toBeDefined()
+    // 新活动项 → 自动弹出一次（保留 v2.0.1 的立即反馈）
     act(() => {
       for (const cb of api.transfersProgressCallbacks) {
         cb([
@@ -142,18 +145,28 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
             status: 'active',
             transferredBytes: 512,
             totalBytes: 1024
-          }
+          },
+          { id: 'tf-2', direction: 'download', name: 'old.log', status: 'done', transferredBytes: 8, totalBytes: 8 }
         ])
       }
     })
-    const bar = await screen.findByTestId('transfer-bar')
-    expect(bar.textContent).toContain('50%')
-    // v2.0.1：活动项出现即自动展开（无需手点）——表格直接在场
-    const row = await within(bar).findByText('big.bin')
-    expect(row).toBeDefined()
-    expect(within(bar).getByText('进度')).toBeDefined() // 表头在场
-    expect(within(bar).getByTestId('xfer-savedir').textContent).toContain('SSH Workbench') // 保存目录头（默认目录派生）
-    fireEvent.click(within(bar).getByRole('button', { name: '×' }))
+    const pop = await screen.findByTestId('xfer-pop')
+    expect(pop.textContent).toContain('50%')
+    expect(within(pop).getByText('big.bin')).toBeDefined()
+    expect(within(pop).getByText('进度')).toBeDefined() // 表头在场
+    // v2.1.7 修复：弹层 portal 挂 document.body（脱离 .files-panel overflow:hidden 裁切）
+    expect(document.body.contains(pop)).toBe(true)
+    // 保存目录走 main 侧同源解析（默认目录也给「打开」按钮）
+    expect(within(pop).getByTestId('xfer-savedir').textContent).toContain('SSH Workbench')
+    expect(within(pop).getByTestId('btn-open-savedir')).toBeDefined()
+    fireEvent.click(within(pop).getByTestId('btn-open-savedir'))
+    await waitFor(() => expect(api.openLocalPath).toHaveBeenCalledWith('/home/liuhait1/Downloads/SSH Workbench/VM-Dev'))
+    // 角标=活动计数；「清空已完成」修剪完成项（IPC 透传）
+    expect(within(panel).getByText('1').closest('.xfer-badge')).not.toBeNull()
+    fireEvent.click(within(pop).getByTestId('btn-xfer-clear'))
+    await waitFor(() => expect(api.clearFinishedTransfers).toHaveBeenCalled())
+    // 活动行取消按钮 → cancelTransfer
+    fireEvent.click(within(pop).getByRole('button', { name: '×' }))
     await waitFor(() => expect(api.cancelTransfer).toHaveBeenCalledWith('tf-1'))
   })
 
@@ -225,7 +238,7 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
     expect(row('f4').dataset['selected']).toBeUndefined()
   })
 
-  it('双击小文本文件 → peekRemoteFile（本机打开）；大文件/未知扩展 → 走下载', async () => {
+  it('v2.1.7 双击 <5MB → 编辑器弹窗（读取/Ctrl+S 直写/成功轻提示）；≥5MB 走下载；二进制拒绝', async () => {
     const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
     vi.mocked(api.listRemoteFiles).mockResolvedValue({
       ok: true,
@@ -235,13 +248,78 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
         { name: 'huge.bin', isDir: false, size: 20 * 1024 * 1024, mtimeMs: 0 }
       ]
     })
+    vi.mocked(api.readRemoteTextFile).mockResolvedValue({
+      ok: true as const,
+      content: 'hello remote\n',
+      size: 13,
+      mtimeMs: 1_700_000_000_000
+    })
     render(<App />)
     const panel = await openPanel(api)
+    // 双击小文件 → 读取进编辑器
     fireEvent.doubleClick(panel.querySelector('[data-file-name="readme.md"]') as HTMLElement)
-    await waitFor(() => expect(api.peekRemoteFile).toHaveBeenCalledWith('c1', '/home/dev/readme.md'))
+    const dlg = await screen.findByTestId('remote-editor')
+    await waitFor(() =>
+      expect((within(dlg).getByLabelText('编辑 readme.md') as HTMLTextAreaElement).value).toBe('hello remote\n')
+    )
     expect(api.downloadRemoteFile).not.toHaveBeenCalled()
+    // 改内容 → Ctrl+S 直写远端（带 baseMtime）→ 成功轻提示 + 状态栏「已保存」
+    const ta = within(dlg).getByLabelText('编辑 readme.md') as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: 'hello remote\nedited\n' } })
+    fireEvent.keyDown(dlg, { key: 's', ctrlKey: true })
+    await waitFor(() =>
+      expect(api.writeRemoteTextFile).toHaveBeenCalledWith('c1', '/home/dev/readme.md', 'hello remote\nedited\n', 1_700_000_000_000)
+    )
+    await waitFor(() => expect(screen.getByTestId('save-toast').textContent).toContain('readme.md'))
+    expect(dlg.textContent).toContain('已保存')
+    // 关闭（无脏态直关；脏态确认走下一条用例）
+    fireEvent.click(within(dlg).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByTestId('remote-editor')).toBeNull())
+    // ≥5MB：双击仍走下载
     fireEvent.doubleClick(panel.querySelector('[data-file-name="huge.bin"]') as HTMLElement)
     await waitFor(() => expect(api.downloadRemoteFile).toHaveBeenCalledWith('c1', '/home/dev/huge.bin', 'huge.bin'))
+    // 二进制拒绝：不开编辑器，轻提示
+    vi.mocked(api.readRemoteTextFile).mockResolvedValue({ ok: false as const, error: 'files: binary file', binary: true })
+    vi.mocked(api.downloadRemoteFile).mockClear()
+    fireEvent.doubleClick(panel.querySelector('[data-file-name="readme.md"]') as HTMLElement)
+    await waitFor(() => expect(screen.getByTestId('save-toast').textContent).toContain('二进制'))
+    expect(screen.queryByTestId('remote-editor')).toBeNull()
+    expect(api.downloadRemoteFile).not.toHaveBeenCalled()
+  })
+
+  it('v2.1.7 编辑器脏态关闭确认 + 远端冲突守卫（覆盖/重新加载）', async () => {
+    const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
+    vi.mocked(api.listRemoteFiles).mockResolvedValue({
+      ok: true,
+      path: '/home/dev',
+      entries: [{ name: 'conf.yml', isDir: false, size: 64, mtimeMs: 0 }]
+    })
+    vi.mocked(api.readRemoteTextFile).mockResolvedValue({ ok: true as const, content: 'a: 1\n', size: 6, mtimeMs: 111 })
+    render(<App />)
+    const panel = await openPanel(api)
+    fireEvent.doubleClick(panel.querySelector('[data-file-name="conf.yml"]') as HTMLElement)
+    const dlg = await screen.findByTestId('remote-editor')
+    const ta = (await within(dlg).findByLabelText('编辑 conf.yml')) as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: 'a: 2\n' } })
+    // 脏态点 × → 二次确认；「继续编辑」保留
+    fireEvent.click(within(dlg).getByRole('button', { name: '关闭' }))
+    const ask = await screen.findByRole('dialog', { name: '放弃未保存的更改？' })
+    fireEvent.click(within(ask).getByRole('button', { name: '继续编辑' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '放弃未保存的更改？' })).toBeNull())
+    expect(screen.getByTestId('remote-editor')).toBeDefined()
+    // 保存遇冲突 → 守卫条；「覆盖远端」以无 baseMtime 重写
+    vi.mocked(api.writeRemoteTextFile).mockResolvedValueOnce({
+      ok: false as const,
+      error: 'files: remote file changed',
+      conflict: true
+    })
+    fireEvent.keyDown(screen.getByTestId('remote-editor'), { key: 's', ctrlKey: true })
+    await waitFor(() => expect(within(dlg).getByText(/远端已被修改/)).toBeDefined())
+    vi.mocked(api.writeRemoteTextFile).mockClear()
+    fireEvent.click(within(dlg).getByRole('button', { name: '覆盖远端' }))
+    await waitFor(() =>
+      expect(api.writeRemoteTextFile).toHaveBeenCalledWith('c1', '/home/dev/conf.yml', 'a: 2\n', undefined)
+    )
   })
 
   it('mtime 列渲染 + 选中项状态条（全量名/尺寸/完整时间）', async () => {

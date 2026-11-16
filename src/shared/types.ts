@@ -790,7 +790,29 @@ export interface CWBApi {
   /** 删除（v2.0.1 用户指令：直接删除不进回收站）：文件=unlink；目录=递归 rm -rf */
   deleteRemote(cid: string, path: string, isDir: boolean): Promise<void>
   /** 小文本文件双击本机打开（文本扩展白名单 + <10MB；返回本机临时路径） */
-  peekRemoteFile(cid: string, remotePath: string): Promise<string>
+  /**
+   * v2.1.7 双击编辑（用户确认设计）：读远端文本（≤5MB；二进制拒绝）。
+   * mtimeMs 供保存前冲突复核；binary=true 时 content 为空。
+   */
+  readRemoteTextFile(
+    cid: string,
+    remotePath: string
+  ): Promise<{ ok: true; content: string; size: number; mtimeMs: number } | { ok: false; error: string; binary?: boolean; tooLarge?: boolean }>
+  /** 直写远端文本（SFTP 覆写；baseMtimeMs 给出且远端已变 → conflict=true 不写） */
+  writeRemoteTextFile(
+    cid: string,
+    remotePath: string,
+    content: string,
+    baseMtimeMs?: number
+  ): Promise<{ ok: true; mtimeMs: number } | { ok: false; error: string; conflict?: boolean }>
+  /** 清掉传输记录里已完成/失败/取消的项（活动项保留；成功后广播进度事件） */
+  clearFinishedTransfers(): Promise<void>
+  /**
+   * v2.1.7 修复：该连接下载的**实际落位目录**（main 侧同源解析：自定义目录或
+   * 系统下载/SSH Workbench + 按连接子目录；不存在则就地创建）——传输弹窗
+   * 「打开保存目录」对默认目录也可用（此前仅自定义目录给按钮）。
+   */
+  getTransfersSaveDir(cid: string): Promise<string>
   /** 本机选择上传源（多选；files=true 含文件 / dirs=true 含目录） */
   pickLocalForUpload(files: boolean, dirs: boolean): Promise<string[] | null>
   /** 上传入队（冲突按 policy；返回条目与冲突清单——skip 由调用方对冲突项 cancel） */

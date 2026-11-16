@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, net, session, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { closeSync, existsSync, mkdirSync, openSync, writeSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { EVENT_CHANNELS, IpcChannels } from '../shared/ipc-channels'
 import { translate } from '../shared/i18n'
 import type {
@@ -1333,6 +1333,9 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   )
   ipcMain.handle(IpcChannels.DialogPickDirectory, () => ctx.pickDirectory())
 
+  // v2.1.7 双击编辑的尺寸上限（用户需求：<5MB）
+  const EDIT_TEXT_MAX_BYTES = 5 * 1024 * 1024
+
   // ── v2.0 远程文件管理（用户确认原型；管理器 per-connection，队列域隔离）────
   const fileManagers = new Map<string, FileTransferManager>()
   const managerFor = (cid: string): FileTransferManager => {
@@ -1408,35 +1411,50 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   // v2.0.1（用户指令，参考 FinalShell）：小文本文件双击本机打开——下载到临时
   // 目录（ssh-workbench-peek/，同名带序防叠）+ shell.openPath 系统默认程序。
   // 文本判定=扩展名白名单（10MB 上限在 renderer 预判，main 侧再守一道）。
-  ipcMain.handle(IpcChannels.FilesPeek, async (_e, cid: unknown, remotePath: unknown) => {
+  /**
+   * v2.1.7 双击编辑（用户确认设计）：读远端文本内容（≤5MB；二进制拒绝）。
+   * 二进制判定：缓冲含 NUL 字节（标准启发式）。
+   */
+  ipcMain.handle(IpcChannels.FilesReadText, async (_e, cid: unknown, remotePath: unknown) => {
     const c = asCid(cid)
     if (c === undefined || typeof remotePath !== 'string' || remotePath === '') {
-      throw new Error('files: invalid peek args')
+      throw new Error('files: invalid read-text args')
     }
     const sftp = await ctx.connection.sftp(c)
     const st = await sftp.statFile!(remotePath)
-    if (!st.exists || st.isDir) throw new Error('files: peek target is not a file')
-    if (st.size > 10 * 1024 * 1024) throw new Error('files: peek size limit (10MB)')
-    const name = remotePath.split('/').pop() ?? 'peek.txt'
-    const dir = join(app.getPath('temp'), 'ssh-workbench-peek')
-    mkdirSync(dir, { recursive: true })
-    let target = join(dir, name)
-    for (let i = 1; existsSync(target); i++) target = join(dir, `${name} (${i})`)
-    const CHUNK = 1024 * 1024
-    const out = openSync(target, 'w')
-    try {
-      for (let off = 0; off < st.size; off += CHUNK) {
-        const len = Math.min(CHUNK, st.size - off)
-        const buf = await sftp.readRange!(remotePath, off, len)
-        if (buf.length === 0) break
-        writeSync(out, buf)
-      }
-    } finally {
-      closeSync(out)
-    }
-    await shell.openPath(target)
-    return target
+    if (!st.exists || st.isDir) return { ok: false as const, error: 'files: read-text target is not a file' }
+    if (st.size > EDIT_TEXT_MAX_BYTES) return { ok: false as const, error: 'files: read-text size limit (5MB)', tooLarge: true }
+    const buf = await sftp.readRange!(remotePath, 0, st.size)
+    if (buf.includes(0)) return { ok: false as const, error: 'files: binary file', binary: true }
+    return { ok: true as const, content: buf.toString('utf8'), size: st.size, mtimeMs: st.mtimeMs }
   })
+
+  /** v2.1.7 双击编辑：直写远端（SFTP 覆写；baseMtimeMs 复核远端是否已被改） */
+  ipcMain.handle(
+    IpcChannels.FilesWriteText,
+    async (_e, cid: unknown, remotePath: unknown, content: unknown, baseMtimeMs: unknown) => {
+      const c = asCid(cid)
+      if (
+        c === undefined ||
+        typeof remotePath !== 'string' ||
+        remotePath === '' ||
+        typeof content !== 'string' ||
+        content.length > EDIT_TEXT_MAX_BYTES
+      ) {
+        throw new Error('files: invalid write-text args')
+      }
+      const sftp = await ctx.connection.sftp(c)
+      if (typeof baseMtimeMs === 'number' && Number.isFinite(baseMtimeMs)) {
+        const st = await sftp.statFile!(remotePath)
+        if (!st.exists || Math.abs(st.mtimeMs - baseMtimeMs) > 1000) {
+          return { ok: false as const, error: 'files: remote file changed', conflict: true }
+        }
+      }
+      await sftp.writeFile(remotePath, Buffer.from(content, 'utf8'))
+      const st = await sftp.statFile!(remotePath)
+      return { ok: true as const, mtimeMs: st.exists ? st.mtimeMs : Date.now() }
+    }
+  )
 
   ipcMain.handle(IpcChannels.FilesPickUpload, async (_e, files: unknown, dirs: unknown) => {
     // 本机选择上传源（多选；files/dirs 至少一真）
@@ -1497,6 +1515,34 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   )
 
   ipcMain.handle(IpcChannels.TransfersList, () => allTransfers())
+
+  // v2.1.7 传输弹窗「清空已完成」：各连接管理器修剪已完成/失败/取消项后广播
+  ipcMain.handle(IpcChannels.TransfersClearFinished, () => {
+    for (const m of fileManagers.values()) m.pruneFinished()
+    broadcastEvent(IpcChannels.TransfersProgress, allTransfers())
+  })
+
+  // v2.1.7 修复：下载实际落位目录（与 FilesDownload direct 路径同源解析；不存在则
+  // 就地创建——「打开保存目录」对默认目录也可用，openLocalPath 有存在性门禁）
+  ipcMain.handle(IpcChannels.TransfersSaveDir, (_e, cid: unknown) => {
+    const c = asCid(cid)
+    if (c === undefined) return ''
+    const appSettings = ctx.appSettings.get()
+    const root =
+      appSettings.downloadDir !== undefined && appSettings.downloadDir.trim() !== ''
+        ? appSettings.downloadDir.trim()
+        : join(app.getPath('downloads'), 'SSH Workbench')
+    const connName = connectionsStore.get(c)?.name
+    const sub =
+      appSettings.downloadPerConnection === false || connName === undefined ? '' : sanitizeFileName(connName)
+    const dir = sub === '' ? root : join(root, sub)
+    try {
+      mkdirSync(dir, { recursive: true })
+    } catch {
+      /* 无写权限等——返回路径，打开时由 openLocalPath 兜底报错 */
+    }
+    return dir
+  })
   ipcMain.handle(IpcChannels.TransferCancel, (_e, id: unknown) => {
     if (typeof id !== 'string') return
     for (const m of fileManagers.values()) m.cancel(id)

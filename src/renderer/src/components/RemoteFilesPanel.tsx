@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { RemoteFileEntry, TransferItem } from '../../../shared/types'
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
@@ -42,18 +43,24 @@ interface PanelState {
   error: string
 }
 
-/** v2.0.1 文本扩展白名单（FinalShell 同类语义；无扩展名视为文本——conf/log 类常态） */
-const TEXT_EXTS = new Set([
-  'txt','md','markdown','json','jsonc','json5','log','csv','tsv','xml','yml','yaml','toml','ini','conf','cfg','env','properties',
-  'ts','tsx','js','jsx','mjs','cjs','py','rb','go','rs','java','kt','swift','c','h','cpp','hpp','cs','php','sh','bash','zsh','fish','ps1','bat','cmd',
-  'html','htm','css','scss','less','sql','gitignore','dockerfile','makefile','dockerignore','editorconfig','npmrc','nvmrc','lock'
-])
-const PEEK_MAX_BYTES = 10 * 1024 * 1024
-function isPeekable(f: RemoteFileEntry): boolean {
-  if (f.isDir || f.size > PEEK_MAX_BYTES) return false
-  const dot = f.name.lastIndexOf('.')
-  const ext = dot > 0 ? f.name.slice(dot + 1).toLowerCase() : ''
-  return ext === '' || TEXT_EXTS.has(ext)
+/** v2.1.7 双击直接编辑（用户确认设计）：仅 <5MB；二进制由 main 读后嗅探拒绝 */
+const EDIT_MAX_BYTES = 5 * 1024 * 1024
+
+/** 编辑器单槽状态（null=关） */
+interface EditorState {
+  path: string
+  name: string
+  content: string
+  original: string
+  mtimeMs: number
+  size: number
+  loading: boolean
+  loadError: string
+  saving: boolean
+  /** 状态栏：''=未修改语义由 dirty 派生；''=无、'saved'=已保存时间文案 */
+  savedMsg: string
+  saveError: string
+  conflict: boolean
 }
 
 export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
@@ -107,6 +114,17 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
   }
   const [renaming, setRenaming] = useState<{ from: string; value: string } | null>(null)
   const [conflict, setConflict] = useState<{ files: string[]; apply: (policy: 'overwrite' | 'skip' | 'rename') => void } | null>(null)
+  /** v2.1.7 双击直接编辑（单槽）+ 轻提示（保存成功/二进制拒绝） */
+  const [editor, setEditor] = useState<EditorState | null>(null)
+  /** 脏态关闭二次确认（editor 置 null 即关——先过这里） */
+  const [closeAsk, setCloseAsk] = useState(false)
+  const [toast, setToast] = useState('')
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const showToast = (msg: string): void => {
+    setToast(msg)
+    if (toastTimer.current !== null) clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(''), 3500)
+  }
   const connName = connections.find((c) => c.id === connectionId)?.name ?? ''
 
   const load = useCallback(
@@ -228,6 +246,96 @@ useEffect(() => {
   }
   const conflictCancelRef = useRef<(() => void) | null>(null)
 
+  // ── v2.1.7 双击直接编辑：读（≤5MB；二进制/超限拒绝）→ 单槽编辑器 ──
+  const openEditor = (f: RemoteFileEntry): void => {
+    if (f.size > EDIT_MAX_BYTES) {
+      // 超限维持现状：走下载（含传输记录）
+      download(f)
+      return
+    }
+    const path = `${st.path === '/' ? '' : st.path}/${f.name}`
+    setEditor({
+      path, name: f.name, content: '', original: '', mtimeMs: 0, size: f.size,
+      loading: true, loadError: '', saving: false, savedMsg: '', saveError: '', conflict: false
+    })
+    void window.cwb
+      .readRemoteTextFile(connectionId, path)
+      .then((r) => {
+        if (!r.ok) {
+          if (r.binary) {
+            setEditor(null)
+            showToast(t('editor.binaryToast'))
+            return
+          }
+          setEditor((e0) =>
+            e0 !== null && e0.path === path
+              ? { ...e0, loading: false, loadError: r.error }
+              : e0
+          )
+          return
+        }
+        setEditor((e0) =>
+          e0 !== null && e0.path === path
+            ? {
+                ...e0, content: r.content, original: r.content,
+                mtimeMs: r.mtimeMs, size: r.size, loading: false, loadError: ''
+              }
+            : e0
+        )
+      })
+      .catch((err: unknown) => {
+        setEditor((e0) =>
+          e0 !== null && e0.path === path
+            ? { ...e0, loading: false, loadError: errMsg(err) }
+            : e0
+        )
+      })
+  }
+
+  /** 保存：SFTP 直写（baseMtimeMs 冲突复核；overwrite=true 强制覆盖） */
+  const saveEditor = (overwrite = false): void => {
+    if (editor === null || editor.saving) return
+    if (editor.content === editor.original && !overwrite) return
+    setEditor({ ...editor, saving: true, saveError: '', conflict: false, savedMsg: '' })
+    void window.cwb
+      .writeRemoteTextFile(
+        connectionId,
+        editor.path,
+        editor.content,
+        overwrite ? undefined : (editor.mtimeMs > 0 ? editor.mtimeMs : undefined)
+      )
+      .then((r) => {
+        if (!r.ok) {
+          if (r.conflict) {
+            setEditor((e0) => (e0 !== null ? { ...e0, saving: false, conflict: true } : e0))
+            return
+          }
+          setEditor((e0) => (e0 !== null ? { ...e0, saving: false, saveError: r.error } : e0))
+          return
+        }
+        setEditor((e0) =>
+          e0 !== null
+            ? {
+                ...e0,
+                saving: false,
+                original: e0.content,
+                mtimeMs: r.mtimeMs,
+                size: e0.content.length,
+                savedMsg: new Date().toLocaleTimeString(),
+                saveError: '',
+                conflict: false
+              }
+            : e0
+        )
+        showToast(t('editor.savedToast', { name: editor.name }))
+        // 保存后刷新清单（大小/时间列对齐远端）
+        load(st.path, false)
+      })
+      .catch((err: unknown) => {
+        setEditor((e0) => (e0 !== null ? { ...e0, saving: false, saveError: errMsg(err) } : e0))
+      })
+  }
+
   const onDrop = async (e: React.DragEvent): Promise<void> => {
     e.preventDefault()
     setDragging(false)
@@ -323,6 +431,7 @@ useEffect(() => {
   }
 
   return (
+    <>
     <div
       className="files-panel"
       data-testid="files-panel"
@@ -385,6 +494,8 @@ useEffect(() => {
         >
           🗑 {selected.size > 0 ? `(${selected.size})` : ''}
         </button>
+        {/* v2.1.7 传输记录（FinalShell 式）：右上角按钮 + 弹出面板（底部内嵌条移除） */}
+        <TransfersButton connectionId={connectionId} connName={connName} />
         <span style={{ flex: 1 }} />
         <button type="button" className="btn small primary" onClick={() => void pickAndUpload(true, true)}>
           ⬆ {t('files.upload')}
@@ -456,14 +567,9 @@ useEffect(() => {
                 into(f.name)
                 return
               }
-              // v2.0.1（参考 FinalShell）：小文本双击本机打开；其余走下载
-              if (isPeekable(f)) {
-                void window.cwb
-                  .peekRemoteFile(connectionId, `${st.path === '/' ? '' : st.path}/${f.name}`)
-                  .catch((err: unknown) => setSt((s2) => ({ ...s2, error: errMsg(err) })))
-                return
-              }
-              download(f)
+              // v2.1.7（用户确认设计）：双击=弹窗直接编辑（仅下方文件面板此入口）；
+              // ≥5MB 维持走下载（含传输记录）
+              openEditor(f)
             }}
           >
             <span className="files-ico">{f.isDir ? '📁' : fileIcon(f.name)}</span>
@@ -588,8 +694,64 @@ useEffect(() => {
           </p>
         )
       })()}
-      <TransferBar connName={connName} />
-    </div>
+      </div>
+      {/* v2.1.7 双击直接编辑弹窗（单槽）+ 脏态/冲突确认 + 轻提示 */}
+      {editor !== null && (
+        <RemoteTextEditor
+          editor={editor}
+          onChange={(content) => setEditor((e0) => (e0 !== null ? { ...e0, content } : e0))}
+          onSave={() => saveEditor(false)}
+          onOverwrite={() => saveEditor(true)}
+          onReload={() => {
+            const path = editor.path
+            setEditor({ ...editor, loading: true, loadError: '', conflict: false })
+            void window.cwb.readRemoteTextFile(connectionId, path).then((r) => {
+              if (!r.ok) {
+                setEditor((e0) => (e0 !== null && e0.path === path ? { ...e0, loading: false, loadError: r.error } : e0))
+                return
+              }
+              setEditor((e0) =>
+                e0 !== null && e0.path === path
+                  ? { ...e0, content: r.content, original: r.content, mtimeMs: r.mtimeMs, size: r.size, loading: false, loadError: '' }
+                  : e0
+              )
+            })
+          }}
+          onClose={() => {
+            if (editor.content !== editor.original) setCloseAsk(true)
+            else setEditor(null)
+          }}
+        />
+      )}
+      {closeAsk && editor !== null && (
+        <div className="dialog-overlay" role="dialog" aria-modal="true" aria-label={t('editor.dirtyTitle')}>
+          <div className="dialog small-dialog">
+            <p className="dialog-title">{t('editor.dirtyTitle')}</p>
+            <p className="dialog-hint">{t('editor.dirtyHint', { name: editor.name })}</p>
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="btn danger"
+                onClick={() => {
+                  setCloseAsk(false)
+                  setEditor(null)
+                }}
+              >
+                {t('editor.discard')}
+              </button>
+              <button type="button" className="btn primary" onClick={() => setCloseAsk(false)}>
+                {t('editor.keepEditing')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {toast !== '' && (
+        <div className="save-toast" role="status" data-testid="save-toast">
+          {toast}
+        </div>
+      )}
+    </>
   )
 }
 
@@ -612,43 +774,109 @@ function localPathsFromDataTransfer(dt: DataTransfer): string[] {
   return out
 }
 
-/** 传输条（面板底部：聚合进度 + 保存目录头 + 展开队列；取消/重试） */
-function TransferBar({ connName }: { connName: string }) {
+/**
+ * v2.1.7 传输记录按钮 + 弹出面板（FinalShell 式，用户确认设计）：
+ * - 自持数据装配（listTransfers / onTransfersProgress）——与旧底部传输条同源
+ * - 角标=活动项计数（数字即信息）；有失败转红色数字；title 带聚合进度
+ * - 弹层经 createPortal 挂 document.body + fixed 定位（v2.1.7 修复：此前 absolute
+ *   挂工具栏，被 .files-panel/.ssh-files-host 的 overflow:hidden 裁切遮挡）；坐标
+ *   随窗口 resize/滚动重算；非模态（Esc / 点击外部收起，不拦终端键盘）
+ * - 发起新传输自动弹出一次（保留 v2.0.1 实测的「立即反馈」；手动收起后本轮
+ *   不再自动弹，全部结束后下一轮重新适用）
+ * - 「清空已完成」只修剪 done/error/canceled（活动项保留；main 侧 prune）
+ * - 保存目录走 main 侧同源解析（getTransfersSaveDir）：自定义目录或 系统下载/
+ *   SSH Workbench + 按连接子目录——默认目录也给「打开」按钮（v2.1.7 修复：
+ *   此前仅自定义目录显示按钮）
+ */
+function TransfersButton({ connectionId, connName }: { connectionId: string; connName: string }) {
   const t = useI18n()
   const [items, setItems] = useState<TransferItem[]>([])
   const [open, setOpen] = useState(false)
-  /** v2.0.1（用户实测②）：顶部统一显示当前下载保存目录（与 main 落位逻辑同源派生） */
   const [saveDir, setSaveDir] = useState('')
+  const slotRef = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const popRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ left: number; top: number; maxHeight: number } | null>(null)
 
-  /** v2.0.1：真实可打开路径（默认目录占位时不可开——按钮禁用）+ 显示文案 */
-  const [openableDir, setOpenableDir] = useState('')
+  const align = (): void => {
+    const r = btnRef.current?.getBoundingClientRect()
+    if (r === undefined) return
+    const w = Math.min(360, window.innerWidth - 16)
+    const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))
+    const top = Math.min(r.bottom + 6, Math.max(8, window.innerHeight - 96))
+    const maxHeight = Math.max(160, window.innerHeight - top - 12)
+    setPos({ left, top, maxHeight })
+  }
+
   useEffect(() => {
     void window.cwb.listTransfers().then(setItems).catch(() => {})
     void window.cwb
-      .getAppSettings()
-      .then((s) => {
-        const root = s.downloadDir !== undefined ? s.downloadDir.trim() : ''
-        const openable =
-          root === ''
-            ? '' // 默认目录（系统下载/SSH Workbench）——main 落位，此处未知则不开
-            : s.downloadPerConnection === false
-              ? root
-              : `${root}${root.endsWith('\\') ? '' : '\\'}${connName}`
-        setOpenableDir(openable)
-        setSaveDir(openable !== '' ? openable : t('files.defaultSaveDir'))
+      .getTransfersSaveDir(connectionId)
+      .then((dir) => {
+        if (dir !== '') setSaveDir(dir)
       })
       .catch(() => {})
     return window.cwb.onTransfersProgress((fresh) => setItems(fresh))
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 目录随连接名/语言取一次
-  }, [connName])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 目录随连接取一次
+  }, [connectionId, connName])
+
+  useEffect(() => {
+    if (!open) {
+      setPos(null)
+      return
+    }
+    align()
+    window.addEventListener('resize', align)
+    window.addEventListener('scroll', align, true)
+    return () => {
+      window.removeEventListener('resize', align)
+      window.removeEventListener('scroll', align, true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 开合时装/卸
+  }, [open])
+
+  // 点击外部收起（弹层在 portal 里不在 slot 子树——按两个 ref 判定）；Esc 同
+  useEffect(() => {
+    if (!open) return
+    const onDown = (ev: MouseEvent): void => {
+      const target = ev.target as Node
+      if (slotRef.current?.contains(target) !== true && popRef.current?.contains(target) !== true) {
+        setOpen(false)
+      }
+    }
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
 
   const openSaveDir = async (): Promise<void> => {
-    if (openableDir === '') return
-    await window.cwb.openLocalPath(openableDir).catch(() => undefined)
+    if (saveDir === '') return
+    await window.cwb.openLocalPath(saveDir).catch(() => undefined)
   }
 
-  // v2.0.1（用户实测"下载无提示"）：出现活动项即自动展开队列——肉眼即时反馈
-  const hasActive = items.some((i) => i.status === 'active' || i.status === 'queued')
+  const active = items.filter((i) => i.status === 'active' || i.status === 'queued')
+  const failed = items.filter((i) => i.status === 'error')
+  const finished = items.filter((i) => i.status === 'done' || i.status === 'error' || i.status === 'canceled')
+  const totalBytes = active.reduce((n, i) => n + i.totalBytes, 0)
+  const doneBytes = active.reduce((n, i) => n + i.transferredBytes, 0)
+  const pct = totalBytes > 0 ? Math.round((doneBytes / totalBytes) * 100) : 0
+  const speed = (() => {
+    let sum = 0
+    for (const i of active) {
+      if (i.status !== 'active') continue
+      sum += i.transferredBytes
+    }
+    return sum > 0 ? fmtSize(Math.max(1, sum / 4)) + '/s≈' : ''
+  })()
+
+  // 新活动项 → 自动弹出一次（全部结束后重置）
+  const hasActive = active.length > 0
   const seenActiveRef = useRef(false)
   useEffect(() => {
     if (hasActive && !seenActiveRef.current) {
@@ -658,118 +886,320 @@ function TransferBar({ connName }: { connName: string }) {
     if (!hasActive) seenActiveRef.current = false
   }, [hasActive])
 
-  const active = items.filter((i) => i.status === 'active' || i.status === 'queued')
-  const recent = items.filter((i) => i.status === 'done' || i.status === 'error' || i.status === 'canceled').slice(0, 8)
-  const totalBytes = active.reduce((n, i) => n + i.totalBytes, 0)
-  const doneBytes = active.reduce((n, i) => n + i.transferredBytes, 0)
-  const pct = totalBytes > 0 ? Math.round((doneBytes / totalBytes) * 100) : 0
-  const speed = (() => {
-    // 粗估：活跃项近 1s 增量——v1 用完成字节/已历时（首包即显示，精度足够）
-    let sum = 0
-    for (const i of active) {
-      if (i.status !== 'active') continue
-      sum += i.transferredBytes
-    }
-    return sum > 0 ? fmtSize(Math.max(1, sum / 4)) + '/s≈' : ''
-  })()
+  const badge = failed.length > 0 ? failed.length : active.length
+  const title =
+    active.length > 0
+      ? `${t('files.xferBtn')} · ${t('files.xferBtnActive', { n: String(active.length), pct: String(pct) })}${speed !== '' ? ` · ${speed}` : ''}`
+      : items.length > 0
+        ? `${t('files.xferBtn')}（${items.length}）`
+        : t('files.xferBtn')
 
-  if (items.length === 0) return null
   return (
-    <div className={`xfer${open ? ' open' : ''}`} data-testid="transfer-bar">
-      <div className="xfer-bar" onClick={() => setOpen((v) => !v)}>
-        <b>{t('files.transfers')}</b>
-        {active.length > 0 && (
-          <>
-            <div className="prog">
-              <i style={{ width: `${pct}%` }} />
-            </div>
-            <span className="xfer-meta">
-              {pct}%{speed !== '' ? ` · ${speed}` : ''} · {t('files.transfersActive', { n: String(active.length) })}
-            </span>
-          </>
+    <div className="files-xfer-slot" ref={slotRef}>
+      <button
+        type="button"
+        ref={btnRef}
+        className="btn small files-xfer-btn"
+        aria-label={t('files.xferBtn')}
+        aria-expanded={open}
+        title={title}
+        data-testid="btn-xfer-pop"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+          strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M4 6V3.5A1.5 1.5 0 0 1 5.5 2h5A1.5 1.5 0 0 1 12 3.5V6" />
+          <path d="M4 10v2.5A1.5 1.5 0 0 0 5.5 14h5a1.5 1.5 0 0 0 1.5-1.5V10" />
+          <path d="M8 3.5v9M8 3.5 6 5.5M8 3.5l2 2M8 12.5 6 10.5M8 12.5l2-2" />
+        </svg>
+        {badge > 0 && (
+          <span className="xfer-badge" data-failed={failed.length > 0 ? 'true' : 'false'}>
+            {badge}
+          </span>
         )}
-        {active.length === 0 && recent.length > 0 && (
-          <span className="xfer-meta">{t('files.transfersDone', { n: String(recent.filter((i) => i.status === 'done').length) })}</span>
-        )}
-        <span className="xfer-meta">{open ? '▾' : '▸'}</span>
-      </div>
-      {open && (
-        <div className="xfer-list" data-testid="xfer-table">
-          <p
-            className="xfer-savedir"
-            data-testid="xfer-savedir"
-            title={openableDir !== '' ? `${saveDir}（双击打开）` : saveDir}
-            onDoubleClick={() => void openSaveDir()}
+      </button>
+      {open &&
+        pos !== null &&
+        createPortal(
+          <div
+            ref={popRef}
+            className="xfer-pop"
+            style={{ left: pos.left, top: pos.top, maxHeight: pos.maxHeight }}
+            role="dialog"
+            aria-label={t('files.xferBtn')}
+            data-testid="xfer-pop"
           >
-            {t('files.saveDirLabel')}: <span className="mono">{saveDir}</span>
-            {openableDir !== '' && (
-              <button
-                type="button"
-                className="btn small"
-                style={{ marginLeft: 8 }}
-                data-testid="btn-open-savedir"
-                onClick={() => void openSaveDir()}
-              >
-                {t('files.openDirBtn')}
-              </button>
-            )}
-          </p>
-          <div className="xfer-head">
-            <span> </span>
-            <span>{t('files.xferColFile')}</span>
-            <span>{t('files.xferColProgress')}</span>
-            <span>{t('files.xferColStatus')}</span>
-            <span> </span>
-          </div>
-          {[...active, ...recent].map((i) => {
-            const p = i.totalBytes > 0 ? Math.round((i.transferredBytes / i.totalBytes) * 100) : 0
-            return (
-              <div key={i.id} className="xfer-row" data-transfer-id={i.id}>
-                <span className="xfer-dir">{i.direction === 'upload' ? '⬆' : '⬇'}</span>
-                <span className="xfer-name" title={i.name}>
-                  {i.name}
-                </span>
-                {i.status === 'active' || i.status === 'queued' ? (
-                  <>
-                    <div className="prog">
-                      <i style={{ width: `${p}%` }} />
-                    </div>
-                    <span className="xfer-st">
-                      {i.status === 'queued' ? t('files.xferQueued') : `${p}%`}
-                    </span>
-                    <button
-                      type="button"
-                      className="btn small danger"
-                      onClick={() => void window.cwb.cancelTransfer(i.id)}
-                    >
-                      ×
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <span className="xfer-st" data-status={i.status}>
-                      {i.status === 'done'
-                        ? t('files.xferDone')
-                        : i.status === 'canceled'
-                          ? t('files.xferCanceled')
-                          : (i.error ?? t('files.xferError'))}
-                    </span>
-                    {i.status === 'error' && (
-                      <button
-                        type="button"
-                        className="btn small"
-                        onClick={() => void window.cwb.retryTransfer(i.id)}
-                      >
-                        {t('files.xferRetry')}
-                      </button>
-                    )}
-                  </>
+            <div className="xfer-pop-head">
+              <b>{t('files.xferBtn')}</b>
+              <span className="xfer-pop-acts">
+                {finished.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn small"
+                    data-testid="btn-xfer-clear"
+                    onClick={() => void window.cwb.clearFinishedTransfers()}
+                  >
+                    {t('files.xferClear')}
+                  </button>
                 )}
+                <button
+                  type="button"
+                  className="btn small"
+                  aria-label={t('common.close')}
+                  onClick={() => setOpen(false)}
+                >
+                  ×
+                </button>
+              </span>
+            </div>
+            {active.length > 0 && (
+              <div className="xfer-pop-aggr">
+                <div className="prog">
+                  <i style={{ width: `${pct}%` }} />
+                </div>
+                <span className="xfer-meta">
+                  {pct}%{speed !== '' ? ` · ${speed}` : ''} · {t('files.transfersActive', { n: String(active.length) })}
+                </span>
               </div>
-            )
-          })}
-        </div>
-      )}
+            )}
+            <p
+              className="xfer-savedir"
+              data-testid="xfer-savedir"
+              title={`${saveDir}（双击打开）`}
+              onDoubleClick={() => void openSaveDir()}
+            >
+              {t('files.saveDirLabel')}:{' '}
+              <span className="mono">{saveDir !== '' ? saveDir : t('files.defaultSaveDir')}</span>
+              {saveDir !== '' && (
+                <button
+                  type="button"
+                  className="btn small"
+                  style={{ marginLeft: 8 }}
+                  data-testid="btn-open-savedir"
+                  onClick={() => void openSaveDir()}
+                >
+                  {t('files.openDirBtn')}
+                </button>
+              )}
+            </p>
+            <div className="xfer-pop-list" data-testid="xfer-table">
+              {items.length === 0 ? (
+                <p className="xfer-empty">{t('files.xferEmpty')}</p>
+              ) : (
+                <>
+                  <div className="xfer-head">
+                    <span> </span>
+                    <span>{t('files.xferColFile')}</span>
+                    <span>{t('files.xferColProgress')}</span>
+                    <span>{t('files.xferColStatus')}</span>
+                    <span> </span>
+                  </div>
+                  {items.map((i) => {
+                    const p = i.totalBytes > 0 ? Math.round((i.transferredBytes / i.totalBytes) * 100) : 0
+                    return (
+                      <div key={i.id} className="xfer-row" data-transfer-id={i.id}>
+                        <span className="xfer-dir">{i.direction === 'upload' ? '⬆' : '⬇'}</span>
+                        <span className="xfer-name" title={i.name}>
+                          {i.name}
+                        </span>
+                        {i.status === 'active' || i.status === 'queued' ? (
+                          <>
+                            <div className="prog">
+                              <i style={{ width: `${p}%` }} />
+                            </div>
+                            <span className="xfer-st">
+                              {i.status === 'queued' ? t('files.xferQueued') : `${p}%`}
+                            </span>
+                            <button
+                              type="button"
+                              className="btn small danger"
+                              onClick={() => void window.cwb.cancelTransfer(i.id)}
+                            >
+                              ×
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="xfer-st" data-status={i.status}>
+                              {i.status === 'done'
+                                ? t('files.xferDone')
+                                : i.status === 'canceled'
+                                  ? t('files.xferCanceled')
+                                  : (i.error ?? t('files.xferError'))}
+                            </span>
+                            {i.status === 'error' && (
+                              <button
+                                type="button"
+                                className="btn small"
+                                onClick={() => void window.cwb.retryTransfer(i.id)}
+                              >
+                                ↻
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
+                </>
+              )}
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   )
 }
+
+/**
+ * v2.1.7 远程文本编辑器（用户确认设计）：双击 <5MB 文件弹窗直接改，Ctrl+S
+ * SFTP 直写远端（不经传输队列）。脏态关闭/冲突守卫由父层确认框兜底。
+ * 键盘：Ctrl+S 保存（对话框级捕获）；Tab 插 2 空格；Esc 关（父层判脏态）。
+ */
+function RemoteTextEditor({
+  editor,
+  onChange,
+  onSave,
+  onOverwrite,
+  onReload,
+  onClose
+}: {
+  editor: EditorState
+  onChange: (content: string) => void
+  onSave: () => void
+  onOverwrite: () => void
+  onReload: () => void
+  onClose: () => void
+}) {
+  const t = useI18n()
+  const taRef = useRef<HTMLTextAreaElement>(null)
+  const dirty = editor.content !== editor.original
+  const lines = editor.content.split('\n').length
+  const chars = editor.content.length
+
+  useEffect(() => {
+    if (!editor.loading) taRef.current?.focus()
+  }, [editor.loading])
+
+  return (
+    <div
+      className="dialog-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t('editor.title', { name: editor.name })}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+      onKeyDown={(e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+          e.preventDefault()
+          onSave()
+        }
+      }}
+    >
+      <div className="dialog editor-dialog" data-testid="remote-editor">
+        <div className="editor-head">
+          <p className="dialog-title">
+            ✎ {t('editor.title', { name: editor.name })}
+            {dirty && (
+              <span className="editor-dirty" title={t('editor.unsaved')}>
+                ●
+              </span>
+            )}
+          </p>
+          <button type="button" className="btn-icon" aria-label={t('common.close')} onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <p className="editor-path mono" title={editor.path}>
+          {editor.path}
+        </p>
+        <div className="editor-body">
+          {editor.loading ? (
+            <p className="editor-loading">{t('editor.reading')}</p>
+          ) : editor.loadError !== '' ? (
+            <div className="editor-error">
+              <p>{editor.loadError}</p>
+              <button type="button" className="btn small" onClick={onReload}>
+                {t('editor.readRetry')}
+              </button>
+            </div>
+          ) : (
+            <textarea
+              ref={taRef}
+              className="editor-ta"
+              spellCheck={false}
+              wrap="off"
+              aria-label={t('editor.title', { name: editor.name })}
+              value={editor.content}
+              onChange={(e) => onChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                  e.preventDefault()
+                  const ta = e.currentTarget
+                  const at = ta.selectionStart
+                  const next = `${editor.content.slice(0, at)}  ${editor.content.slice(ta.selectionEnd)}`
+                  onChange(next)
+                  requestAnimationFrame(() => {
+                    ta.selectionStart = at + 2
+                    ta.selectionEnd = at + 2
+                  })
+                }
+              }}
+            />
+          )}
+        </div>
+        {editor.conflict && (
+          <div className="editor-conflict" role="alert">
+            <span>{t('editor.conflictHint')}</span>
+            <span className="xfer-pop-acts">
+              <button type="button" className="btn small danger" onClick={onOverwrite}>
+                {t('editor.overwrite')}
+              </button>
+              <button type="button" className="btn small" onClick={onReload}>
+                {t('editor.reload')}
+              </button>
+            </span>
+          </div>
+        )}
+        <div className="editor-status" aria-live="polite">
+          <span className="xfer-meta">
+            {t('editor.stats', { n: String(lines), chars: String(chars) })} · {fmtSize(editor.size)} · UTF-8
+          </span>
+          <span className="editor-save-state">
+            {editor.saving
+              ? t('editor.saving')
+              : editor.saveError !== ''
+                ? `${t('editor.saveFailed')}: ${editor.saveError}`
+                : editor.savedMsg !== ''
+                  ? t('editor.savedAt', { time: editor.savedMsg })
+                  : dirty
+                    ? t('editor.unsaved')
+                    : t('editor.clean')}
+          </span>
+          {editor.saveError !== '' && !editor.saving && (
+            <button type="button" className="btn small" onClick={onSave}>
+              {t('editor.saveRetry')}
+            </button>
+          )}
+          <span className="editor-acts">
+            <button type="button" className="btn" onClick={onClose}>
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={editor.saving || editor.loading || editor.loadError !== ''}
+              aria-busy={editor.saving}
+              data-testid="btn-editor-save"
+              onClick={onSave}
+            >
+              {editor.saving ? t('editor.saving') : `${t('editor.save')} Ctrl+S`}
+            </button>
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}
+

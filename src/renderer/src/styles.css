@@ -2760,13 +2760,7 @@ button {
 .files-conflict-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-top: 4px; }
 
 /* 传输条（面板底部；复用原型样式系） */
-.xfer { border-top: 1px solid var(--border-1); background: var(--bg-app); }
-.xfer-bar { display: flex; align-items: center; gap: 10px; padding: 7px 12px; cursor: pointer; }
-.xfer-bar b { font-size: 12px; }
-.xfer .prog { flex: 1; height: 5px; border-radius: 3px; background: var(--bg-input); overflow: hidden; }
-.xfer .prog i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
-.xfer .xfer-meta { font-size: 11px; color: var(--text-3); font-family: ui-monospace,Consolas,monospace; white-space: nowrap; }
-.xfer-list { height: 216px; overflow-y: auto; border-top: 1px solid var(--border-2); }
+.xfer-meta { font-size: 11px; color: var(--text-3); font-family: ui-monospace,Consolas,monospace; white-space: nowrap; }
 .xfer-savedir { font-size: 11px; color: var(--text-3); padding: 6px 12px 4px; border-bottom: 1px solid var(--border-2); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xfer-savedir .mono { font-family: ui-monospace,Consolas,monospace; color: var(--text-2); }
 .xfer-head, .xfer-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) 96px 92px 52px; gap: 8px; align-items: center; padding: 5px 12px; font-size: 11.5px; }
@@ -2777,6 +2771,42 @@ button {
 .xfer-row .xfer-st { color: var(--text-4); font-size: 11px; text-align: right; font-family: ui-monospace,Consolas,monospace; }
 .xfer-row .xfer-st[data-status='done'] { color: var(--ok); }
 .xfer-row .xfer-st[data-status='error'] { color: #f85149; }
+.xfer-row .prog { height: 5px; border-radius: 3px; background: var(--bg-input); overflow: hidden; }
+.xfer-row .prog i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+
+/* ── v2.1.7 传输记录右上角按钮 + 弹出面板（FinalShell 式，用户确认设计）── */
+.files-toolbar .files-xfer-slot { margin-left: auto; position: relative; }
+.files-xfer-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+.xfer-badge { position: absolute; top: -6px; right: -7px; min-width: 14px; height: 14px; line-height: 14px; padding: 0 3px; border-radius: 7px; background: var(--accent); color: #fff; font-size: 9.5px; font-weight: 600; text-align: center; }
+.xfer-badge[data-failed='true'] { background: #f85149; }
+/* v2.1.7 修复：portal 挂 body + fixed 定位（left/top/maxHeight 内联提供）——
+   absolute 版会被 .files-panel/.ssh-files-host 的 overflow:hidden 裁切 */
+.xfer-pop { position: fixed; z-index: 1100; width: 360px; max-width: calc(100vw - 16px); background: var(--bg-panel); border: 1px solid var(--border-2); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .28); overflow: hidden; display: flex; flex-direction: column; }
+.xfer-pop-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-bottom: 1px solid var(--border-2); font-size: 12px; }
+.xfer-pop-head b { font-size: 12px; }
+.xfer-pop-acts { display: flex; gap: 6px; }
+.xfer-pop-aggr { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border-2); }
+.xfer-pop-aggr .prog { flex: 1; height: 5px; border-radius: 3px; background: var(--bg-input); overflow: hidden; }
+.xfer-pop-aggr .prog i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.xfer-pop-list { flex: 1; min-height: 0; max-height: 264px; overflow-y: auto; }
+.xfer-empty { padding: 18px 12px; text-align: center; color: var(--text-3); font-size: 12px; }
+
+/* ── v2.1.7 远程文本编辑器（双击 <5MB 直改，Ctrl+S 直写远端）── */
+.dialog.editor-dialog { width: 920px; max-width: 94vw; height: 640px; max-height: 88vh; display: flex; flex-direction: column; padding: 14px 16px 10px; }
+.editor-head { display: flex; align-items: center; justify-content: space-between; }
+.editor-head .dialog-title { margin: 0; }
+.editor-dirty { color: var(--warn-text); margin-left: 6px; font-size: 12px; }
+.editor-path { margin: 2px 0 8px; font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editor-body { flex: 1; min-height: 0; display: flex; }
+.editor-ta { flex: 1; resize: none; border: 1px solid var(--border-2); border-radius: 6px; background: var(--bg-app); color: var(--text-1); font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; line-height: 1.55; padding: 10px 12px; overflow: auto; white-space: pre; }
+.editor-ta:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.editor-loading, .editor-error { margin: auto; color: var(--text-3); font-size: 12px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.editor-conflict { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; padding: 6px 10px; border: 1px solid var(--warn-text); border-radius: 6px; color: var(--warn-text); font-size: 12px; }
+.editor-status { display: flex; align-items: center; gap: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border-2); font-size: 11.5px; color: var(--text-3); }
+.editor-save-state { color: var(--text-2); }
+.editor-acts { margin-left: auto; display: flex; gap: 8px; }
+.small-dialog { width: 420px; max-width: 92vw; }
+.save-toast { position: fixed; right: 18px; bottom: 18px; z-index: 1200; background: var(--bg-panel); border: 1px solid var(--ok); color: var(--text-1); border-radius: 8px; padding: 8px 14px; font-size: 12.5px; box-shadow: 0 6px 18px rgba(0, 0, 0, .25); }
 
 /* 终端区右侧开合竖条 */
 .files-rail-toggle { writing-mode: vertical-lr; padding: 10px 4px; background: var(--bg-sel); border: 1px solid var(--border-3); border-left: none; border-radius: 6px 0 0 6px; color: var(--text-2); cursor: pointer; font-size: 12px; letter-spacing: .2em; align-self: flex-start; margin-top: 44px; }
@@ -2788,11 +2818,6 @@ button {
 .files-panel .crumb button,
 .files-panel button,
 .files-rail-toggle,
-.xfer .xfer-bar,
-.xfer .xfer-row button {
-  cursor: default;
-}
-
 /* ── v2.0.1 侧栏作用域 chips（用户确认原型 design/sidebar-scope-v2.html） ── */
 .scope-chips {
   display: flex;
