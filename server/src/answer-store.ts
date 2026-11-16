@@ -62,6 +62,8 @@ export interface AnswerServiceOptions {
   config: () => { enabled: boolean; ttlSec: number }
   /** 应答页公网基址（页面/隧道就绪时非空；undefined=不挂起） */
   surface: () => string | undefined
+  /** 隧道状态（answer.state 广播；缺省按 surface 推断） */
+  tunnel?: () => AnswerStateView['tunnel']
   /** 帧广播（answer.pending / answer.resolved / answer.state） */
   broadcast: (frame: ServerFrame) => void
   /** 元数据日志（禁止问题文本/token） */
@@ -86,6 +88,8 @@ interface Pending {
   resolve: (decision: Record<string, unknown> | null) => void
   reply: (decision: Record<string, unknown> | null) => void
   onSubmit?: (pendingId: string, choice: AnswerChoice) => void
+  /** 本地任务手机停止：server 发 answer.stop 帧，由客户端杀掉本地任务 */
+  onStop?: () => void
 }
 
 interface Settled {
@@ -148,7 +152,8 @@ export class AnswerService {
    */
   holdLocal(
     view: AnswerPendingView,
-    onSubmit: (pendingId: string, choice: AnswerChoice) => void
+    onSubmit: (pendingId: string, choice: AnswerChoice) => void,
+    onStop?: () => void
   ): HeldAnswer | null {
     if (!this.canHold()) return null
     if (!this.withinLimits(view.taskId)) return null
@@ -163,7 +168,7 @@ export class AnswerService {
         : {}),
       questions: view.questions
     }
-    return this.create(view.taskId, view.event, safe, 'local', () => {}, undefined, onSubmit)
+    return this.create(view.taskId, view.event, safe, 'local', () => {}, undefined, onSubmit, onStop)
   }
 
   /** 上限校验（全局 20 / 单任务 5）+ 2.14 同任务同 kind 取代 */
@@ -183,7 +188,8 @@ export class AnswerService {
     origin: AnswerOrigin,
     reply: (decision: Record<string, unknown> | null) => void,
     parsed?: ParsedAnswerHook,
-    onSubmit?: (pendingId: string, choice: AnswerChoice) => void
+    onSubmit?: (pendingId: string, choice: AnswerChoice) => void,
+    onStop?: () => void
   ): HeldAnswer {
     // 2.14：同任务同 kind 新事件取代旧 pending（空响应释放旧 hook）
     for (const p of [...this.pendings.values()]) {
@@ -215,7 +221,8 @@ export class AnswerService {
       expiresAt: at + ttlSec * 1000,
       resolve,
       reply,
-      ...(onSubmit !== undefined ? { onSubmit } : {})
+      ...(onSubmit !== undefined ? { onSubmit } : {}),
+      ...(onStop !== undefined ? { onStop } : {})
     }
     this.pendings.set(id, pending)
     this.pruneSettled()
@@ -239,7 +246,7 @@ export class AnswerService {
       }
       return 'not-found'
     }
-    if (!tokenMatches(pending.token, token)) return 'unauthorized'
+    if (!tokenMatches(pending.token, token) && this.authorize(token) !== 'active') return 'unauthorized'
     if (this.now() >= pending.expiresAt) return 'expired'
     if (pending.origin === 'local') {
       // 本地任务：choice 交回客户端自行映射（D5；server 不持有 tool_input）
@@ -296,6 +303,27 @@ export class AnswerService {
     return n
   }
 
+  /** 全部挂起释放（关闭手机答复/停机兜底）：防止 claude 永久等待 */
+  cancelAll(by: AnswerResolvedByLocal = 'system'): number {
+    let n = 0
+    for (const p of [...this.pendings.values()]) {
+      this.settle(p, null, by, 'cancelled')
+      n += 1
+    }
+    return n
+  }
+
+  /** 手机停止本地任务：把请求交回持连接的客户端（远程任务由调用方 kill） */
+  requestStop(taskId: string): boolean {
+    for (const p of this.pendings.values()) {
+      if (p.taskId === taskId && p.onStop !== undefined) {
+        p.onStop()
+        return true
+      }
+    }
+    return false
+  }
+
   /** hook 连接断开（claude 端超时放弃）：pending 记 expired，不再接受提交 */
   abandon(pendingId: string): void {
     const pending = this.pendings.get(pendingId)
@@ -330,8 +358,28 @@ export class AnswerService {
     return found
   }
 
+  /**
+   * token 授权级别（应答页会话级凭证）：
+   * - active：任一未终结 pending 的 token（页面可见/可答全部平铺 pending——D6）；
+   * - settled：已终结 pending 的 token（10 分钟窗口内仍可查看结果，提交返回幂等态）；
+   * - invalid：无效/已过期清理。
+   */
+  authorize(token: string): 'active' | 'settled' | 'invalid' {
+    if (typeof token !== 'string' || token === '') return 'invalid'
+    for (const p of this.pendings.values()) {
+      if (tokenMatches(p.token, token)) return 'active'
+    }
+    for (const s of this.settled.values()) {
+      if (tokenMatches(s.token, token)) return 'settled'
+    }
+    return 'invalid'
+  }
+
   /** 页面状态快照（T4 隧道接 line 后广播 answer.state） */
-  snapshot(tunnel: AnswerStateView['tunnel'] = this.surfaceUrl !== undefined ? 'up' : 'off'): AnswerStateView {
+  snapshot(
+    tunnel: AnswerStateView['tunnel'] = this.opts.tunnel?.() ??
+      (this.surfaceUrl !== undefined ? 'up' : 'off')
+  ): AnswerStateView {
     return {
       enabled: this.opts.config().enabled,
       ...(this.surfaceUrl !== undefined ? { baseUrl: this.surfaceUrl } : {}),

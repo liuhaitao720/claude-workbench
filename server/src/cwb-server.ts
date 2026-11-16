@@ -20,8 +20,10 @@ import type { ClientFrame, ServerFrame } from './shared/remote-protocol'
 import { TaskRegistry, type TaskSink } from './pty-registry'
 import { createRemoteProxy } from './proxy-core'
 import { ConfigStore } from './config-store'
-import { ServerNotifier, loadNotifyExtras } from './notify'
+import { ServerNotifier, loadNotifyExtras, type AnswerConfig } from './notify'
 import { AnswerService } from './answer-store'
+import { AnswerPage } from './answer-page'
+import { CloudflareTunnel, resolveCloudflaredBin, type TunnelState } from './tunnel'
 
 /** server 版本（package.json 单一事实源；server.version 帧与 S7 升级比对共用） */
 export const VERSION: string = pkg.version
@@ -48,13 +50,13 @@ export interface PresenceState {
 }
 
 /**
- * 能力清单（3.3=A capability 帧应答；实现落地时逐项打开——客户端据此显示入口，
- * 不靠版本号猜）。answer/answerPage 在应答页与隧道落地前置 false。
+ * 能力清单（3.3=A capability 帧应答；客户端据此显示入口，不靠版本号猜）。
+ * v2.2.0：answer/answerPage 随应答页（answer-page.ts）与隧道（tunnel.ts）落地打开。
  */
 export const SERVER_CAPABILITIES = {
   pushEvents: true,
-  answer: false,
-  answerPage: false
+  answer: true,
+  answerPage: true
 } as const
 
 /** 脱敏元数据日志出口（server.log 帧 + stderr 镜像；禁止内容型字段） */
@@ -80,6 +82,8 @@ export const DEFAULT_HOST = '127.0.0.1'
 
 /** hook 请求体读取上限（64KB；超出截断——摘要字段通常远小于此） */
 const HOOK_BODY_MAX_BYTES = 64 * 1024
+/** 手机答复配置轮询间隔（answer.enabled 开关即时生效，设计 §3.5） */
+export const ANSWER_CONFIG_POLL_MS = 10_000
 
 export class CwbServer {
   readonly registry: TaskRegistry
@@ -103,6 +107,18 @@ export class CwbServer {
   private readonly notifyHome: string
   /** 显式停止意图（task.kill 先记，退出回调取用——1.12 stopped 与 exited 分流） */
   private readonly stopIntent = new Set<string>()
+  /** 手机应答页（v2.2.0 T4；enabled 时监听 127.0.0.1） */
+  private answerPage: AnswerPage | undefined
+  /** Cloudflare 快速隧道（公网入口；URL 变化广播 answer.state） */
+  private tunnel: CloudflareTunnel | undefined
+  /** 最近一次 answer 配置快照（轮询差异检测） */
+  private answerConfig: AnswerConfig | undefined
+  /** 隧道状态（answer.state 广播/快照用） */
+  private answerTunnelState: TunnelState = 'off'
+  /** 配置轮询定时器（startAnswerChannel 建立） */
+  private answerPollTimer: NodeJS.Timeout | undefined
+  /** 配置同步串行链（避免并发启停页面/隧道） */
+  private answerSyncing: Promise<void> = Promise.resolve()
   private shuttingDown = false
   private boundPort: number | undefined
 
@@ -159,6 +175,7 @@ export class CwbServer {
         return { enabled: a.enabled, ttlSec: a.ttlSec }
       },
       surface: () => this.answer.baseUrl,
+      tunnel: () => this.answerTunnelState,
       broadcast: (frame) => this.broadcastFrame(frame),
       log: (level, message) => this.log(level, message)
     })
@@ -298,6 +315,126 @@ export class CwbServer {
   }
 
   /**
+   * 启动手机答复通道（v2.2.0 T4，main.ts 装配调用）：立即同步一次配置，此后每
+   * 10 秒轮询 notify.json（enabled/pagePort 变化即时生效，与 ssh 写入解耦）。
+   */
+  startAnswerChannel(pollMs: number = ANSWER_CONFIG_POLL_MS): void {
+    if (this.answerPollTimer !== undefined) return
+    void this.syncAnswerChannel()
+    const timer = setInterval(() => void this.syncAnswerChannel(), pollMs)
+    timer.unref?.()
+    this.answerPollTimer = timer
+  }
+
+  /** 停止通道（停机路径；先由 answer.dispose 释放 pending，再 stop 子进程——§3.5） */
+  private async stopAnswerChannel(): Promise<void> {
+    if (this.answerPollTimer !== undefined) {
+      clearInterval(this.answerPollTimer)
+      this.answerPollTimer = undefined
+    }
+    this.tunnel?.stop()
+    this.tunnel = undefined
+    await this.answerPage?.stop()
+    this.answerPage = undefined
+    this.answer.setSurface(undefined)
+    this.answerTunnelState = 'off'
+  }
+
+  /** 配置同步串行化（页面/隧道启停是异步的，轮询与手工调用不并发） */
+  private syncAnswerChannel(): Promise<void> {
+    this.answerSyncing = this.answerSyncing
+      .then(() => this.applyAnswerConfig())
+      .catch((err: unknown) => {
+        this.log('warn', `answer channel sync failed (${sanitizeError(err)})`)
+      })
+    return this.answerSyncing
+  }
+
+  /** 差异应用：关闭→释放挂起并停页面/隧道；开启→起页面（端口变则重启）→起隧道 */
+  private async applyAnswerConfig(): Promise<void> {
+    const cfg = loadNotifyExtras(this.notifyHome).answer
+    const prev = this.answerConfig
+    this.answerConfig = cfg
+
+    if (!cfg.enabled) {
+      if (prev?.enabled === true || this.answerPage !== undefined || this.tunnel !== undefined) {
+        // 关闭手机答复：先释放全部挂起（claude 立即回落 TUI），再停隧道/页面
+        const released = this.answer.cancelAll('system')
+        if (released > 0) this.log('info', `answer disabled: released ${released} pending`)
+        this.tunnel?.stop()
+        this.tunnel = undefined
+        await this.answerPage?.stop()
+        this.answerPage = undefined
+        this.answer.setSurface(undefined)
+        this.answerTunnelState = 'off'
+        this.answer.broadcastState('off')
+      }
+      return
+    }
+
+    // 端口变更 → 页面与隧道一起重启（cloudflared 目标端口固定）
+    if (this.answerPage !== undefined && prev !== undefined && prev.pagePort !== cfg.pagePort) {
+      this.tunnel?.stop()
+      this.tunnel = undefined
+      await this.answerPage.stop()
+      this.answerPage = undefined
+      this.answer.setSurface(undefined)
+      this.answerTunnelState = 'off'
+    }
+
+    if (this.answerPage === undefined) {
+      const page = new AnswerPage({
+        answer: this.answer,
+        port: cfg.pagePort,
+        onStop: (taskId) => this.stopTaskFromPhone(taskId),
+        log: (level, message) => this.log(level, message)
+      })
+      await page.start()
+      this.answerPage = page
+    }
+
+    if (this.tunnel === undefined) {
+      const tunnel = new CloudflareTunnel({
+        targetPort: () => this.answerPage?.port,
+        bin: resolveCloudflaredBin({ home: this.notifyHome }),
+        onState: (state, url) => this.onTunnelState(state, url),
+        log: (level, message) => this.log(level, message)
+      })
+      this.tunnel = tunnel
+      tunnel.start()
+    }
+  }
+
+  /** 隧道状态：仅 up 时注入 surface（可挂起/链接可用），其余状态清空 */
+  private onTunnelState(state: TunnelState, url?: string): void {
+    this.answerTunnelState = state
+    this.answer.setSurface(state === 'up' ? url : undefined)
+    if (state === 'missing') {
+      this.log('warn', 'cloudflared not found: phone answering unavailable (install cloudflared)')
+    } else if (state === 'up') {
+      this.log('info', 'phone answer channel up')
+    } else if (state === 'down') {
+      this.log('warn', 'tunnel down: reconnecting')
+    }
+    this.answer.broadcastState(state)
+  }
+
+  /**
+   * 手机请求停止（/api/stop，2.17=B）：本地任务交回持连接的客户端（answer.stop
+   * 帧）；远程任务 server 直接 kill。未知任务=false。
+   */
+  private stopTaskFromPhone(taskId: string): boolean {
+    if (this.answer.requestStop(taskId)) return true
+    try {
+      this.killTask(taskId, 'phone')
+      return true
+    } catch {
+      this.log('warn', 'phone stop ignored (unknown task)')
+      return false
+    }
+  }
+
+  /**
    * 桌面是否「不在场」（2.16：客户端在线且最近 presenceMin 分钟有键入=在场）。
    * - 无在线客户端 → 不在场（手机可代答）；
    * - 在线但全部是旧客户端（从未发 presence）→ 按在场处理（桌面行为不变）；
@@ -401,6 +538,8 @@ export class CwbServer {
     this.shuttingDown = true
     // v2.2.0 B 链：先释放全部手机挂起（空响应），claude 不必等满 hook 超时
     this.answer.dispose()
+    // 手机答复通道停机：页面/隧道随之关闭（已无 pending 需要页面）
+    await this.stopAnswerChannel()
     for (const ws of this.wss.clients) this.send(ws, { type: 'conn.closed', reason })
     // 10 秒合并窗内未发的 Stop 在停机前补推（不丢消息）；随后清空全部定时器
     this.notifier.flush()
@@ -536,9 +675,13 @@ function createHandlers(server: CwbServer, ctx: FrameContext): Record<ClientFram
     'answer.pending': (frame, c) => {
       if (frame.type !== 'answer.pending') return
       const p = frame.pending
-      server.answer.holdLocal(p, (pendingId, choice) => {
-        c.send({ type: 'answer.submit', pendingId, choice })
-      })
+      server.answer.holdLocal(
+        p,
+        (pendingId, choice) => {
+          c.send({ type: 'answer.submit', pendingId, choice })
+        },
+        () => c.send({ type: 'answer.stop', taskId: p.taskId })
+      )
     },
     'answer.cancel': (frame) => {
       if (frame.type !== 'answer.cancel') return

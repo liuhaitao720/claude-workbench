@@ -36,6 +36,8 @@ async function main(): Promise<void> {
   const port = parsePort(process.argv) ?? DEFAULT_PORT
   const server = new CwbServer({ port })
   const bound = await server.start()
+  // v2.2.0 手机答复通道：answer.enabled 时自动起应答页 + Cloudflare 隧道（10s 配置轮询）
+  server.startAnswerChannel()
   process.stdout.write(
     `${JSON.stringify({ event: 'listening', port: bound.port, host: bound.host, version: VERSION })}\n`
   )
