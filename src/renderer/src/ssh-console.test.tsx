@@ -29,6 +29,9 @@ beforeEach(() => {
     // v2.1.5：已开台台账/死态按连接记——用例间必须清（否则上例的台被当成本例已开）
     sshOpenCids: [],
     sshDeadCids: [],
+    // v2.2.1：引导幕布/成功标记同样按连接记——用例间清
+    sshBootVeiling: [],
+    sshBootOkCids: [],
     sshFollowDir: null,
     sshFollowEnabled: true,
     reviewState: null,
@@ -536,5 +539,73 @@ describe('v2.1.2 SSH 视图一等入口：零连接死锁解除', () => {
     await waitFor(() => expect(useAppStore.getState().sshActive).toBe(false))
     expect(screen.queryByTestId('ssh-tab')).toBeNull()
     expect(screen.getByTestId('sidebar-scope-chips')).toBeDefined()
+  })
+})
+
+describe('v2.2.1 定向开台引导幕布 + 面板直达（脚本回显不可见/面板不竞速回主目录）', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    act(() => {
+      useAppStore.getState().closeSshConsole()
+    })
+    cleanup()
+  })
+
+  it('幕布时序：开台即挂 → 注入期可见 → OSC 7 回执揭幕并记成功（失败/超时路径不记）', async () => {
+    const api = await renderApp()
+    // tRun（远程任务 active）→ 竖条 SSH = 定向开台（wantDir=/home/dev/r）→ 幕布挂
+    fireEvent.click(screen.getByTestId('btn-ssh-rail'))
+    await waitFor(() => expect(useAppStore.getState().sshBootVeiling).toContain('c1'))
+    expect(screen.getByTestId('ssh-boot-veil-c1')).toBeDefined()
+    await act(async () => {}) // openSshShell 已决、就绪门已挂
+    const emit = vi.mocked(api.onSshData).mock.calls[0]?.[0]
+    expect(emit).toBeDefined()
+    // 提示符拍 → 分步注入；幕布仍在（脚本回显被遮）
+    act(() => emit!({ connectionId: 'c1', data: '\r\nuser@vm:~$ ' }))
+    await waitFor(
+      () =>
+        expect(
+          vi.mocked(api.writeSshShell).mock.calls.some(
+            (c) => c[0] === 'c1' && c[1].includes("cd '/home/dev/r'")
+          )
+        ).toBe(true),
+      { timeout: 2_000 }
+    )
+    expect(useAppStore.getState().sshBootVeiling).toContain('c1')
+    // OSC 7 回执 → 揭幕 + 成功标记（揭幕清屏的依据）
+    act(() => emit!({ connectionId: 'c1', data: '\u001b]7;file://h/home/dev/r\u0007' }))
+    await waitFor(() => expect(useAppStore.getState().sshBootVeiling).not.toContain('c1'))
+    expect(useAppStore.getState().sshBootOkCids).toContain('c1')
+    expect(screen.queryByTestId('ssh-boot-veil-c1')).toBeNull()
+  })
+
+  it('面板直达：定向开台后唯一一次列目录就是项目目录——不再发主目录竞速请求（实测「面板停在用户目录」根因）', async () => {
+    const api = await renderApp()
+    // 记忆目录残留（上次会话停在主目录）——老代码挂载即 load(saved) 与 explicit 跟随竞速
+    act(() => {
+      useAppStore.setState((s) => ({
+        uiSettings: { ...s.uiSettings, filesPanelPath: { c1: '/home/dev' } }
+      }))
+    })
+    vi.mocked(api.listRemoteFiles).mockClear()
+    vi.mocked(api.listRemoteFiles).mockImplementation(async (_cid: string, p?: string) => ({
+      ok: true,
+      path: p ?? '/home/dev',
+      entries: []
+    }))
+    fireEvent.click(screen.getByTestId('btn-ssh-rail'))
+    await waitFor(() =>
+      expect(api.listRemoteFiles).toHaveBeenCalledWith('c1', '/home/dev/r')
+    )
+    // 不存在「无参（主目录）」与「记忆目录」请求——explicit 跟随是唯一导航源
+    expect(
+      vi.mocked(api.listRemoteFiles).mock.calls.filter(
+        (c) => c[0] === 'c1' && (c[1] === undefined || c[1] === '/home/dev')
+      )
+    ).toHaveLength(0)
+    // 陈旧守卫：即便竞速响应晚到也不会盖掉项目目录（seq 旧的丢弃）
+    await act(async () => {})
+    const panelCalls = vi.mocked(api.listRemoteFiles).mock.calls.filter((c) => c[0] === 'c1')
+    expect(panelCalls.every((c) => c[1] === '/home/dev/r')).toBe(true)
   })
 })

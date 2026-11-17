@@ -270,6 +270,7 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
  * `visibility:hidden`（布局尺寸仍在，fit/回滚/会话全保留），切回即原样。
  */
 function SshTermPane({ cid, active }: { cid: string; active: boolean }) {
+    const t = useI18n()
     const hostRef = useRef<HTMLDivElement>(null)
     const termRef = useRef<Terminal | null>(null)
     const dead = useAppStore(
@@ -438,9 +439,26 @@ function SshTermPane({ cid, active }: { cid: string; active: boolean }) {
       } catch {
         /* 忽略 */
       }
-      sshTermCache.get(cid)?.focus()
+      // v2.2.1 幕布期间不抢键盘（注入窗口内键入会拼进脚本行）
+      if (!useAppStore.getState().sshBootVeiling.includes(cid)) sshTermCache.get(cid)?.focus()
       // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在激活切换时重排
     }, [active, cid])
+
+    // v2.2.1 定向开台引导幕布：注入完成前遮住终端（脚本回显/banner 不进视野）；
+    // 揭幕时若拿到 OSC 7 回执（cd 成功）→ 清屏后聚焦——露出来就是项目目录的干净提示符
+    const veiling = useAppStore((s) => s.sshBootVeiling.includes(cid))
+    const prevVeilRef = useRef(veiling)
+    useEffect(() => {
+      const was = prevVeilRef.current
+      prevVeilRef.current = veiling
+      if (was && !veiling) {
+        const term = sshTermCache.get(cid)
+        if (term !== undefined) {
+          if (useAppStore.getState().sshBootOkCids.includes(cid)) term.clear()
+          if (useAppStore.getState().sshConsoleCid === cid) term.focus() // 前台台才接键盘
+        }
+      }
+    }, [veiling, cid])
 
     /** v2.1.2 ③：死会话重开时清旧终端画面（新 shell 的 banner 干净进入） */
     const prevDeadRef = useRef(dead)
@@ -457,6 +475,18 @@ function SshTermPane({ cid, active }: { cid: string; active: boolean }) {
         aria-hidden={!active}
       >
         <div ref={hostRef} className="ssh-term-host" />
+        {/* v2.2.1 引导幕布：拦截点击/键盘焦点（stopPropagation 防冒泡到 wrap 的聚焦） */}
+        {veiling && (
+          <div
+            className="ssh-boot-veil"
+            data-testid={`ssh-boot-veil-${cid}`}
+            role="status"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <span className="ssh-boot-veil-spin" aria-hidden="true" />
+            <span>{t('ssh.bootVeil')}</span>
+          </div>
+        )}
       </div>
     )
 }

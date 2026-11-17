@@ -127,12 +127,17 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
   }
   const connName = connections.find((c) => c.id === connectionId)?.name ?? ''
 
+  // v2.2.1 陈旧响应守卫：每次 load 自增序号，应答到达时已有更新请求发出即丢弃
+  // ——挂载定位与 explicit 跟随两条 load 竞速时，慢的那份（通常主目录）不会盖掉新目录
+  const loadSeqRef = useRef(0)
   const load = useCallback(
     (p?: string, pushHistory = true) => {
+      const seq = ++loadSeqRef.current
       setSt((s) => ({ ...s, loading: true, error: '' }))
       window.cwb
         .listRemoteFiles(connectionId, p)
         .then((r) => {
+          if (seq !== loadSeqRef.current) return // 陈旧应答——已有更新的导航在途
           if (!r.ok || r.path === undefined) {
             setSt((s) => ({ ...s, loading: false, error: r.error ?? 'list failed' }))
             return
@@ -143,7 +148,10 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
           setSt({ path: r.path, entries: r.entries ?? [], loading: false, error: '' })
           setSelected(new Set())
         })
-        .catch((err: unknown) => setSt((s) => ({ ...s, loading: false, error: errMsg(err) })))
+        .catch((err: unknown) => {
+          if (seq !== loadSeqRef.current) return
+          setSt((s) => ({ ...s, loading: false, error: errMsg(err) }))
+        })
     },
     [connectionId] // st.path 故意不入依赖（读最新经函数式——压栈语义防重复 effect）
   )
@@ -160,8 +168,19 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 跟随按 seq 导航
   }, [follow?.seq, connectionId])
 useEffect(() => {
-    // per-connection 目录记忆（面板重开回上次位置；无记忆=home）
-    const saved = useAppStore.getState().uiSettings.filesPanelPath?.[connectionId]
+    // per-connection 目录记忆（面板重开回上次位置；无记忆=home）。
+    // v2.2.1 竞速修复：定向开台已有 explicit/OSC 跟随在途时跳过——记忆目录的
+    // load 不再与项目目录的 load 竞速（慢响应盖掉新目录的实测根因）
+    const s = useAppStore.getState()
+    const f = s.sshFollowDir
+    if (
+      f !== null &&
+      f.connectionId === connectionId &&
+      (f.source === 'explicit' || s.sshFollowEnabled)
+    ) {
+      return // 跟随 effect 会导航——别再发一份竞速请求
+    }
+    const saved = s.uiSettings.filesPanelPath?.[connectionId]
     load(saved)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅连接切换重载
   }, [connectionId])

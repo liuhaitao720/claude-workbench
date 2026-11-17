@@ -236,6 +236,7 @@ export const zh = {
   'ssh.splitterHint': '拖拽调高 · 双击复位 · ↑/↓ 微调',
   'tree.openInSsh': '在 SSH 终端中打开',
   'ssh.follow': '跟随目录',
+  'ssh.bootVeil': '正在进入项目目录…',
   'ssh.followHint': '终端 cd 后文件面板自动跟随（OSC 7）；面板手动切目录后，终端再 cd 时直接跟到新目录',
   'ssh.kindPure': '纯 SSH',
   // v2.1.2 ①：SSH 视图左侧「SSH 服务器列表」+ 纯 SSH 连接对话框
@@ -996,6 +997,7 @@ export const en: Record<MessageKey, string> = {
   'ssh.splitterAria': 'Console/files splitter',
   'ssh.splitterHint': 'Drag to resize · double-click reset · ↑/↓ adjust',
   'tree.openInSsh': 'Open in SSH console',
+  'ssh.bootVeil': 'Entering project directory…',
   'ssh.follow': 'Follow cwd',
   'ssh.followHint': 'cd in shell auto-navigates the files panel; after manual browsing, the next cd takes over',
   'ssh.kindPure': 'pure SSH',

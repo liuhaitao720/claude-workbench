@@ -263,6 +263,13 @@ function cancelSshBootstrap(connectionId: string): void {
  */
 function injectSshBootstrapWhenReady(connectionId: string, dir?: string): void {
   cancelSshBootstrap(connectionId)
+  // v2.2.1 定向开台（有目录意图）挂幕布：脚本回显不进视野，OSC 7 回执/超时揭幕
+  if (dir !== undefined && dir.trim() !== '') {
+    useAppStore.setState((s) => ({
+      sshBootVeiling: [...new Set([...s.sshBootVeiling, connectionId])],
+      sshBootOkCids: s.sshBootOkCids.filter((c) => c !== connectionId)
+    }))
+  }
   runBootstrapRound(connectionId, dir, true)
 }
 
@@ -276,6 +283,8 @@ function runBootstrapRound(connectionId: string, dir: string | undefined, allowR
     for (const t of timers) clearTimeout(t)
     off?.()
     sshBootstrapCancels.delete(connectionId)
+    // v2.2.1 揭幕（幂等——无幕布也照跑，防状态滞留）
+    useAppStore.setState((s) => ({ sshBootVeiling: s.sshBootVeiling.filter((c) => c !== connectionId) }))
   }
   sshBootstrapCancels.set(connectionId, finish)
 
@@ -305,9 +314,15 @@ function runBootstrapRound(connectionId: string, dir: string | undefined, allowR
         timers.push(
           setTimeout(() => window.cwb.writeSshShell(connectionId, '\r'), 120)
         )
-        // 回执确认：新输出里出现 OSC 7（\x1b]7;）即成功；超时重试一轮
+        // 回执确认：新输出里出现 OSC 7（\x1b]7;）即成功；超时重试一轮。
+        // v2.2.1 成功标记先行（揭幕清屏的依据），再 finish（揭幕）
         off = onSshDataRaw(connectionId, (chunk) => {
-          if (chunk.includes('\x1b]7;')) finish()
+          if (chunk.includes('\x1b]7;')) {
+            useAppStore.setState((s) => ({
+              sshBootOkCids: [...new Set([...s.sshBootOkCids, connectionId])]
+            }))
+            finish()
+          }
         })
         timers.push(
           setTimeout(() => {
@@ -536,6 +551,13 @@ interface AppState {
   sshOpenCids: string[]
   /** v2.1.5：各连接会话是否已结束（后台台的死态不污染当前台；sshSessionDead=当前台镜像） */
   sshDeadCids: string[]
+  /**
+   * v2.2.1 定向开台引导幕布（cid 集）：注入 cd+钩子完成前遮住该台终端——
+   * 切目录脚本的回显与登录 banner 不进用户视野；OSC 7 回执（或超时兜底）揭幕。
+   */
+  sshBootVeiling: string[]
+  /** v2.2.1 最近一次引导拿到 OSC 7 回执（成功）的 cid——揭幕时清屏（banner+脚本回显一并抹去） */
+  sshBootOkCids: string[]
   /**
    * v2.1.1 目录跟随（用户需求：shell cd 后文件面板自动进入对应目录）：
    * OSC 7 / 初始定位写入，RemoteFilesPanel 按 seq 变化导航。
@@ -1475,6 +1497,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   sshSessionDead: false,
   sshOpenCids: [],
   sshDeadCids: [],
+  sshBootVeiling: [],
+  sshBootOkCids: [],
   sshFollowDir: null,
   sshFollowEnabled: true,
 
