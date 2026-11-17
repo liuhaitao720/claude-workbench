@@ -410,8 +410,19 @@ function SshTermPane({ cid, active }: { cid: string; active: boolean }) {
         }
       }
       requestAnimationFrame(syncSize)
-      // 订阅 shell 输出（先冲放缓冲——openSshShell 首包竞态防护，1.7.5 先例）
-      const off = subscribeSshData(cid, (d) => sshTermCache.get(cid)?.write(d))
+      // 订阅 shell 输出（先冲放缓冲——openSshShell 首包竞态防护，1.7.5 先例）。
+      // v2.2.1 首包栅格兜底：首块数据到达时会话必已建立（数据即来自它）——此时
+      // 再补一次 fit+resize。首开竞态下挂载期的 resize 可能先于会话建立被主进程
+      // 暂存/丢弃，shell 停在 80×24 而 xterm 按真实宽度渲染 → 键入换行错位、
+      // 覆盖行首（用户实测；切页后 active effect 补发才正常）。此处一包根治。
+      let syncedOnFirstData = false
+      const off = subscribeSshData(cid, (d) => {
+        if (!syncedOnFirstData) {
+          syncedOnFirstData = true
+          syncSize()
+        }
+        sshTermCache.get(cid)?.write(d)
+      })
       const observer = new ResizeObserver(syncSize)
       observer.observe(host)
       return () => {

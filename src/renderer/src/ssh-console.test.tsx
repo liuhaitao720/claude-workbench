@@ -384,8 +384,8 @@ describe('v2.1.2 ③ bootstrap 就绪门（修「打开即缓冲区打印、需 
     expect(useAppStore.getState().sshConsoleCid).toBe('c2')
     await act(async () => {}) // openSshShell(B) 已决、B 门已挂
     expect(api.closeSshShell).not.toHaveBeenCalledWith('c1')
-    // 推进 10s：A 的 8s 兜底照常触发——A 定向打开（cd+钩子）；B 裸进只装跟随
-    // 钩子（v2.1.6：跟随默认可用）、不改目录
+    // 推进 10s：A 的 8s 兜底照常触发——A 定向打开（cd+钩子）；B 裸进零注入
+    // （v2.2.1：用户指令——纯 SSH 终端不注入任何脚本，直接连接）
     act(() => {
       vi.advanceTimersByTime(10_000)
     })
@@ -394,38 +394,32 @@ describe('v2.1.2 ③ bootstrap 就绪门（修「打开即缓冲区打印、需 
     )
     expect(c1Boots).toHaveLength(1)
     expect(c1Boots[0]![1]).toContain("cd '/home/dev/r'")
-    const c2Boots = vi.mocked(api.writeSshShell).mock.calls.filter(
-      (c) => c[0] === 'c2' && c[1].includes('PROMPT_COMMAND')
-    )
-    expect(c2Boots).toHaveLength(1)
-    expect(c2Boots[0]![1]).not.toContain('cd ')
+    expect(
+      vi.mocked(api.writeSshShell).mock.calls.some((c) => c[0] === 'c2')
+    ).toBe(false)
   })
 })
 
-describe('v2.1.6 注入语义：cd 只随定向打开；跟随钩子每次开台都装', () => {
-  it('Ctrl+Shift+S 裸进 SSH 终端（无任务/项目上下文）→ 只装跟随钩子（PROMPT_COMMAND），不发 cd', async () => {
+describe('v2.2.1 裸进零注入（用户指令：纯 SSH 终端直接连接，不装任何脚本）', () => {
+  it('Ctrl+Shift+S 裸进 SSH 终端（无任务/项目上下文）→ 提示符/兜底全程零写入、无幕布', async () => {
     const api = await renderApp()
+    vi.mocked(api.writeSshShell).mockClear()
     fireEvent.keyDown(window, { key: 'S', ctrlKey: true, shiftKey: true })
     await waitFor(() => expect(useAppStore.getState().sshConsoleCid).toBe('c1'))
     await act(async () => {})
     const emit = vi.mocked(api.onSshData).mock.calls[0]?.[0]
     expect(emit).toBeDefined()
-    // 提示符拍触发注入：只有钩子行（不改目录——满足「裸进不注入改目录脚本」）
+    // 提示符拍 + 8s 兜底全推进：裸进不注入（无 PROMPT_COMMAND、无 cd、无同步 \r）
+    vi.useFakeTimers()
     act(() => emit!({ connectionId: 'c1', data: '\r\nuser@vm:~$ ' }))
-    await waitFor(() => {
-      expect(
-        vi.mocked(api.writeSshShell).mock.calls.some(
-          (c) => c[0] === 'c1' && c[1].includes('PROMPT_COMMAND')
-        )
-      ).toBe(true)
+    act(() => {
+      vi.advanceTimersByTime(10_000)
     })
-    expect(
-      vi.mocked(api.writeSshShell).mock.calls.some((c) => c[0] === 'c1' && c[1].includes('cd '))
-    ).toBe(false)
-    expect(useAppStore.getState().sshFollowDir).toBe(null) // 钩子未回报前不导航
-    // 钩子回报 cwd → 面板跟随导航（跟随默认可用）
-    act(() => emit!({ connectionId: 'c1', data: '\u001b]7;file://h/home/liuhait1\u0007' }))
-    await waitFor(() => expect(useAppStore.getState().sshFollowDir?.path).toBe('/home/liuhait1'))
+    expect(vi.mocked(api.writeSshShell).mock.calls.filter((c) => c[0] === 'c1')).toHaveLength(0)
+    expect(useAppStore.getState().sshBootVeiling).not.toContain('c1') // 幕布只随定向打开
+    expect(useAppStore.getState().sshFollowDir).toBe(null)
+    expect(screen.queryByTestId('ssh-boot-veil-c1')).toBeNull()
+    vi.useRealTimers()
   })
 
   it('面板手动切目录后：终端没动（OSC 同路径）不拽回；终端真 cd（新路径）直接跟过去', async () => {

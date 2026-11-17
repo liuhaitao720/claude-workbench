@@ -1727,6 +1727,7 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   const sshShells = new Map<string, SshShellSession>()
   const closeSshShellOf = (connectionId: string): void => {
     const session = sshShells.get(connectionId)
+    sshPendingShellSize.delete(connectionId) // v2.2.1：随关清积压（防泄给下一个新会话）
     if (session === undefined) return
     sshShells.delete(connectionId) // 先删——session.close() 触发的 onClose 见 map 未持有即不广播
     try {
@@ -1740,6 +1741,13 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
    * 「双活会话」与被抛弃 open 的孤儿落地（孤儿至多活到下一次 open/断连）。
    */
   const sshOpenChain = new Map<string, Promise<void>>()
+  /**
+   * v2.2.1 首开宽度竞态修复：渲染层 fit 后立即发 resize，但 shell 会话可能尚未
+   * 建立（open 在途）——此前的 resize 被静默丢弃，会话停在 80×24 默认栅格而
+   * xterm 按真实宽度渲染 → 键入换行错位/覆盖行首（用户实测：切页后 active
+   * effect 补发 resize 才正常）。会话未立的 resize 先记这里，open 落地即补发。
+   */
+  const sshPendingShellSize = new Map<string, { cols: number; rows: number }>()
   ipcMain.handle(IpcChannels.SshShellOpen, async (_e, cid: unknown) => {
     const c = asCid(cid)
     if (c === undefined) return { ok: false, error: 'no connection' }
@@ -1752,6 +1760,16 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       closeSshShellOf(c) // 重开=新会话（本地关——不广播 SshClosed，见 closeSshShellOf 注）
       const session = await ctx.connection.shell(c)
       sshShells.set(c, session)
+      // v2.2.1：会话未立期间积压的栅格立即补发（首开宽度竞态——见上方注释）
+      const pending = sshPendingShellSize.get(c)
+      if (pending !== undefined) {
+        sshPendingShellSize.delete(c)
+        try {
+          session.resize(pending.cols, pending.rows)
+        } catch {
+          // 刚立的通道 resize 失败可忽略——渲染层首数据还会再补一次
+        }
+      }
       session.onData((chunk) => broadcast(IpcChannels.SshData, { connectionId: c, data: chunk }))
       // F1：仅自然死亡（远端退出/断连）广播——map 仍持有=非本地关（本地关先删 map）
       session.onClose(() => {
@@ -1780,7 +1798,13 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   })
   ipcMain.on(IpcChannels.SshShellResize, (_e, cid: string, cols: number, rows: number) => {
     if (typeof cid !== 'string' || typeof cols !== 'number' || typeof rows !== 'number') return
-    sshShells.get(cid)?.resize(cols, rows)
+    const session = sshShells.get(cid)
+    if (session === undefined) {
+      // v2.2.1：会话未立（open 在途）——记下待补，open 落地即发（防首开 80×24 丢 resize）
+      sshPendingShellSize.set(cid, { cols, rows })
+      return
+    }
+    session.resize(cols, rows)
   })
   ipcMain.handle(IpcChannels.SshShellClose, (_e, cid: unknown) => {
     const c = asCid(cid)

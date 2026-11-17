@@ -260,16 +260,18 @@ function cancelSshBootstrap(connectionId: string): void {
 /**
  * 就绪判定（只看新输出）：静默 400ms / 某拍以提示符结尾 / 8s 兜底，先到先注入；
  * 注入后等 OSC 7（\x1b]7;）回执，未到重试一轮（仅一次）。
+ * v2.2.1（用户指令）：**仅定向打开**（dir 非空——任务/项目上下文带目录）才注入
+ * cd+跟随钩子；裸进 SSH 终端不注入任何脚本（旧 v2.1.6「每次开台都装钩子」废止
+ * ——用户实测裸进也看到 PROMPT_COMMAND 行；跟随语义只剩定向打开的会话）。
  */
 function injectSshBootstrapWhenReady(connectionId: string, dir?: string): void {
   cancelSshBootstrap(connectionId)
+  if (dir === undefined || dir.trim() === '') return // 裸进：直接连接，零注入
   // v2.2.1 定向开台（有目录意图）挂幕布：脚本回显不进视野，OSC 7 回执/超时揭幕
-  if (dir !== undefined && dir.trim() !== '') {
-    useAppStore.setState((s) => ({
-      sshBootVeiling: [...new Set([...s.sshBootVeiling, connectionId])],
-      sshBootOkCids: s.sshBootOkCids.filter((c) => c !== connectionId)
-    }))
-  }
+  useAppStore.setState((s) => ({
+    sshBootVeiling: [...new Set([...s.sshBootVeiling, connectionId])],
+    sshBootOkCids: s.sshBootOkCids.filter((c) => c !== connectionId)
+  }))
   runBootstrapRound(connectionId, dir, true)
 }
 
@@ -1103,7 +1105,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         }
         try {
           const r = await window.cwb.openSshShell(connectionId)
-          // 重开沿用该台的目录意图：定向打开过的重新 cd；裸进的只装跟随钩子
+          // 重开沿用该台的目录意图：定向打开过的重新 cd；裸进零注入（v2.2.1）
           const bootDir = wantDir ?? sshDirIntent.get(connectionId)
           if (!r.ok && get().sshConsoleCid === connectionId) {
             set({
@@ -1165,11 +1167,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
         })
         return
       }
-      // v2.1.6（用户指令：目录跟随默认可用）：cd 只在「从开发窗口/项目上下文
-      // 定向打开」时注入；跟随钩子（PROMPT_COMMAND 发 OSC 7——只报告 cwd 不改
-      // 目录）每次开台都装。裸进 SSH 视图不注入任何改目录的脚本。
-      // 面板手动切目录后：终端没动（OSC 同路径）不拽回；终端真 cd 了（路径变）
-      // 直接跟到新目录——SshTermPane 的 OSC 去重天然给出这语义。
+      // v2.2.1（用户指令）：**只有定向打开**（任务/项目上下文带目录——cd 进目录
+      // + 装 OSC 7 跟随钩子，幕布遮回显）才注入；裸进 SSH 终端零脚本直接连接
+      // （旧「每次开台都装钩子」废止）。面板手动切目录后：终端没动（OSC 同路径）
+      // 不拽回；终端真 cd 了（路径变）直接跟到新目录——SshTermPane 的 OSC 去重
+      // 天然给出这语义（跟随仅在装了钩子的定向会话内生效）。
       injectSshBootstrapWhenReady(connectionId, wantDir)
     } catch (err) {
       console.error('[cwb] openSshShell failed:', err)
