@@ -448,6 +448,28 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
     }
   }, [task.id])
 
+  // v2.2.1：连接转 connected 强制重同步列宽——重挂/认领后服务端 PTY 可能还是旧
+  // 栅格，而 ResizeObserver 无尺寸变化不触发，渲染侧不会自发补发。对齐下面
+  // 恢复任务先例（stopped→running）：fit 失败不阻断，ptyResize 无条件发（绕过
+  // fitAndSync 尺寸去重——term 尺寸未变也要把当前栅格推给新挂的服务端 PTY）。
+  // 注意必须挂在组件顶层（Rules of Hooks）：嵌进上面的挂载 effect 回调里会在
+  // 提交期抛 Invalid hook call → React 卸载全树 → 终端区白屏（v2.2.1 实测回归）。
+  const prevConnStateRef = useRef(connEntry?.state)
+  useEffect(() => {
+    const cur = connEntry?.state
+    const prev = prevConnStateRef.current
+    prevConnStateRef.current = cur
+    if (prev === 'connected' || cur !== 'connected') return
+    const term = terminalCache.get(task.id)
+    if (!term) return
+    try {
+      fitAddonCache.get(task.id)?.fit()
+    } catch {
+      // propose 失败（如隐藏态）不阻断——用 term 现值同步即可
+    }
+    window.cwb.ptyResize(task.id, term.cols, term.rows)
+  }, [connEntry?.state, task.id])
+
   // 恢复任务（stopped→running）：清缓冲 + 强制重同步尺寸（ptyResize 无条件发，
   // 绕过 fitAndSync 去重——term 尺寸可能未变，但 PTY 是新实例必须被告知）。
   // 顺序设计（评审 F2 注明）：先 reset 后 ptyResize——若 PTY 首段输出先于本 effect

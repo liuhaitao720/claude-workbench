@@ -129,6 +129,14 @@ export class TaskRegistry {
   ) {}
 
   /** v2.0.2：任务显示名（服务器侧推送文案；未注册=undefined） */
+  /** v2.2.1 元数据刷新（task.meta 帧——重连认领/resume 后补传显示名；仅覆盖在档任务） */
+  updateMeta(taskId: string, name?: string, projectName?: string): void {
+    const entry = this.entries.get(taskId)
+    if (entry === undefined) return
+    if (name !== undefined && name !== '') entry.name = name
+    if (projectName !== undefined && projectName !== '') entry.projectName = projectName
+  }
+
   nameOf(taskId: string): string | undefined {
     return this.entries.get(taskId)?.name ?? this.retired.get(taskId)?.name
   }

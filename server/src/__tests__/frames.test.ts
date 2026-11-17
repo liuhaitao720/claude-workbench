@@ -28,6 +28,7 @@ const CLIENT_FRAMES: ClientFrame[] = [
     }
   },
   { type: 'task.spawn', req: { taskId: 't2', argv: ['claude'], cwd: '/tmp', cols: 80, rows: 24 } },
+  { type: 'task.meta', taskId: 't2', name: '任务A', projectName: '项目B' },
   { type: 'task.write', taskId: 't2', data: 'ls -la\r' },
   { type: 'task.resize', taskId: 't2', cols: 100, rows: 30 },
   { type: 'task.kill', taskId: 't2', rid: 'r2' },
@@ -76,10 +77,10 @@ describe('decodeClientFrame（18 型全解）', () => {
     })
   }
 
-  it("18 型全集=契约 ClientFrame['type']（缺一即编译红+此处失败）", () => {
+  it("19 型全集=契约 ClientFrame['type']（缺一即编译红+此处失败）", () => {
     expect(new Set(CLIENT_FRAMES.map((f) => f.type))).toEqual(
       new Set([
-        'task.spawn', 'task.write', 'task.resize', 'task.kill', 'task.attach',
+        'task.spawn', 'task.write', 'task.resize', 'task.meta', 'task.kill', 'task.attach',
         'task.detach', 'task.list', 'server.ping', 'server.version',
         'proxy.status', 'proxy.start', 'proxy.stop', 'proxy.config.get', 'proxy.config.set',
         'presence', 'server.capabilities', 'answer.pending', 'answer.cancel'

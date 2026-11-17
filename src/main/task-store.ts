@@ -81,3 +81,49 @@ export class TaskStore {
     renameSync(tmp, this.file)
   }
 }
+
+/**
+ * 已删任务会话墓碑（v2.2.1）：baseDir/deleted-sessions.json。
+ * 用户删除任务后其 claude 会话 jsonl 仍留在磁盘/VM（~/.claude/projects），
+ * 连接成功的增量导入（runDeferredImports）与「导入历史会话」会把它当新会话
+ * 重新拉回——实测「删掉的任务重连后又显示出来」。墓碑按 sessionId（===
+ * 任务 id，types.ts 契约）记录删除意图，导入侧跳过（session-import opts）。
+ * 原子写与 TaskStore 同配方；load 容错（缺失/损坏 → 空表）；不设上限
+ * （条目=uuid 字符串，量级可忽略）。
+ */
+export class SessionTombstoneStore {
+  private readonly file: string
+
+  constructor(baseDir: string) {
+    this.file = join(baseDir, 'deleted-sessions.json')
+  }
+
+  all(): string[] {
+    return this.load()
+  }
+
+  has(sessionId: string): boolean {
+    return this.load().includes(sessionId)
+  }
+
+  add(sessionId: string): void {
+    const all = this.load()
+    if (all.includes(sessionId)) return
+    this.save([...all, sessionId])
+  }
+
+  private load(): string[] {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(this.file, 'utf8'))
+      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : []
+    } catch {
+      return []
+    }
+  }
+
+  private save(entries: string[]): void {
+    const tmp = `${this.file}.tmp`
+    writeFileSync(tmp, JSON.stringify(entries, null, 2), 'utf8')
+    renameSync(tmp, this.file)
+  }
+}

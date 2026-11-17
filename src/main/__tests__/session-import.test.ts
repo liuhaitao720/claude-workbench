@@ -11,12 +11,13 @@ import {
   mungePath,
   type SessionMeta
 } from '../session-import'
-import { TaskStore } from '../task-store'
+import { SessionTombstoneStore, TaskStore } from '../task-store'
 
 // ── 单元域（session-import 纯 node，无 electron 依赖）─────────────────
 
 const T1 = '2026-10-01T10:00:00.000Z'
 const T2 = '2026-10-02T10:00:00.000Z'
+const T3 = '2026-10-04T10:00:00.000Z'
 const MTIME = new Date('2026-10-03T12:00:00.000Z')
 
 /** fixture 根（会话存储根 = root/<munged-dir>/<sessionId>.jsonl） */
@@ -350,6 +351,48 @@ describe('importTasksFromSessionsImpl（真实 ProjectStore/TaskStore）', () =>
       await expect(
         importTasksFromSessionsImpl('no-such-project', projects, tasks, { projectsRoot: () => root })
       ).rejects.toThrow(/project not found/)
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  // v2.2.1 回归锚点：用户实测「删掉的任务重连后又显示出来」——连接成功的增量
+  // 导入把磁盘/VM 上仍在的 jsonl 当新会话拉回。墓碑（skipSessionIds）必须拦住。
+  it('v2.2.1 墓碑：已删任务的会话 jsonl 仍在 → 不再导入复活（SessionTombstoneStore 落盘往返）', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'cwb-import-impl-'))
+    const root = makeRoot()
+    try {
+      const projects = new ProjectStore(base)
+      const tasks = new TaskStore(base)
+      const tombstones = new SessionTombstoneStore(base)
+      const projDir = 'D:\\fake\\tomb'
+      const project = projects.add(projDir, false)
+      const kept = '11111111-2222-4333-8444-555555555555'
+      const deleted = '66666666-7777-4888-9999-aaaaaaaaaaaa'
+      writeSession(root, projDir, kept, [userLine('保留的会话', { timestamp: T1 })])
+      writeSession(root, projDir, deleted, [userLine('已删任务的会话', { timestamp: T2 })])
+
+      // 首次导入两个都进；随后用户删除后者（removeTask 链路：tasks.remove + 墓碑）
+      const first = await importTasksFromSessionsImpl(project.id, projects, tasks, {
+        projectsRoot: () => root
+      })
+      expect(first.map((t) => t.id).sort()).toEqual([kept, deleted].sort())
+      tasks.remove(deleted)
+      tombstones.add(deleted)
+
+      // 重连增量导入（等价手动导入）：墓碑拦截已删会话，其余新会话正常进
+      const fresh = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff'
+      writeSession(root, projDir, fresh, [userLine('删后才出现的新会话', { timestamp: T3 })])
+      const second = await importTasksFromSessionsImpl(project.id, projects, tasks, {
+        projectsRoot: () => root,
+        skipSessionIds: new Set(tombstones.all())
+      })
+      expect(second.map((t) => t.id)).toEqual([fresh]) // 已删的不复活、已有的不重复
+
+      // 墓碑持久化往返（重启后仍拦）：新 store 实例读同一 baseDir
+      expect(new SessionTombstoneStore(base).all()).toEqual([deleted])
+      expect(tasks.get(deleted)).toBeUndefined()
     } finally {
       rmSync(base, { recursive: true, force: true })
       rmSync(root, { recursive: true, force: true })

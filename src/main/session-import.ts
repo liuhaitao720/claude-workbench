@@ -319,12 +319,19 @@ export async function listSessions(
   return out
 }
 
-export interface ImportTasksOptions extends ListSessionsOptions {}
+export interface ImportTasksOptions extends ListSessionsOptions {
+  /**
+   * v2.2.1 已删任务会话墓碑（sessionId 集）：用户删除的任务不因磁盘/VM 上
+   * jsonl 仍在而被增量导入复活（runDeferredImports 每次连接成功都会重扫）。
+   */
+  skipSessionIds?: ReadonlySet<string>
+}
 
 /**
  * 为项目导入 claude 历史会话任务（幂等：tasks.json 已有相同 sessionId 的任务跳过，
- * 全局查重——同一会话只归属一个项目记录）。逐个 upsert 落盘，返回新增列表（空数组=
- * 无会话或全部已导入）。广播由 ipc.ts 组合根负责（本函数仅持久化，可测性）。
+ * 全局查重——同一会话只归属一个项目记录；skipSessionIds 墓碑同样跳过——用户
+ * 删除意图优先于磁盘现状）。逐个 upsert 落盘，返回新增列表（空数组=无会话或
+ * 全部已导入）。广播由 ipc.ts 组合根负责（本函数仅持久化，可测性）。
  */
 export async function importTasksFromSessionsImpl(
   projectId: string,
@@ -339,6 +346,7 @@ export async function importTasksFromSessionsImpl(
   const added: TaskRecord[] = []
   for (const session of sessions) {
     if (existing.has(session.sessionId)) continue
+    if (opts.skipSessionIds?.has(session.sessionId)) continue // v2.2.1 墓碑：已删任务不复活
     const record: TaskRecord = {
       id: session.sessionId,
       projectId,

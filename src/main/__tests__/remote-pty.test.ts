@@ -295,6 +295,23 @@ describe('S4 RemotePtyManager 状态机（FakeTransport 帧级 mock）', () => {
     expect(mgr.pid('t-alive')).toBe(7)
   })
 
+  it('⑩ v2.2.1 attach 后补发 task.resize + task.meta（长路径换行错乱/推送显示 id 修复）', async () => {
+    const { mgr, transport } = makeManager()
+    transport.listPayload = [{ taskId: 't-adopt', pid: 9, attached: false }]
+    transport.connectImpl = async () => {
+      transport.connected = true
+    }
+    await mgr.spawnClaude('t-adopt', [], '/cwd', undefined, '我的任务', '我的项目')
+    // alive 路径：attach 后紧跟 resize（当前尺寸）与 meta（name+projectName）
+    expect(transport.framesOf('task.resize')).toEqual([
+      { type: 'task.resize', taskId: 't-adopt', cols: 80, rows: 24 }
+    ])
+    expect(transport.framesOf('task.meta')).toEqual([
+      { type: 'task.meta', taskId: 't-adopt', name: '我的任务', projectName: '我的项目' }
+    ])
+    expect(mgr.pid('t-adopt')).toBe(9)
+  })
+
   it('⑨ 重启后首连认领（v2.0.1——用户实测首开无上下文根因）：无 spawn/无传输 → connected 事件自建传输 + runningTaskIds 认领 attach（含 pid 回填）', async () => {
     const data: PtyDataEvent[] = []
     const exits: string[] = []

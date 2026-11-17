@@ -91,6 +91,8 @@ export type ClientFrame =
   | { type: 'task.write'; taskId: string; data: string }
   /** 栅格同步（同尺寸 resize 是 no-op；re-attach 重绘走 task.attach）【S4 / S3】 */
   | { type: 'task.resize'; taskId: string; cols: number; rows: number }
+  /** v2.2.1 任务元数据上行（重连认领/resume 再挂后补传显示名——服务器推送文案用） */
+  | { type: 'task.meta'; taskId: string; name?: string; projectName?: string }
   /** 杀任务（显式停止；PTY 由 server 端 terminate）【S4 / S3】 */
   | { type: 'task.kill'; taskId: string; rid?: string }
   /**

@@ -265,6 +265,7 @@ export class ServerNotifier {
       if (last !== undefined && at - last < PUSH_DEBOUNCE_MS) return 'skipped-debounced'
       this.awaitingAt.set(taskId, at)
       this.pushText(config, this.awaitingText(taskId, at, url), taskId)
+      this.opts.log?.('info', `notify pushed awaiting (${event}) (${taskId.slice(0, 8)})`)
       return 'pushed'
     }
     if (event === 'Stop') {
@@ -273,6 +274,7 @@ export class ServerNotifier {
       if (last !== undefined && at - last < STOP_THROTTLE_MS) return 'skipped-debounced'
       this.stopAt.set(taskId, at)
       this.armStopMerge(taskId, config, at, parseHookBody(bodyText))
+      this.opts.log?.('info', `notify pushed stop-merge (${taskId.slice(0, 8)})`)
       return 'pushed'
     }
     if (event === 'StopFailure') {
@@ -280,6 +282,7 @@ export class ServerNotifier {
       this.cancelPendingStop(taskId)
       const detail = pickFailureLine(parseHookBody(bodyText))
       this.pushText(config, this.failureText(taskId, at, detail), taskId)
+      this.opts.log?.('info', `notify pushed failure (${taskId.slice(0, 8)})`)
       return 'pushed'
     }
     return 'ignored'

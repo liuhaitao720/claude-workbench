@@ -15,6 +15,7 @@ const CLIENT_FRAME_TYPES = [
   'task.spawn',
   'task.write',
   'task.resize',
+  'task.meta',
   'task.kill',
   'task.attach',
   'task.detach',
@@ -164,6 +165,7 @@ export function decodeClientFrame(text: string): ClientFrame {
     case 'task.resize':
     case 'task.attach':
     case 'task.detach':
+    case 'task.meta':
       expect(raw, 'taskId', str)
       break
     case 'task.kill':

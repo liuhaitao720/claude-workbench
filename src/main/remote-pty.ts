@@ -114,6 +114,11 @@ export interface RemotePtyManagerOptions {
    */
   hookSink?: () => Promise<{ host: string; port: number } | null>
   /**
+   * v2.2.1 任务元数据源（重连认领后 task.meta 补传——客户端 TaskRecord/项目名权威）；
+   * manager 自身不读 tasks/projects，经组合根注入。
+   */
+  taskMetaOf?: (taskId: string) => { name?: string; projectName?: string } | undefined
+  /**
    * v2.0.1（用户实测「重启后首开远程任务无上下文」根因修复）：本连接下记录为
    * running 的任务 id（组合根注入——tasks.json 归一后仍 running 的远程任务）。
    * reconcile 对账时除已知注册表外，**主动认领**这些任务的 server 存活实例
@@ -162,9 +167,10 @@ export class RemotePtyManager implements PtyBackend {
     claudeArgs: string[],
     cwd: string,
     _providerEnv?: Record<string, string>,
-    name?: string
+    name?: string,
+    projectName?: string
   ): Promise<void> {
-    await this.spawnOrAttach(taskId, [this.claudeBin, ...claudeArgs], cwd, name)
+    await this.spawnOrAttach(taskId, [this.claudeBin, ...claudeArgs], cwd, name, projectName)
   }
 
   /** 通用 spawn（argv[0]=可执行文件）；异步失败经 onServerLog 降级（接口为 void） */
@@ -360,7 +366,8 @@ export class RemotePtyManager implements PtyBackend {
     taskId: string,
     argv: string[],
     cwd: string,
-    name?: string
+    name?: string,
+    projectName?: string
   ): Promise<void> {
     if (this.tasks.has(taskId)) throw new Error(`PTY already running for task ${taskId}`)
     if (this.spawning.has(taskId)) throw new Error(`PTY spawn in progress for task ${taskId}`)
@@ -376,6 +383,12 @@ export class RemotePtyManager implements PtyBackend {
         : undefined
       if (alive !== undefined) {
         await t.request({ type: 'task.attach', taskId })
+        // v2.2.1 修复（用户实测长路径换行错乱）：attach 后必须把当前列宽下发——
+        // 服务端 PTY 保留的是旧会话宽度，不重设则 readline 按旧列换行 → 显示错乱
+        t.send({ type: 'task.resize', taskId, cols: size.cols, rows: size.rows })
+        // v2.2.1 修复（推送显示 id）：再挂时补传显示名（resume 旧会话/重启认领场景
+        // 服务端注册表可能是旧名或无名）
+        this.sendTaskMeta(t, taskId, name, projectName)
         this.tasks.set(taskId, {
           ...(typeof alive['pid'] === 'number' ? { pid: alive['pid'] } : {}),
           cols: size.cols,
@@ -396,7 +409,9 @@ export class RemotePtyManager implements PtyBackend {
           ...(settingsPath !== undefined ? { settingsPath } : {}),
           envDenylist: [...REMOTE_ENV_DENYLIST],
           // v2.0.2：任务名上行（服务器侧 webhook 推送文案；旧 server 忽略多余字段）
-          ...(name !== undefined && name !== '' ? { name } : {})
+          ...(name !== undefined && name !== '' ? { name } : {}),
+          // v2.2.1：项目名上行（推送「任务（项目）」文案）
+          ...(projectName !== undefined && projectName !== '' ? { projectName } : {})
         }
       })
       // spawn→attach 背靠背（契约注释）：server 侧 spawn 不自动挂 sink，须显式 attach
@@ -410,6 +425,28 @@ export class RemotePtyManager implements PtyBackend {
     } finally {
       this.spawning.delete(taskId)
     }
+  }
+
+  /**
+   * v2.2.1 任务元数据补传（task.meta 帧）：显式入参优先，缺省回退 opts 注入的
+   * taskMetaOf（重连认领路径——客户端 TaskRecord 是权威）。旧 server 忽略未知帧。
+   */
+  private sendTaskMeta(
+    t: ServerTransport,
+    taskId: string,
+    name?: string,
+    projectName?: string
+  ): void {
+    const injected = this.opts.taskMetaOf?.(taskId)
+    const n = name ?? injected?.name
+    const p = projectName ?? injected?.projectName
+    if ((n === undefined || n === '') && (p === undefined || p === '')) return
+    t.send({
+      type: 'task.meta',
+      taskId,
+      ...(n !== undefined && n !== '' ? { name: n } : {}),
+      ...(p !== undefined && p !== '' ? { projectName: p } : {})
+    })
   }
 
   /** 断连（reconnecting/offline/connecting）：all-detached——注册表保留（running 语义） */
@@ -463,6 +500,9 @@ export class RemotePtyManager implements PtyBackend {
         if (summary !== undefined) {
           try {
             await t.request({ type: 'task.attach', taskId })
+            // v2.2.1：认领/再挂后重设列宽（服务端 PTY 旧宽度→显示错乱）+ 补传元数据
+            t.send({ type: 'task.resize', taskId, cols: this.lastSize.get(taskId)?.cols ?? DEFAULT_SIZE.cols, rows: this.lastSize.get(taskId)?.rows ?? DEFAULT_SIZE.rows })
+            this.sendTaskMeta(t, taskId)
             let entry = this.tasks.get(taskId)
             if (entry === undefined) {
               // v2.0.1 认领路径：重启后首连——记录 running 但客户端注册表无此任务
@@ -515,6 +555,11 @@ export interface RemotePtyHubOptions {
    * manager 认领对账用（重启后首连 attach 保活任务；见 RemotePtyManagerOptions）
    */
   runningTaskIdsOf?: (connectionId: string) => string[]
+  /**
+   * v2.2.1 任务元数据源（task.meta 补传——组合根注入 TaskRecord/项目名；
+   * manager attach/认领后上行，服务器推送文案用）。connectionId 便于按连接解析。
+   */
+  taskMetaOf?: (connectionId: string, taskId: string) => { name?: string; projectName?: string } | undefined
   /**
    * hooks 反向转发接收端（ipc 注入 task-activity 的 127.0.0.1 随机口；A3 接线：
    * VM 侧 forwardIn 入站流 pipe 到这里）。未提供时入站流直接断开（禁乱拨）。
@@ -601,6 +646,9 @@ export class RemotePtyHub {
         ...(this.opts.claudeBin !== undefined ? { claudeBin: this.opts.claudeBin } : {}),
         ...(this.opts.runningTaskIdsOf !== undefined
           ? { runningTaskIds: () => this.opts.runningTaskIdsOf!(connectionId) }
+          : {}),
+        ...(this.opts.taskMetaOf !== undefined
+          ? { taskMetaOf: (taskId: string) => this.opts.taskMetaOf!(connectionId, taskId) }
           : {}),
         // v2.0.2：hook 回放落点透传（server 侧 hook 接收的客户端消费端）
         ...(this.opts.hookSink !== undefined

@@ -683,6 +683,10 @@ function createHandlers(server: CwbServer, ctx: FrameContext): Record<ClientFram
         () => c.send({ type: 'answer.stop', taskId: p.taskId })
       )
     },
+    'task.meta': (frame) => {
+      if (frame.type !== 'task.meta') return
+      server.registry.updateMeta(frame.taskId, frame.name, frame.projectName)
+    },
     'answer.cancel': (frame) => {
       if (frame.type !== 'answer.cancel') return
       server.answer.cancelFromDesktop(frame.pendingId, frame.taskId)
@@ -692,7 +696,7 @@ function createHandlers(server: CwbServer, ctx: FrameContext): Record<ClientFram
 
 /** 8.1=A 兜底：stderr 仅元数据（不落盘；终端内容永不经此） */
 function defaultLog(level: 'info' | 'warn' | 'error', message: string): void {
-  process.stderr.write(`[cwb-server:${level}] ${message}\n`)
+  process.stderr.write(`[cwb-server:${level} ${new Date().toISOString()}] ${message}\n`)
 }
 
 /** 错误脱敏：只留 message 首段（无堆栈、无多行） */

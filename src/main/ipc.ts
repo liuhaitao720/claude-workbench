@@ -64,13 +64,13 @@ import { RemotePtyHub } from './remote-pty'
 import {
   createRemoteSessionReader,
   importTasksFromSessionsImpl,
-  type ListSessionsOptions
+  type ImportTasksOptions
 } from './session-import'
 import { SkillsStore } from './skills-store'
 import { PluginSkills, isValidPluginId, openRemoteClaudeHome } from './plugin-skills'
 import { SkillMarket, validateInstallTarget } from './skill-market'
 import { startTaskActivityServer, type TaskActivityHandle } from './task-activity'
-import { TaskStore } from './task-store'
+import { SessionTombstoneStore, TaskStore } from './task-store'
 import { StubConnectionManager, type ConnectionManager } from './ssh/connection-manager'
 import {
   ConnectionsStore,
@@ -429,6 +429,8 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   const baseDir = app.getPath('userData')
   const projects = new ProjectStore(baseDir)
   const tasks = new TaskStore(baseDir)
+  // v2.2.1 已删任务会话墓碑：removeTask 记录 / 导入跳过（防增量导入复活已删任务）
+  const deletedSessions = new SessionTombstoneStore(baseDir)
   // 应用重启归一：本地任务 PTY 已死 → stopped；远程任务不归一（5.9=b server 保活，
   // 保持 running 语义——重连后 5.6 自动恢复视图，M11 分流）
   tasks.normalizeOnStartup((t) => {
@@ -672,6 +674,17 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       }
       return out
     },
+    // v2.2.1：task.meta 补传源（attach/认领后上行——服务器推送文案用显示名+项目名）
+    taskMetaOf: (cid, taskId) => {
+      const t = tasks.get(taskId)
+      if (t === undefined) return undefined
+      const pc = projects.get(t.projectId)
+      if (pc === undefined || pc.connectionId !== cid) return undefined
+      return {
+        ...(t.name !== '' ? { name: t.name } : {}),
+        ...(pc.name !== '' ? { projectName: pc.name } : {})
+      }
+    },
     // v2.2.0 手机答复帧：转本地答复桥（本地挂起 resolve / 桌面横幅 / 手机停止）
     answer: {
       onPending: (cid, pending, url) => answerBridgeRef?.handleServerPending(cid, pending, url),
@@ -892,9 +905,11 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       project?.connectionId !== undefined && project.connectionId !== ''
         ? project.connectionId
         : undefined
-    let opts: ListSessionsOptions = {}
+    // v2.2.1 墓碑集随每次导入现取（远程/本地两分支共用基底——远程分支不得整体覆写掉）
+    let opts: ImportTasksOptions = { skipSessionIds: new Set(deletedSessions.all()) }
     if (remoteCid !== undefined) {
       opts = {
+        ...opts,
         reader: createRemoteSessionReader(connection, remoteCid),
         resolveProjectsRoot: async () => {
           const r = await connection.exec(remoteCid, `printf %s "$HOME"`)
@@ -1083,7 +1098,8 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
           }),
           cwd,
           undefined,
-          name // v2.0.2：任务名随 spawn 上行（服务器侧 webhook 推送文案）
+          name, // v2.0.2：任务名随 spawn 上行（服务器侧 webhook 推送文案）
+          projects.get(projectId)?.name // v2.2.1：项目名（推送「任务（项目）」）
         )
       } else {
         // settings 写盘入 try：失败与 spawn 失败同路径清理 worktree/states（评审 #5）
@@ -1166,7 +1182,10 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
             skipPermissions: task.skipPermissions === true,
             settingsPath
           }),
-          task.cwd
+          task.cwd,
+          undefined,
+          task.name, // v2.2.1 修复：resume 未传名——服务器推送显示 id
+          projects.get(task.projectId)?.name
         )
       } else {
         const settingsPath = await activity.buildSettings(task.id)
@@ -1214,6 +1233,9 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       pty.forget(taskId)
     }
     tasks.remove(taskId)
+    // v2.2.1 墓碑：会话 jsonl 仍在磁盘/VM 上——不记则连接成功的增量导入会把
+    // 已删任务当新会话拉回（实测「删掉的任务重连后又显示出来」）
+    deletedSessions.add(task.sessionId)
     activity.forget(taskId) // v3.2 R8：settings 文件 + 内存态清理（远端文件留置——见 S4 concerns）
     if (opts.deleteWorktree && task.worktreePath) {
       const project = projects.get(task.projectId)
