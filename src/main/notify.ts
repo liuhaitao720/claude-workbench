@@ -369,20 +369,10 @@ export class NotifyService {
     return 'pushed'
   }
 
-  /** 应用退出前把 10 秒窗内的 Stop 立即推掉（不丢消息），并清理定时器 */
-  flush(): void {
-    const config = this.load()
-    for (const [taskId, pending] of [...this.pendingStops]) {
-      clearTimeout(pending.timer)
-      this.pendingStops.delete(taskId)
-      if (config.enabled && config.url.length > 0) {
-        void this.push(config, this.stopText(taskId, pending.at, pending.summary), taskId)
-      }
-    }
-    this.dispose()
-  }
-
-  /** 丢弃全部定时器（不推送；进程退出路径） */
+  /**
+   * 丢弃全部定时器（不推送）。v2.2.2（用户 2026-11-17 指令 #7）：应用退出是用户
+   * 在场的动作——合并窗内未推的 Stop 不再补推，直接丢弃（原 flush 补推已移除）。
+   */
   dispose(): void {
     for (const [, p] of this.pendingStops) clearTimeout(p.timer)
     this.pendingStops.clear()

@@ -1099,10 +1099,13 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   quitCleanupDone = true
   try {
+    // v2.2.2（用户 2026-11-17 指令）：退出是用户在场的动作——杀树引发的「已退出」
+    // 终态推送全部静默（须先于 killAllTrees 置位，PTY onExit 走 markStatus 查此标记）
+    currentCtx?.markQuitting()
     currentCtx?.pty.killAllTrees()
     currentCtx?.cli.killAllTrees()
-    // v2.2.0：10 秒合并窗内的「完成」推送先推掉（退出即弃会丢消息）
-    currentCtx?.notify.flush()
+    // v2.2.2（#7 指令）：10 秒合并窗内的「完成」不再补推——直接丢弃并清定时器
+    currentCtx?.notify.dispose()
   } catch {
     // 杀进程失败不阻断退出（残留风险低于无法退出）
   }

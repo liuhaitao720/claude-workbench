@@ -141,8 +141,9 @@ export class RemotePtyManager implements PtyBackend {
   /**
    * 断连期间到达的显式停止（stopTask → kill）：帧发不出去时暂存，重连对账后
    * 补发（用户停止意图不因断连丢失）；task.exit/forget 到达即清除。
+   * v2.2.2：值=quiet 标记（关任务窗口的静默停止——补发不丢推送抑制语义）。
    */
-  private readonly pendingKills = new Set<string>()
+  private readonly pendingKills = new Map<string, boolean>()
   /** 重连对账串行化（状态事件抖动时防并发 task.list/attach 交错） */
   private reconcileChain: Promise<void> = Promise.resolve()
   private readonly unsubState: (() => void) | null
@@ -197,10 +198,12 @@ export class RemotePtyManager implements PtyBackend {
   /**
    * 显式停止：协议 task.kill（server 端 terminate PTY——5.1/A 唯一杀任务入口）。
    * 断连期间帧不可达 → 暂存 pendingKills，重连对账后补发（停止意图不丢失）。
+   * v2.2.2 quiet=true：关任务窗口引发的停止——帧带 quiet，server 侧不推「已停止」。
    */
-  kill(taskId: string): void {
-    this.pendingKills.add(taskId)
-    this.transport?.send({ type: 'task.kill', taskId })
+  kill(taskId: string, quiet?: boolean): void {
+    const q = quiet === true
+    this.pendingKills.set(taskId, q)
+    this.transport?.send({ type: 'task.kill', taskId, quiet: q || undefined })
   }
 
   /** 注册表态（含断连期间——5.9=b 语义：server 侧保活即视为 running，S6 冻结层） */
@@ -482,8 +485,8 @@ export class RemotePtyManager implements PtyBackend {
       return
     }
     // 断连期间积压的显式停止：补发（发送失败不重试——下一次断连/重连周期再补）
-    for (const taskId of [...this.pendingKills]) {
-      t.send({ type: 'task.kill', taskId })
+    for (const [taskId, quiet] of [...this.pendingKills]) {
+      t.send({ type: 'task.kill', taskId, quiet: quiet || undefined })
     }
     // v2.0.1：移除 tasks.size===0 早退——候选可纯来自 adopt（重启后首连认领）
     try {

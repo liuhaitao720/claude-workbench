@@ -40,10 +40,11 @@ export function TabBar() {
   /**
    * 关 tab：运行中先停任务再关视图（停止失败也关视图——后台孤儿会话不该占着 tab；
    * 任务行仍可「恢复」）。非 running（stopped/exited）只需关视图。
+   * v2.2.2：quiet 停止——关窗口是用户本人在场的动作，「已停止」不推手机（2026-11-17 指令）。
    */
   const closeTabAndStop = (task: TaskRecord): void => {
     closeTab(task.id)
-    if (task.status === 'running') void stopTaskFlow(task.id)
+    if (task.status === 'running') void stopTaskFlow(task.id, { quiet: true })
   }
 
   const openTasks: TaskRecord[] = []

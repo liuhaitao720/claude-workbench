@@ -489,7 +489,7 @@ describe('v2.2.0 T2 完成/停止/异常推送（hook + 终态）', () => {
     expect(callCount()).toBe(0)
   })
 
-  it('未启用/空 URL：skipped-disabled；flush 在退出前把窗内 Stop 推掉', () => {
+  it('未启用/空 URL：skipped-disabled；退出丢弃窗内 Stop 不补推（v2.2.2 #7 指令）', () => {
     const off = newSvc()
     expect(off.onHookEvent('t-1', 'Stop')).toBe('skipped-disabled')
     expect(off.onTaskExit('t-1', 0, false)).toBe('skipped-disabled')
@@ -498,11 +498,10 @@ describe('v2.2.0 T2 完成/停止/异常推送（hook + 终态）', () => {
     const svc = newSvc()
     svc.setWebhook(WEBHOOK, true)
     svc.onHookEvent('t-1', 'Stop', JSON.stringify({ last_assistant_message: '收尾' }))
-    svc.flush()
-    expect(callCount()).toBe(1)
-    expect(textOf(0)).toContain('收尾')
+    svc.dispose()
+    expect(callCount()).toBe(0) // 不补推
     vi.advanceTimersByTime(STOP_MERGE_MS)
-    expect(callCount()).toBe(1) // 定时器已清理，不重复推
+    expect(callCount()).toBe(0) // 定时器已清理，窗到期也不再推
   })
 
   it('远程 override：用 VM 侧配置推送且不受本地 events 开关影响', () => {

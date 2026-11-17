@@ -170,7 +170,8 @@ describe('任务行操作（S6-B：⋯ 溢出菜单 + 单行化）', () => {
     expect(screen.getByRole('menuitem', { name: '停止' })).toBeDefined()
     expect(screen.queryByRole('menuitem', { name: '恢复' })).toBeNull()
     fireEvent.click(screen.getByRole('menuitem', { name: '停止' }))
-    await waitFor(() => expect(api.stopTask).toHaveBeenCalledWith('tr'))
+    // v2.2.2（#9 指令）：显式停止一律 quiet——菜单停止也不推「已停止」
+    await waitFor(() => expect(api.stopTask).toHaveBeenCalledWith('tr', { quiet: true }))
   })
 
   it('stopped 行菜单：有「恢复」无「停止」→ resumeTask(taskId)', async () => {
@@ -227,7 +228,8 @@ describe('任务行操作（S6-B：⋯ 溢出菜单 + 单行化）', () => {
     await waitFor(() => expect(screen.queryByRole('tab')).toBeNull())
     expect(taskRow('tr')).toBeDefined() // 任务行仍在（可恢复）
     // v1.1.0：× 关闭运行中的任务会一并停止（用户反馈「关了窗口退出仍提示有任务在运行」）
-    await waitFor(() => expect(api.stopTask).toHaveBeenCalledWith('tr'))
+    // v2.2.2：关窗口引发的停止=quiet（不推「已停止」到手机）
+    await waitFor(() => expect(api.stopTask).toHaveBeenCalledWith('tr', { quiet: true }))
     // v0.5① 回归断言：菜单不再有「打开」（与单击行完全重复）
     openTaskMenu('tr')
     expect(screen.queryByRole('menuitem', { name: '打开' })).toBeNull()

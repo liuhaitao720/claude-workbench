@@ -60,7 +60,8 @@ const api: CWBApi = {
   createTask: (projectId, name, opts) =>
     ipcRenderer.invoke(IpcChannels.TasksCreate, projectId, name, opts) as Promise<TaskRecord>,
   resumeTask: (taskId) => ipcRenderer.invoke(IpcChannels.TasksResume, taskId) as Promise<TaskRecord>,
-  stopTask: (taskId) => ipcRenderer.invoke(IpcChannels.TasksStop, taskId) as Promise<void>,
+  stopTask: (taskId, opts) =>
+    ipcRenderer.invoke(IpcChannels.TasksStop, taskId, opts) as Promise<void>,
   removeTask: (taskId, opts) =>
     ipcRenderer.invoke(IpcChannels.TasksRemove, taskId, opts) as Promise<void>,
   renameTask: (taskId, name) =>

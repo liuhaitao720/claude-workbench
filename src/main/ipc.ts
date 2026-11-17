@@ -21,6 +21,7 @@ import type {
   RemoteProxyStatus,
   RemoteServerLogEvent,
   RemoveTaskOptions,
+  StopTaskOptions,
   SkillInfo,
   TaskActivityEvent,
   TaskRecord
@@ -269,6 +270,11 @@ export interface AppContext {
   readonly pluginSkills: PluginSkills
   /** v0.5④N webhook 推送（awaiting 防抖推送；配置 userData/notify.json） */
   readonly notify: NotifyService
+  /**
+   * v2.2.2（用户 2026-11-17 指令）：应用退出前调用——before-quit 杀本地任务树引发的
+   * 「已退出」终态推送全部静默（退出是用户在场的动作）。幂等；此后 markStatus 不再外送推送。
+   */
+  markQuitting(): void
   /** smoke:report 回执累积（S4：renderer→main 冒烟回执；编排侧轮询消费） */
   readonly smokeReports: string[]
   /**
@@ -281,7 +287,7 @@ export interface AppContext {
   renameProject(id: string, name: string): Promise<ProjectRecord>
   createTask(projectId: string, name: string, opts: CreateTaskOptions): Promise<TaskRecord>
   resumeTask(taskId: string): Promise<TaskRecord>
-  stopTask(taskId: string): Promise<void>
+  stopTask(taskId: string, opts?: StopTaskOptions): Promise<void>
   removeTask(taskId: string, opts: RemoveTaskOptions): Promise<void>
   renameTask(taskId: string, name: string): Promise<TaskRecord>
   /** 切换"跳过权限确认"（v0.3.1 契约第 17 法）：仅元数据，下次 spawn 生效 */
@@ -394,8 +400,8 @@ export class RoutingPtyManager implements PtyBackend {
     this.backendFor(taskId).resize(taskId, cols, rows)
   }
 
-  kill(taskId: string): void {
-    this.backendFor(taskId).kill(taskId)
+  kill(taskId: string, quiet?: boolean): void {
+    this.backendFor(taskId).kill(taskId, quiet)
   }
 
   isRunning(taskId: string): boolean {
@@ -447,17 +453,22 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     onTaskUpdateHook?.()
   }
 
+  /** v2.2.2：before-quit 置位——退出应用杀任务树的「已退出」推送全部静默（#12 指令） */
+  let quitting = false
+
   /**
    * 唯一的 running→终态迁移路径（显式 stop 与 PTY onExit 共用；幂等，防双写双播）。
    * v0.3.2：区分终态——stopTask 落 'stopped'，非显式停止的 onExit 落 'exited'（跟踪会话异常退出）。
+   * v2.2.2 quiet=true：关任务窗口/显式停止引发的停止——跳过终态推送（用户 2026-11-17 指令）；
+   * markQuitting() 后（应用退出杀树）「已退出」同理全部静默。
    */
-  const markStatus = (taskId: string, status: 'stopped' | 'exited', exitCode?: number): void => {
+  const markStatus = (taskId: string, status: 'stopped' | 'exited', exitCode?: number, quiet = false): void => {
     const task = tasks.get(taskId)
     if (!task || task.status !== 'running') return
     const updated = tasks.upsert({ ...task, status, lastActiveAt: new Date().toISOString() })
     broadcastTaskUpdate(updated)
     // v2.2.0 A 链：终态推送（stopped=显式停止；exited=进程退出，exitCode 透传）
-    routeNotifyExit(taskId, status, status === 'stopped' ? 0 : (exitCode ?? -1))
+    if (!quiet && !quitting) routeNotifyExit(taskId, status, status === 'stopped' ? 0 : (exitCode ?? -1))
     // v2.0.2 任务结束审查提示（AI 开发完成 → toast [审查]）；尽力而为失败静默
     maybeReviewHint(task)
   }
@@ -719,7 +730,9 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       }
     },
     stopTask: (taskId) => {
-      void stopTask(taskId).catch(() => {
+      // v2.2.2（用户 2026-11-17 指令）：手机发起的停止同样不推「已停止」——
+      // 应答页自身即有停止反馈，推送是重复打扰
+      void stopTask(taskId, { quiet: true }).catch(() => {
         /* 手机停止失败静默（任务可能已退出） */
       })
     },
@@ -763,8 +776,19 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
       })
   }
 
+  /**
+   * v2.2.2（用户 2026-11-17 指令）：推送的「桌面在场」门控——任一任务终端
+   * presenceMin 分钟内有键入（AnswerBridge 键入心跳）= 人在电脑前，awaiting/
+   * 完成/异常/退出全部静默。本地与远程（旧 server 补推）同门；新 server 侧
+   * 有对称门控（cwb-server hook 路由/onTaskExit）。手动「测试推送」不经此。
+   */
+  function desktopNotifyPresent(): boolean {
+    return !answerBridge.desktopAway(notify.getAnswer().presenceMin)
+  }
+
   function routeNotifyActivity(e: TaskActivityEvent): void {
     if (e.activity !== 'awaiting') return
+    if (desktopNotifyPresent()) return // v2.2.2 在场静默
     const cid = connectionIdOfTask(e.taskId)
     if (cid === undefined) {
       notify.onActivityEvent(e)
@@ -783,6 +807,7 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
    *   旧 server 由客户端按 VM 侧配置补推（配置语义与 awaiting 同源）。
    */
   function routeNotifyHookEvent(taskId: string, event: string, body: string): void {
+    if (desktopNotifyPresent()) return // v2.2.2 在场静默
     const cid = connectionIdOfTask(taskId)
     if (cid === undefined) {
       notify.onHookEvent(taskId, event, body)
@@ -797,6 +822,7 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
   /** v2.2.0 A 链：任务终态（markStatus 调用）→ 完成并退出/停止/异常退出文案 */
   function routeNotifyExit(taskId: string, status: 'stopped' | 'exited', exitCode: number): void {
     const stopped = status === 'stopped'
+    if (desktopNotifyPresent()) return // v2.2.2 在场静默（app-quit 杀树已由 quitting 门控）
     const cid = connectionIdOfTask(taskId)
     if (cid === undefined) {
       notify.onTaskExit(taskId, exitCode, stopped)
@@ -1211,12 +1237,13 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     return updated
   }
 
-  async function stopTask(taskId: string): Promise<void> {
+  async function stopTask(taskId: string, opts: StopTaskOptions = {}): Promise<void> {
     const task = tasks.get(taskId)
     if (!task) throw new Error(`task not found: ${taskId}`)
     // 显式停止先落 'stopped' 再 kill——防 onExit 抢先标 'exited'（v0.3.2 终态区分）
-    markStatus(taskId, 'stopped')
-    pty.kill(taskId)
+    // v2.2.2 quiet：关任务窗口停止（本地跳过终态推送；远程 task.kill 帧透传 server 侧静默）
+    markStatus(taskId, 'stopped', undefined, opts.quiet === true)
+    pty.kill(taskId, opts.quiet === true)
   }
 
   async function removeTask(taskId: string, opts: RemoveTaskOptions): Promise<void> {
@@ -1405,6 +1432,10 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     skillMarket,
     pluginSkills,
     notify,
+    /** v2.2.2：main.ts before-quit 先于 killAllTrees 调用（AppContext 契约） */
+    markQuitting: () => {
+      quitting = true
+    },
     providers,
     localProxy,
     resolveProviderEnv,
@@ -1460,7 +1491,9 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     ctx.createTask(projectId, name, opts)
   )
   ipcMain.handle(IpcChannels.TasksResume, (_e, taskId: string) => ctx.resumeTask(taskId))
-  ipcMain.handle(IpcChannels.TasksStop, (_e, taskId: string) => ctx.stopTask(taskId))
+  ipcMain.handle(IpcChannels.TasksStop, (_e, taskId: string, opts?: StopTaskOptions) =>
+    ctx.stopTask(taskId, opts)
+  )
   ipcMain.handle(IpcChannels.TasksRemove, (_e, taskId: string, opts: RemoveTaskOptions) =>
     ctx.removeTask(taskId, opts)
   )

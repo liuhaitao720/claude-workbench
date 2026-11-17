@@ -14,6 +14,7 @@ import type {
   ProviderRegistryState,
   PtyDataEvent,
   RemoveTaskOptions,
+  StopTaskOptions,
   RemoteServerLogEvent,
   ReviewHintEvent,
   SshClosedEvent,
@@ -469,7 +470,8 @@ interface AppState {
   renameProjectFlow: (id: string, name: string) => Promise<void>
 
   createTaskFlow: (projectId: string, name: string, opts: CreateTaskOptions) => Promise<void>
-  stopTaskFlow: (taskId: string) => Promise<void>
+  /** v2.2.2 opts.quiet=关任务窗口引发的停止——不推「已停止」到手机 */
+  stopTaskFlow: (taskId: string, opts?: StopTaskOptions) => Promise<void>
   resumeTaskFlow: (taskId: string) => Promise<void>
   removeTaskFlow: (taskId: string, opts: RemoveTaskOptions) => Promise<void>
   renameTaskFlow: (taskId: string, name: string) => Promise<void>
@@ -1407,9 +1409,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }))
   },
 
-  stopTaskFlow: async (taskId) => {
+  stopTaskFlow: async (taskId, opts) => {
     try {
-      await window.cwb.stopTask(taskId)
+      await window.cwb.stopTask(taskId, opts)
       set((s) => ({
         tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'stopped' as const } : t))
       }))

@@ -225,7 +225,8 @@ export class PtyManager implements PtyBackend {
     this.ptys.get(taskId)?.resize(cols, rows)
   }
 
-  kill(taskId: string): void {
+  /** quiet 语义见 PtyBackend.kill Javadoc（本地推送抑制在 markStatus 层，此实现忽略） */
+  kill(taskId: string, _quiet?: boolean): void {
     const pty = this.ptys.get(taskId)
     if (!pty) return
     try {

@@ -51,8 +51,12 @@ export interface PtyBackend {
   write(taskId: string, data: string): void
   /** 栅格同步（Local 含尺寸记忆——恢复沿用；Remote 经协议 task.resize） */
   resize(taskId: string, cols: number, rows: number): void
-  /** 杀单个任务（幂等——未知 taskId 安全 no-op） */
-  kill(taskId: string): void
+  /**
+   * 杀单个任务（幂等——未知 taskId 安全 no-op）。quiet=true：关任务窗口引发的
+   * 停止——Remote 实现把静默标记透传 task.kill 帧（server 侧跳过「已停止」推送）；
+   * Local 实现忽略（推送抑制在 markStatus 层完成）。
+   */
+  kill(taskId: string, quiet?: boolean): void
   /** PTY 句柄是否存活 */
   isRunning(taskId: string): boolean
   /** 宿主进程 pid（v1.0.3 退出清理用）；未运行返回 undefined */

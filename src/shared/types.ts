@@ -647,6 +647,14 @@ export interface RemoveTaskOptions {
   deleteWorktree: boolean
 }
 
+export interface StopTaskOptions {
+  /**
+   * true=静默停止（关任务窗口引发）：跳过「已停止」终态推送（本地与 server 两侧）。
+   * 完成推送（Stop/StopFailure hook）不受影响。用户 2026-11-17 指令。
+   */
+  quiet?: boolean
+}
+
 /**
  * window.cwb —— preload 暴露给 renderer 的完整 API（34 法）
  * 生产者：S2（main 侧 handler）+ S1.5（preload 桥接映射）；消费者：S3（renderer）
@@ -676,8 +684,8 @@ export interface CWBApi {
   createTask(projectId: string, name: string, opts: CreateTaskOptions): Promise<TaskRecord>
   /** 恢复任务：spawn claude --resume <sessionId> -n <当前name>（cwd 不变）；仅 stopped 状态可恢复 */
   resumeTask(taskId: string): Promise<TaskRecord>
-  /** 停止任务：kill PTY → status='stopped' + onTaskUpdate 推送 */
-  stopTask(taskId: string): Promise<void>
+  /** 停止任务：kill PTY → status='stopped' + onTaskUpdate 推送；quiet=关窗口停止不推送 */
+  stopTask(taskId: string, opts?: StopTaskOptions): Promise<void>
   /** 删除任务（opts.deleteWorktree=true 时连带清理 worktree） */
   removeTask(taskId: string, opts: RemoveTaskOptions): Promise<void>
   /** 重命名任务（仅元数据 name） */

@@ -117,7 +117,8 @@ describe('TerminalPanel（xterm 实例管理）', () => {
     fireEvent.click(screen.getByRole('button', { name: '×' }))
     await waitFor(() => expect(terminalCache.size).toBe(0))
     expect(document.querySelector('li[data-task-id="t-term"]')).toBeDefined() // 任务行保留（可恢复）
-    await waitFor(() => expect(api.stopTask).toHaveBeenCalledWith('t-term'))
+    // v2.2.2：关窗口停止=quiet（终态不推送）
+    await waitFor(() => expect(api.stopTask).toHaveBeenCalledWith('t-term', { quiet: true }))
     // App 卸载：退订全局事件；此后 emit 无订阅者、无实例，无副作用
     unmount()
     expect(api.ptyDisposer).toHaveBeenCalled()

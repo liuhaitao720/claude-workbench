@@ -107,6 +107,8 @@ export class CwbServer {
   private readonly notifyHome: string
   /** 显式停止意图（task.kill 先记，退出回调取用——1.12 stopped 与 exited 分流） */
   private readonly stopIntent = new Set<string>()
+  /** 关任务窗口的静默停止（v2.2.2 用户 2026-11-17 指令：退出回调跳过「已停止」推送） */
+  private readonly quietStop = new Set<string>()
   /** 手机应答页（v2.2.0 T4；enabled 时监听 127.0.0.1） */
   private answerPage: AnswerPage | undefined
   /** Cloudflare 快速隧道（公网入口；URL 变化广播 answer.state） */
@@ -145,10 +147,13 @@ export class CwbServer {
         this.log('info', `task exited (${taskId}, code ${exitCode})`)
         // v2.2.0 B 链：任务结束 → 该任务挂起的 hook 全部空响应释放（页面显示任务已结束）
         this.answer.cancelTask(taskId, 'system')
-        // v2.2.0 完成/停止推送：退出是终态事件（1.3/1.6），与 10 秒内的 Stop 合并
-        if (!this.shuttingDown) {
-          this.notifier.onTaskExit(taskId, exitCode, this.stopIntent.delete(taskId))
-        }
+        if (this.shuttingDown) return
+        // v2.2.2 关任务窗口/显式停止/手机停止的停止不推送（用户 2026-11-17 指令）
+        if (this.quietStop.delete(taskId)) return
+        const stopped = this.stopIntent.delete(taskId)
+        // v2.2.2 在场门控（同 hook 路由）：人在电脑前时「已退出/异常退出」也静默
+        if (!this.desktopAway(loadNotifyExtras(this.notifyHome).answer.presenceMin)) return
+        this.notifier.onTaskExit(taskId, exitCode, stopped)
       }
     })
     // v2.0.2 服务器侧 webhook 推送（用户指令：推送+URL 全落服务器端）——
@@ -254,9 +259,13 @@ export class CwbServer {
       for (const ws of this.wss?.clients ?? []) {
         this.send(ws, { type: 'hook.event', taskId, event, epoch })
       }
-      // v2.2.0 B 链：桌面不在场 + 配置开 + 页面/隧道就绪 → 挂起 hook 等手机答复
+      // v2.2.2（用户 2026-11-17 指令）：全部推送事件按「桌面在场」门控——任一
+      // 在线客户端 presenceMin 分钟内有键入=人在电脑前，推送静默（含带链接的
+      // awaiting）；无客户端在线（人走/应用关闭）或超窗未键入才推
       const answerCfg = loadNotifyExtras(this.notifyHome).answer
-      if (this.desktopAway(answerCfg.presenceMin)) {
+      const away = this.desktopAway(answerCfg.presenceMin)
+      // v2.2.0 B 链：桌面不在场 + 配置开 + 页面/隧道就绪 → 挂起 hook 等手机答复
+      if (away) {
         const name = this.registry.nameOf(taskId)
         const projectName = this.registry.projectNameOf(taskId)
         const held = this.answer.tryHold({
@@ -282,8 +291,8 @@ export class CwbServer {
         }
       }
       respondEmpty()
-      // 服务器侧推送（旁路——吞错不阻塞）
-      this.notifier.onHookEvent(taskId, event, body)
+      // 服务器侧推送（旁路——吞错不阻塞）；在场时静默
+      if (away) this.notifier.onHookEvent(taskId, event, body)
     }
     req.on('data', (chunk: Buffer) => {
       total += chunk.length
@@ -302,9 +311,11 @@ export class CwbServer {
   /**
    * 停止任务（桌面 task.kill 帧 / 手机应答页 /api/stop 共用，v2.2.0）。
    * 先作废该任务的手机挂起（by 体现来源，供 answer.resolved 展示），再杀 PTY。
+   * v2.2.2 quiet=true：关任务窗口引发的停止——退出回调不推「已停止」（用户指令）。
    */
-  killTask(taskId: string, by: 'desktop' | 'phone' = 'desktop'): void {
-    this.noteStopIntent(taskId)
+  killTask(taskId: string, by: 'desktop' | 'phone' = 'desktop', quiet = false): void {
+    if (quiet) this.quietStop.add(taskId)
+    else this.noteStopIntent(taskId)
     this.answer.cancelTask(taskId, by)
     this.registry.kill(taskId)
   }
@@ -422,11 +433,12 @@ export class CwbServer {
   /**
    * 手机请求停止（/api/stop，2.17=B）：本地任务交回持连接的客户端（answer.stop
    * 帧）；远程任务 server 直接 kill。未知任务=false。
+   * v2.2.2（用户 2026-11-17 指令）：quiet——应答页自身有停止反馈，不推「已停止」。
    */
   private stopTaskFromPhone(taskId: string): boolean {
     if (this.answer.requestStop(taskId)) return true
     try {
-      this.killTask(taskId, 'phone')
+      this.killTask(taskId, 'phone', true)
       return true
     } catch {
       this.log('warn', 'phone stop ignored (unknown task)')
@@ -541,8 +553,9 @@ export class CwbServer {
     // 手机答复通道停机：页面/隧道随之关闭（已无 pending 需要页面）
     await this.stopAnswerChannel()
     for (const ws of this.wss.clients) this.send(ws, { type: 'conn.closed', reason })
-    // 10 秒合并窗内未发的 Stop 在停机前补推（不丢消息）；随后清空全部定时器
-    this.notifier.flush()
+    // v2.2.2（用户 2026-11-17 指令）：停机不再补推 10 秒窗内的「完成」——直接
+    // 丢弃并清定时器（退出/停机是用户在场的动作）；退出侧推送已由 shuttingDown 门控
+    this.notifier.dispose()
     this.registry.disposeTimers()
     for (const ws of this.wss.clients) ws.close(1001, reason)
     // 恶劣客户端不响应 close 时限时兜底（2s——不因单个连接卡死停机/升级替换）
@@ -609,7 +622,8 @@ function createHandlers(server: CwbServer, ctx: FrameContext): Record<ClientFram
     'task.kill': (frame, c) => {
       if (frame.type !== 'task.kill') return
       // 先记停止意图（退出回调据此推「已停止」而非「已退出」）+ 作废该任务挂起
-      server.killTask(frame.taskId, 'desktop')
+      // v2.2.2 quiet：关任务窗口的静默停止（客户端 TabBar × 发起）
+      server.killTask(frame.taskId, 'desktop', frame.quiet === true)
       replyOk(c, frame.rid, { taskId: frame.taskId })
     },
     'task.attach': (frame, c) => {

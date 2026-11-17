@@ -338,7 +338,7 @@ export const zh = {
   'settings.notifyEventStop': '每轮完成',
   'settings.notifyEventStopFailure': '本轮异常结束',
   'settings.notifyEventExit': '进程退出/停止',
-  'settings.notifyEventsHint': '子任务的停止不推送（仅主任务轮次与进程终态）',
+  'settings.notifyEventsHint': '人在电脑前（5 分钟内有键入）时全部静默；显式停止不推送（关窗/菜单/手机停止、退出应用）；子任务的停止也不推送',
   'settings.answerTitle': '手机答复',
   'settings.answerEnable': '允许在手机上答复（经 Cloudflare 隧道暴露应答页）',
   'settings.answerEnableHint':
@@ -1096,7 +1096,8 @@ export const en: Record<MessageKey, string> = {
   'settings.notifyEventStop': 'Turn completed',
   'settings.notifyEventStopFailure': 'Turn failed',
   'settings.notifyEventExit': 'Process exit / stop',
-  'settings.notifyEventsHint': 'Subagent stops are never pushed (main turn and process exits only)',
+  'settings.notifyEventsHint':
+    'All silent while you are at the desk (input within 5 min); explicit stops never push (close tab / menu / phone stop, app quit); subagent stops neither',
   'settings.answerTitle': 'Answer from phone',
   'settings.answerEnable': 'Allow answering from a phone (answer page via Cloudflare tunnel)',
   'settings.answerEnableHint':

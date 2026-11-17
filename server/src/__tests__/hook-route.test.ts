@@ -82,8 +82,11 @@ describe('v2.0.2 /hook 接收口 → hook.event 转发 + 服务器侧推送', ()
     expect(await res.text()).toContain('"server":"cwb-server"')
   })
 
-  it('v2.2.0：POST body 完整透传给服务器侧推送（Stop 摘要来源）', async () => {
+  it('v2.2.0：POST body 完整透传给服务器侧推送（Stop 摘要来源）——不在场时', async () => {
     const port = (server as unknown as { port: number }).port
+    // v2.2.2 在场门控：aware 客户端键入超窗（不在场）→ 推送放行
+    ws.send(JSON.stringify({ type: 'presence', lastInputAt: 1, focused: false }))
+    await new Promise((r) => setTimeout(r, 100))
     const calls: Array<[string, string, string | undefined]> = []
     const orig = server.notifier.onHookEvent.bind(server.notifier)
     server.notifier.onHookEvent = (taskId, event, body) => {
@@ -103,6 +106,36 @@ describe('v2.0.2 /hook 接收口 → hook.event 转发 + 服务器侧推送', ()
       expect(calls[0]![0]).toBe('t-body')
       expect(calls[0]![1]).toBe('Stop')
       expect(JSON.parse(calls[0]![2] ?? '{}')).toMatchObject({ last_assistant_message: 'PONG' })
+    } finally {
+      server.notifier.onHookEvent = orig
+    }
+  })
+
+  it('v2.2.2 在场门控：aware 客户端 5 分钟内有键入 → 服务器侧推送静默', async () => {
+    const port = (server as unknown as { port: number }).port
+    // 在场：最近有键入
+    ws.send(JSON.stringify({ type: 'presence', lastInputAt: Date.now(), focused: true }))
+    await new Promise((r) => setTimeout(r, 100))
+    const calls: Array<[string, string]> = []
+    const orig = server.notifier.onHookEvent.bind(server.notifier)
+    server.notifier.onHookEvent = (taskId, event) => {
+      calls.push([taskId, event])
+      return 'ignored'
+    }
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/hook/Stop?t=t-present&e=2`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ last_assistant_message: 'X' })
+      })
+      expect(res.status).toBe(200)
+      await new Promise((r) => setTimeout(r, 150))
+      expect(calls).toHaveLength(0) // 在场 → 不推
+      // hook.event 帧照常转发（桌面横幅不受门控影响）
+      const hook = frames.find(
+        (f) => f.type === 'hook.event' && f.taskId === 't-present'
+      )
+      expect(hook).toBeDefined()
     } finally {
       server.notifier.onHookEvent = orig
     }

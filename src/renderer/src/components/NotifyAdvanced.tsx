@@ -7,6 +7,10 @@ import type { AnswerConfig, NotifyEventFlags } from '../../../shared/types'
  * v2.2.0 设置页「推送事件开关 + 手机答复」区（webhook 配置之后）。
  *
  * - 事件开关：awaiting / stop / stopFailure / exit（子任务停止永不推送）；
+ *   v2.2.2（用户 2026-11-17 指令）：exit 开关现仅管进程**自行退出**——显式停止
+ *   （关窗/菜单/手机停止）与退出应用的「已停止/已退出」一律不推；
+ *   且**全部事件按「桌面在场」门控**——presenceMin 分钟内有键入=人在电脑前，
+ *   一切推送静默（本地/远程两侧对称；测试推送不经门控）；
  * - 手机答复：enabled / ttlSec / presenceMin + 通道状态（隧道/挂起数，main 经
  *   answer.state 帧推送）；
  * - 写路径按作用域 cid：本地 userData/notify.json / VM ~/.cwb/notify.json。

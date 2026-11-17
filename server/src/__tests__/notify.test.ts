@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ServerNotifier,
+  STOP_MERGE_MS,
   buildNotifyPayload,
   formatDuration,
   inferChannel,
@@ -255,15 +256,16 @@ describe('v2.2.0 完成/停止推送（分桶/10s 合并/终态穿透）', () =>
     n.dispose()
   })
 
-  it('flush：停机前把合并窗内的 Stop 补推', () => {
+  it('dispose：停机丢弃合并窗内的 Stop 不补推（v2.2.2 #7 指令）', () => {
     enable()
     vi.useFakeTimers()
     const n = makeNotifier()
     n.onHookEvent('t1', 'Stop')
     expect(pushed).toHaveLength(0)
-    n.flush()
-    expect(pushed).toHaveLength(1)
-    expect(text(0)).toContain('本轮完成')
+    n.dispose()
+    expect(pushed).toHaveLength(0) // 不补推
+    vi.advanceTimersByTime(STOP_MERGE_MS)
+    expect(pushed).toHaveLength(0) // 定时器已清理，窗到期也不再推
   })
 
   it('文案含项目名与耗时（metaOf）', () => {

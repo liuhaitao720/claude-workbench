@@ -33,6 +33,7 @@ const CLIENT_FRAMES: ClientFrame[] = [
   { type: 'task.resize', taskId: 't2', cols: 100, rows: 30 },
   { type: 'task.kill', taskId: 't2', rid: 'r2' },
   { type: 'task.kill', taskId: 't2' },
+  { type: 'task.kill', taskId: 't2', quiet: true }, // v2.2.2 关任务窗口静默停止
   { type: 'task.attach', taskId: 't2', rid: 'r3' },
   { type: 'task.detach', taskId: 't2' },
   { type: 'task.list', rid: 'r4' },

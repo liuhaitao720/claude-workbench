@@ -625,8 +625,9 @@ function TaskRow({ task }: { task: TaskRecord }) {
 
   const menuItems: MenuItemDef[] = [
     // v0.5①：移除「打开」——与单击任务行完全重复（v0.4.1 后单击即开+自动恢复）
+    // v2.2.2（用户 2026-11-17 指令）：显式停止一律 quiet——停止是用户在场的动作，不推手机
     task.status === 'running'
-      ? { label: t('tree.stop'), onClick: () => void stopTaskFlow(task.id) }
+      ? { label: t('tree.stop'), onClick: () => void stopTaskFlow(task.id, { quiet: true }) }
       : { label: t('tree.resume'), onClick: () => void resumeTaskFlow(task.id) },
     { label: t('tree.rename'), onClick: () => setRenaming(true) },
     {

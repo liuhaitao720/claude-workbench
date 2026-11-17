@@ -93,8 +93,8 @@ export type ClientFrame =
   | { type: 'task.resize'; taskId: string; cols: number; rows: number }
   /** v2.2.1 任务元数据上行（重连认领/resume 再挂后补传显示名——服务器推送文案用） */
   | { type: 'task.meta'; taskId: string; name?: string; projectName?: string }
-  /** 杀任务（显式停止；PTY 由 server 端 terminate）【S4 / S3】 */
-  | { type: 'task.kill'; taskId: string; rid?: string }
+  /** 杀任务（显式停止；PTY 由 server 端 terminate）【S4 / S3】；quiet=关任务窗口引发的静默停止（server 不推「已停止」）【v2.2.2】 */
+  | { type: 'task.kill'; taskId: string; rid?: string; quiet?: boolean }
   /**
    * re-attach 既有任务（5.9=b 保活后重挂）。S3 语义：resize toggle（cols±1→复原）
    * 强制 SIGWINCH 促 claude TUI 全量重绘；失败退化=回放尾部 ≤4000 字节。
