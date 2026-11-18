@@ -2,6 +2,15 @@
 
 SSH Workbench 版本更新说明（新版本在前；应用内「设置 → 应用更新」读取本文件展示）。v1.5.0 前产品名为 Claude Workbench。
 
+## 2.2.3
+
+> 修复：VM 重启后每次连接都被要求重新安装 cwb-server——现自动拉起已装版本（零上传零解压）
+
+- **根因**：server 由 nohup 拉起，不随 VM 开机自启；重启后进程消失，客户端「SSH 通而 WS 不通」一律按未安装处理（needInstall 弹窗 → 全量上传 tgz 重装 1.7MB）
+- **修复：连接时自动拉起已装 server**——needInstall 判定前先查远端 `~/.cwb-server/current` 指针与版本目录：已装即直接 nohup 启动 + 健康探活 + 重试连接（`ensureServer` 新增 `start` 模式，`RemotePtyHub.autoStartServer` 注入；并发连接共享同一次拉起，防双起）；拉起过程进 server 日志面板（`[auto-start]` 前缀）
+- **真未安装/拉起失败**：照旧弹安装确认窗（token 语义不变，旧装配零影响）；启动失败附 node 路径/pid/日志尾部诊断
+- cwb-server 保持 0.2.2（本修复纯客户端侧）
+
 ## 2.2.2
 
 > 推送策略整治（用户裁决）：在场门控 + 显式停止/退出全静默 + cwb-server 0.2.2

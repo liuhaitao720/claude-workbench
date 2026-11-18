@@ -382,6 +382,53 @@ describe('S4 RemotePtyManager 状态机（FakeTransport 帧级 mock）', () => {
     transport.emit({ type: 'task.exit', taskId: 't1', exitCode: 0 })
     expect(mgr.isRunning('t1')).toBe(false)
   })
+
+  it('⑪ v2.2.3 首连 needInstall → 自动拉起成功 → 重试连接成功（autoStartServer 恰一次，无重复起）', async () => {
+    const transport = new FakeTransport()
+    const conn = new FakeConnection()
+    const autoStart = vi.fn(async () => true)
+    let connects = 0
+    transport.connectImpl = async () => {
+      connects += 1
+      if (connects === 1) throw needInstallError('WS open timeout after 8000ms')
+      transport.connected = true
+    }
+    const mgr = new RemotePtyManager({
+      connectionId: conn.id,
+      connection: conn.asManager(),
+      callbacks: { onData: () => {}, onExit: () => {} },
+      onServerLog: () => {},
+      transportFactory: (events) => {
+        transport.bind(events)
+        return transport
+      },
+      autoStartServer: autoStart
+    })
+    await mgr.ensureReady()
+    expect(connects).toBe(2) // 失败一次 + 拉起后重试成功
+    expect(autoStart).toHaveBeenCalledTimes(1)
+    // 非 needInstall 错误（如 SSH 层）不触发拉起——⑧ 已覆盖（未装配回调时原样上抛）
+  })
+
+  it('⑫ v2.2.3 拉起失败 → 原 needInstall 错误上抛（token 保留，S6 安装弹窗语义不变）', async () => {
+    const transport = new FakeTransport()
+    const conn = new FakeConnection()
+    transport.connectImpl = async () => {
+      throw needInstallError('connect ECONNREFUSED')
+    }
+    const mgr = new RemotePtyManager({
+      connectionId: conn.id,
+      connection: conn.asManager(),
+      callbacks: { onData: () => {}, onExit: () => {} },
+      onServerLog: () => {},
+      transportFactory: (events) => {
+        transport.bind(events)
+        return transport
+      },
+      autoStartServer: vi.fn(async () => false)
+    })
+    await expect(mgr.ensureReady()).rejects.toThrow(NEED_SERVER_INSTALL_TOKEN)
+  })
 })
 
 describe('S4 ServerClient 帧形状守卫 + needInstall token', () => {

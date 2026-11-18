@@ -73,7 +73,7 @@ export interface ServerInstallProgressEvent {
 }
 
 export type EnsureServerResult =
-  | { ok: true; action: 'none' | 'installed' | 'upgraded'; version: string }
+  | { ok: true; action: 'none' | 'installed' | 'upgraded' | 'started'; version: string }
   | {
       ok: false
       action: 'none'
@@ -93,8 +93,13 @@ export type EnsureServerResult =
     }
 
 export interface EnsureServerOptions {
-  /** check=只读探测（默认）；install=推送/升级全流程（ServerInstall 通道显式触发） */
-  mode?: 'check' | 'install'
+  /**
+   * check=只读探测（默认）；install=推送/升级全流程（ServerInstall 通道显式触发）；
+   * start=v2.2.3 自动拉起：current 指针指向的**已装版本**直接 nohup 启动+探活
+   * （零上传零解压——VM 重启后 server 不随开机自起，连接时自动复活，替代弹窗
+   * 全量重装；未安装/启动失败 → needInstall/startFailed，调用方回落 UI 弹窗）。
+   */
+  mode?: 'check' | 'install' | 'start'
   onProgress?: (ev: ServerInstallProgressEvent) => void
   /** 远端安装根目录覆写（默认 <远端HOME>/.cwb-server；测试/多实例）。
    *  同时经 CWB_SERVER_HOME 传给 server 进程（config.json 同目录，不污染真实 HOME）。 */
@@ -301,20 +306,90 @@ export async function ensureServer(
     tgzFile: (v) => rp(home, 'versions', v, `server-${v}.tgz`)
   }
 
-  let local: LocalServerPackage
-  try {
-    local = opts.localPackage ?? resolveLocalServerPackage()
-  } catch (err) {
-    return fail('noLocalPackage', err instanceof Error ? err.message : String(err))
+  // v2.2.3：start 模式拉起远端已装版本，不需要本机交付包——懒解析（缺包不阻断复活）
+  let local: LocalServerPackage | undefined
+  let expected: string | undefined
+  if (mode !== 'start') {
+    try {
+      local = opts.localPackage ?? resolveLocalServerPackage()
+    } catch (err) {
+      return fail('noLocalPackage', err instanceof Error ? err.message : String(err))
+    }
+    expected = local.manifest.version
+    if (!isSafeVersion(expected)) return fail('noLocalPackage', `manifest 版本非法: ${expected}`)
   }
-  const expected = local.manifest.version
-  if (!isSafeVersion(expected)) return fail('noLocalPackage', `manifest 版本非法: ${expected}`)
 
   progress({ stage: 'probe', message: `probing cwb-server on 127.0.0.1:${port} …` })
   const probe = await probeServerVersion(transport, connectionId, { port })
   const dirExists = await remoteTestDir(transport, connectionId, L.versionsDir)
   const currentPointer = dirExists ? await readRemoteFile(transport, connectionId, L.currentFile) : undefined
   const runningVersion = probe.ok ? probe.version : sanitizeVersion(currentPointer)
+
+  /**
+   * 健康轮询（探活=真实 HTTP；进程秒退/ABI 不匹配在此暴露）——install 与
+   * start 模式共用节奏（首拍 2s，其后 intervalMs）。
+   */
+  const pollHealth = async (attempts: number, intervalMs: number): Promise<boolean> => {
+    for (let i = 1; i <= attempts; i++) {
+      await sleep(i === 1 ? Math.min(intervalMs, 2_000) : intervalMs)
+      const p = await probeServerVersion(transport, connectionId, { port, timeoutMs: Math.min(8_000, intervalMs + 2_000) })
+      if (p.ok) {
+        progress({ stage: 'health', message: `healthy after ${i} attempt(s): version ${p.version}` })
+        return true
+      }
+      if (i < attempts) {
+        progress({ stage: 'health', message: `health attempt ${i}/${attempts} failed (${truncate(p.detail, 80)})` })
+      }
+    }
+    return false
+  }
+
+  // ── start 模式（v2.2.3）：已装即拉起，零上传零解压 ──
+  if (mode === 'start') {
+    if (probe.ok) {
+      progress({ stage: 'done', message: `cwb-server ${probe.version} already running — nothing to start` })
+      return { ok: true, action: 'none', version: probe.version }
+    }
+    const current = sanitizeVersion(currentPointer)
+    const entryOk =
+      current !== undefined &&
+      (await remoteTestFile(transport, connectionId, rp(L.versionDir(current), 'dist', 'main.cjs')))
+    if (!entryOk) {
+      // 与 check 模式 needInstall 同语义：无可拉起安装 → UI 弹安装确认
+      return fail(
+        'needInstall',
+        `远端无可拉起的 cwb-server（current 指针缺失或入口文件不存在）——需推送安装 ${NEED_SERVER_INSTALL_TOKEN}`
+      )
+    }
+    const nodeBin = await resolveNodeBin(transport, connectionId)
+    if (nodeBin === '') {
+      const diagnostics = await collectDiagnostics(transport, connectionId, L, port)
+      return fail('startFailed', '远端 node 不可解析（bash -ic/command -v 均失败）', diagnostics)
+    }
+    const vdir = L.versionDir(current)
+    progress({ stage: 'start', message: `starting installed cwb-server ${current} on port ${port}（no upload）` })
+    const startCmd =
+      `nohup env CWB_SERVER_HOME=${q(home)} ${q(nodeBin)} ${q(rp(vdir, 'dist', 'main.cjs'))} --port ${port} ` +
+      `>>${q(L.logFile)} 2>&1 < /dev/null & echo $! > ${q(L.pidFile)}`
+    const start = await transport.exec(connectionId, startCmd)
+    if (start.code !== 0) {
+      const diagnostics = await collectDiagnostics(transport, connectionId, L, port)
+      return fail('startFailed', `启动命令失败: ${truncate(start.stderr, 160)}`, diagnostics)
+    }
+    progress({ stage: 'health', message: 'waiting for health endpoint …' })
+    const healthy = await pollHealth(opts.healthAttempts ?? 12, opts.healthIntervalMs ?? 10_000)
+    if (!healthy) {
+      const diagnostics = await collectDiagnostics(transport, connectionId, L, port)
+      return fail('healthFailed', `探活 ${opts.healthAttempts ?? 12} 次失败——server 未就绪（见诊断）`, diagnostics)
+    }
+    progress({ stage: 'done', message: `cwb-server ${current} started at ${home} (port ${port})` })
+    return { ok: true, action: 'started', version: current }
+  }
+
+  // 此后 mode ∈ {check, install}：交付包必已解析（start 分支全量 return）
+  if (local === undefined || expected === undefined) {
+    return fail('noLocalPackage', 'unreachable：check/install 模式缺交付包')
+  }
 
   if (probe.ok && probe.version === expected) {
     progress({ stage: 'done', message: `cwb-server ${expected} already healthy — nothing to do` })
@@ -423,22 +498,10 @@ export async function ensureServer(
 
   // 5) 健康轮询（探活=真实 HTTP；进程秒退/ABI 不匹配在此暴露）
   progress({ stage: 'health', message: 'waiting for health endpoint …' })
-  const attempts = opts.healthAttempts ?? 12
-  const intervalMs = opts.healthIntervalMs ?? 10_000
-  let healthy = false
-  for (let i = 1; i <= attempts; i++) {
-    await sleep(i === 1 ? Math.min(intervalMs, 2_000) : intervalMs)
-    const p = await probeServerVersion(transport, connectionId, { port, timeoutMs: Math.min(8_000, intervalMs + 2_000) })
-    if (p.ok) {
-      healthy = true
-      progress({ stage: 'health', message: `healthy after ${i} attempt(s): version ${p.version}` })
-      break
-    }
-    if (i < attempts) progress({ stage: 'health', message: `health attempt ${i}/${attempts} failed (${truncate(p.detail, 80)})` })
-  }
+  const healthy = await pollHealth(opts.healthAttempts ?? 12, opts.healthIntervalMs ?? 10_000)
   if (!healthy) {
     const diagnostics = await collectDiagnostics(transport, connectionId, L, port)
-    return fail('healthFailed', `探活 ${attempts} 次失败——server 未就绪（见诊断）`, diagnostics)
+    return fail('healthFailed', `探活 ${opts.healthAttempts ?? 12} 次失败——server 未就绪（见诊断）`, diagnostics)
   }
 
   // 6) current 指针 + 旧版本清理（保留最近 2 个）
@@ -487,6 +550,20 @@ async function remoteTestDir(
 ): Promise<boolean> {
   try {
     const r = await withTimeout(transport.exec(connectionId, `test -d ${q(dir)} && echo yes`), 8_000, 'test -d timeout')
+    return r.stdout.trim() === 'yes'
+  } catch {
+    return false
+  }
+}
+
+/** 远端文件存在且非空（start 模式：current 指向版本目录的 dist/main.cjs 前置检查） */
+async function remoteTestFile(
+  transport: ServerInstallTransport,
+  connectionId: string,
+  path: string
+): Promise<boolean> {
+  try {
+    const r = await withTimeout(transport.exec(connectionId, `test -s ${q(path)} && echo yes`), 8_000, 'test -s timeout')
     return r.stdout.trim() === 'yes'
   } catch {
     return false

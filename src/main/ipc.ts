@@ -669,6 +669,27 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     connection,
     callbacks: { onData: ptyOnData, onExit: ptyOnExit },
     onServerLog: broadcastRemoteServerLog,
+    // v2.2.3（用户实测：VM 重启后每次连接都被要求重装）：WS 不通先自动拉起远端
+    // **已装** cwb-server（ensureServer mode:'start'——零上传零解压，拉起 current
+    // 指向版本），成功即重试连接；失败才让 needInstall token 上抛弹安装窗
+    autoStartServer: async (cid) => {
+      try {
+        const r = await ensureServer(connection, cid, {
+          mode: 'start',
+          healthAttempts: 6,
+          healthIntervalMs: 5_000,
+          onProgress: (p) =>
+            broadcastRemoteServerLog({
+              connectionId: cid,
+              level: p.stage === 'error' ? 'error' : p.stage === 'health' ? 'warn' : 'info',
+              message: `[auto-start] ${p.message}`
+            })
+        })
+        return r.ok
+      } catch {
+        return false // 拉起异常按失败处理（不阻断原错误上抛）
+      }
+    },
     // claude 裸名（server 侧登录 PATH 解析 nvm shim）；CWB_REMOTE_CLAUDE_BIN 测试注入缝
     claudeBin: process.env['CWB_REMOTE_CLAUDE_BIN'] ?? 'claude',
     hookSink: async () => {

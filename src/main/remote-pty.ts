@@ -10,7 +10,13 @@ import type {
 } from '../shared/remote-protocol'
 import type { PtyBackend, PtyBackendCallbacks } from './pty-backend'
 import type { ConnectionManager } from './ssh/connection-manager'
-import { ServerClient, CWB_SERVER_PORT, type ServerClientEvents, type ServerTransport } from './server-client'
+import {
+  ServerClient,
+  CWB_SERVER_PORT,
+  NEED_SERVER_INSTALL_TOKEN,
+  type ServerClientEvents,
+  type ServerTransport
+} from './server-client'
 
 /**
  * 远程 PTY 后端（S4，PtyBackend 的 Remote 实现）+ 多连接枢纽（RemotePtyHub）。
@@ -129,6 +135,12 @@ export interface RemotePtyManagerOptions {
   runningTaskIds?: () => string[]
   /** v2.2.0 手机答复帧回调（hub 绑定 connectionId 后透传） */
   answer?: RemoteAnswerCallbacks
+  /**
+   * v2.2.3 已装 server 自动拉起（hub 注入 ensureServer mode:'start'——VM 重启后
+   * server 不随开机自起，连接时零上传复活，替代弹窗全量重装）。返回 true=拉起
+   * 成功（调用方应重试连接）；未提供=维持 needInstall 上抛（测试替身/旧装配）。
+   */
+  autoStartServer?: () => Promise<boolean>
 }
 
 export class RemotePtyManager implements PtyBackend {
@@ -338,6 +350,9 @@ export class RemotePtyManager implements PtyBackend {
     }
   }
 
+  /** v2.2.3：server 自动拉起在飞标记（reconcile/多调用并发时防双起，共享同一次结果） */
+  private autoStartInFlight: Promise<boolean> | null = null
+
   private async ensureTransport(): Promise<ServerTransport> {
     if (this.transport !== null && this.transport.connected) return this.transport
     if (this.transport === null) {
@@ -356,7 +371,26 @@ export class RemotePtyManager implements PtyBackend {
               : {})
           })
     }
-    await this.transport.connect()
+    try {
+      await this.transport.connect()
+    } catch (err) {
+      // v2.2.3（用户实测：VM 每次重启后连接都被要求重装 server）：WS 不通 ≠ 未
+      // 安装——needInstall token 错误先试**自动拉起已装版本**（零上传零解压），
+      // 成功即重试一次连接；未装配回调/拉起失败 → 原错误照旧上抛（S6 安装弹窗）
+      const msg = err instanceof Error ? err.message : String(err)
+      if (!msg.includes(NEED_SERVER_INSTALL_TOKEN) || this.opts.autoStartServer === undefined) throw err
+      this.log('info', 'server unreachable — auto-starting installed cwb-server (v2.2.3)')
+      if (this.autoStartInFlight === null) {
+        this.autoStartInFlight = this.opts
+          .autoStartServer()
+          .finally(() => {
+            this.autoStartInFlight = null
+          })
+      }
+      const started = await this.autoStartInFlight
+      if (!started) throw err
+      await this.transport.connect()
+    }
     return this.transport
   }
 
@@ -574,6 +608,12 @@ export interface RemotePtyHubOptions {
   hookPortPicker?: () => number
   /** 传输工厂透传（v2.0.2 测试注入；缺省=每 manager 自建 ServerClient） */
   transportFactory?: (events: ServerClientEvents) => ServerTransport
+  /**
+   * v2.2.3 已装 server 自动拉起（组合根注入 ensureServer mode:'start'——VM 重启
+   * 后 server 不随开机自起，连接时零上传复活 current 指向版本，替代弹窗全量
+   * 重装；manager 的 ensureTransport 在 needInstall 失败时调用并重试一次连接）
+   */
+  autoStartServer?: (connectionId: string) => Promise<boolean>
   /** v2.2.0 手机答复帧回调（带 connectionId——ipc 转 renderer 与本地挂起链） */
   answer?: RemoteAnswerHubCallbacks
 }
@@ -660,6 +700,11 @@ export class RemotePtyHub {
         // v2.0.2：传输工厂透传（测试注入 FakeTransport——server.version/hook 回放）
         ...(this.opts.transportFactory !== undefined
           ? { transportFactory: this.opts.transportFactory }
+          : {}),
+        // v2.2.3：已装 server 自动拉起（绑定本连接 id——ensureTransport needInstall
+        // 失败时零上传复活，见 RemotePtyHubOptions.autoStartServer）
+        ...(this.opts.autoStartServer !== undefined
+          ? { autoStartServer: () => this.opts.autoStartServer!(connectionId) }
           : {}),
         ...(this.opts.connectTimeoutMs !== undefined
           ? { connectTimeoutMs: this.opts.connectTimeoutMs }

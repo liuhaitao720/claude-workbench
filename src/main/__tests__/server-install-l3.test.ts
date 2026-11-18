@@ -239,6 +239,33 @@ describe.skipIf(!sshPortOpen())('S7 L3：localhost sshd 全链（推送→启动
   )
 
   it(
+    'v2.2.3 start：进程被杀（VM 重启模拟）→ 自动拉起已装版本（零 upload/extract）',
+    async () => {
+      // 模拟 VM 重启：杀掉 server 进程（安装产物/current 指针原样保留）
+      const pid = sh(`cat ${home}/server.pid`).stdout.trim()
+      expect(pid).toMatch(/^\d+$/)
+      sh(`kill -9 ${pid} 2>/dev/null; sleep 0.5`)
+      expect(await probeServerVersion(manager, connectionId, { port: serverPort })).toMatchObject({ ok: false })
+
+      progressLog.length = 0
+      const r = await ensureServer(manager, connectionId, { ...opts(), mode: 'start' })
+      expect(r).toEqual({ ok: true, action: 'started', version: '0.2.2' })
+      // 零上传零解压：仅 probe → start → health → done
+      const stages = progressLog.map((p) => p.stage)
+      expect(stages).not.toContain('upload')
+      expect(stages).not.toContain('extract')
+      expect(stages).toContain('start')
+      // 拉起后真实探活 + 新 pid 落盘
+      const probe = await probeServerVersion(manager, connectionId, { port: serverPort })
+      expect(probe).toEqual({ ok: true, version: '0.2.2' })
+      const newPid = sh(`cat ${home}/server.pid`).stdout.trim()
+      expect(newPid).toMatch(/^\d+$/)
+      expect(newPid).not.toBe(pid)
+    },
+    120_000
+  )
+
+  it(
     '升级路径：真·旧版 0.0.9 运行 → check=needUpgrade → 升级到 0.2.2（旧进程停/新探活/旧版本清理）',
     async () => {
       // 装 0.0.9（旧包）——真旧 server 起来
