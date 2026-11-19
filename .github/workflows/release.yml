@@ -1,0 +1,70 @@
+# v2.2.3 起：tag 推送（v*）→ 全量构建 → GitHub Release 自动发布。
+# 背景：自动更新下载源=本仓 Releases（latest.json + portable zip），此前从未
+# 自动化（Windows 私有 scripts/release.mjs 未入库）——本工作流用 runner 自带
+# GITHUB_TOKEN 完成构建+发布，VM/Windows 侧零凭据要求。
+# 注意：工作流文件必须存在于 tag 指向的提交里才会触发（发布链=dev 仓提交 →
+#       orphan 快照推 main → 重打 tag）。
+name: release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # 与 VM 构建机一致（server tgz 的 node-pty 产物/manifest 记录 ABI；NAPI
+      # prebuild 本身跨 ABI 通用——钉同版本保清单一致）
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.13.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      # extraResources 依赖 release/server-dist（缺目录 electron-builder 直接报错）
+      - name: Build cwb-server bundle
+        run: npm run build:server
+
+      - name: Build app
+        run: npm run build
+
+      - name: Package (win nsis+zip / linux AppImage+deb)
+        run: npx electron-builder --win --linux --publish never
+
+      - name: Assemble dist-release
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          V="${TAG#v}"
+          mkdir -p dist-release
+          cp "release/SSH Workbench Setup ${V}.exe" "dist-release/SSH-Workbench-Setup-${V}.exe"
+          cp "release/SSH Workbench Setup ${V}.exe.blockmap" "dist-release/SSH-Workbench-Setup-${V}.exe.blockmap"
+          cp release/latest.yml dist-release/latest.yml
+          cp "release/SSH Workbench-${V}-win.zip" "dist-release/SSH-Workbench-${V}-portable.zip"
+          node tools/gen-release-manifest.mjs --tag "$TAG" --zip "dist-release/SSH-Workbench-${V}-portable.zip"
+          # 发布说明：docs/release-vX.Y.Z.md（发布链已入库）；缺则让 GH 生成
+          if [ -f "docs/release-v${V}.md" ]; then
+            cp "docs/release-v${V}.md" dist-release/RELEASE-NOTES.md
+          else
+            printf '# SSH Workbench v%s\n\n见 CHANGELOG.md。\n' "$V" > dist-release/RELEASE-NOTES.md
+          fi
+          ls -la dist-release/
+
+      - name: Create GitHub Release with assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          V="${TAG#v}"
+          gh release create "$TAG" dist-release/* \
+            --title "SSH Workbench v${V}" \
+            --notes-file dist-release/RELEASE-NOTES.md \
+            --verify-tag
