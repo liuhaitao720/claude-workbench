@@ -36,7 +36,27 @@ jobs:
         run: npm run build
 
       - name: Package (win nsis+zip / linux AppImage+deb)
-        run: npx electron-builder --win --linux --publish never
+        run: set -o pipefail; npx electron-builder --win --linux --publish never 2>&1 | tee build.log
+
+      # 盲调闭环：repo 无 token 侧读不到 Actions 日志——失败时把构建输出推到
+      # ci-logs 分支（GITHUB_TOKEN 走 persist-credentials 的 origin），VM 侧
+      # git fetch 即可读取定位
+      - name: Push failure logs to ci-logs branch
+        if: failure()
+        run: |
+          set -euo pipefail
+          git config user.name ci-bot
+          git config user.email ci-bot@users.noreply.github.com
+          git checkout -B ci-logs
+          { echo "=== run $GITHUB_RUN_NUMBER ($GITHUB_RUN_URL) ==="
+            echo "--- builder-debug.yml ---"
+            cat release/builder-debug.yml 2>/dev/null || true
+            echo "--- build.log (electron-builder) ---"
+            tail -c 200000 build.log 2>/dev/null || true
+          } > ci-failure.log
+          git add -f ci-failure.log
+          git commit -m "ci failure logs run $GITHUB_RUN_NUMBER"
+          git push origin HEAD:refs/heads/ci-logs --force
 
       - name: Assemble dist-release
         run: |
