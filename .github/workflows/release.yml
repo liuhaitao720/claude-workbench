@@ -42,29 +42,43 @@ jobs:
       - name: Package linux (AppImage+deb)
         run: set -o pipefail; npx electron-builder --linux --publish never 2>&1 | tee build-linux.log
 
-      # 盲调闭环：Actions 日志需 admin 权限——失败时把构建输出发成 issue（匿名 API 可读，
-      # VM 侧据此定位）。尽力而为：任一子步骤失败不阻断其余。
-      - name: Report failure logs as issue
+      # 盲调闭环：Actions 日志需 admin 权限——失败时把构建输出发 issue + 预发布
+      # Release（两者匿名 API 均可读）。shell 显式 {0}：禁用 Actions 默认 bash -e
+      # （run #2/#3 外送步骤自身失败的疑似根因），逐行守卫，零未定义变量。
+      - name: Report failure logs
         if: failure()
+        shell: bash {0}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -uo pipefail
+          echo "trace: start $(date -u +%FT%TZ)"
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           {
             echo "## CI build failure (run $GITHUB_RUN_NUMBER)"
-            echo "$GITHUB_RUN_URL"
+            echo "$RUN_URL"
             echo
             echo '### build-win.log (tail)'
-            echo '```'; tail -c 60000 build-win.log 2>/dev/null; echo '```'
-            echo
-            echo '### build-linux.log (tail)'
-            echo '```'; tail -c 60000 build-linux.log 2>/dev/null; echo '```'
+            echo '```'
+            tail -c 60000 build-win.log 2>/dev/null
+            echo '```'
             echo
             echo '### builder-debug.yml'
-            echo '```'; cat release/builder-debug.yml 2>/dev/null; echo '```'
-          } > ci-failure.md || true
-          wc -c ci-failure.md || true
-          gh issue create --title "CI build failure (run $GITHUB_RUN_NUMBER)" --body-file ci-failure.md || echo "issue create failed"
+            echo '```'
+            cat release/builder-debug.yml 2>/dev/null
+            echo '```'
+          } > ci-failure.md 2>/dev/null
+          echo "trace: report file $(wc -c < ci-failure.md 2>/dev/null) bytes"
+          echo "trace: gh path $(command -v gh)"
+          echo "trace: env node $(node --version 2>/dev/null)"
+          # 通道 1：issue
+          gh issue create --title "CI build failure (run $GITHUB_RUN_NUMBER)" --body-file ci-failure.md 2>&1 | tail -2
+          echo "trace: issue attempt done rc=$?"
+          # 通道 2：预发布 Release（正文=日志；不影响正式 tag Release——draft 可删）
+          gh release create "ci-failure-$GITHUB_RUN_NUMBER" --target "$GITHUB_SHA" --prerelease \
+            --title "CI failure run $GITHUB_RUN_NUMBER" --notes-file ci-failure.md 2>&1 | tail -2
+          echo "trace: release attempt done rc=$?"
+          echo "trace: end"
+          exit 0
 
       - name: Assemble dist-release
         run: |
