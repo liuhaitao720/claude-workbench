@@ -36,6 +36,15 @@ jobs:
       - name: Build app
         run: npm run build
 
+      # electron-builder 26 在 Linux 上打 NSIS 需经 wine 跑 signtool（run #4 实锤：
+      # spawn wine ENOENT；VM 构建机装有 wine 10 故一直能过）。runner 预装没有——
+      # --no-install-recommends 控制体积（amd64 拉 wine64，无需 i386 multiarch）。
+      - name: Install wine (NSIS signtool)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine
+          wine --version || true
+
       # 拆分 win/linux：失败定位到具体 target（run #1/#2 均在本环节挂且日志读不到）
       - name: Package win (nsis+zip)
         run: set -o pipefail; npx electron-builder --win --publish never 2>&1 | tee build-win.log
