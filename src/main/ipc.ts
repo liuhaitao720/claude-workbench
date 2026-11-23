@@ -326,6 +326,8 @@ export interface AppContext {
   ): Promise<TaskRecord>
   /** v1.4 模型列表探测（GET {baseUrl}/v1/models；官方端点经 provider 代理出口） */
   probeProviderModels(id: string): Promise<ModelsProbeResult>
+  /** v2.2.5 草稿探测：不落盘的临时 ProviderConfig（新增表单当前输入） */
+  probeProviderModelsDraft(provider: ProviderConfig): Promise<ModelsProbeResult>
   pickDirectory(): Promise<string | null>
   /**
    * v0.9 S13 会话导入（第 33 法）：扫描项目目录的 claude CLI 历史会话 → 生成可恢复任务
@@ -619,6 +621,10 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     }
     return probeProviderModels(provider)
   }
+
+  /** v2.2.5（用户需求）：草稿探测——直接用传入配置（id 可为空/占位），不读写注册表 */
+  const probeProviderModelsDraft = async (provider: ProviderConfig): Promise<ModelsProbeResult> =>
+    probeProviderModels(provider)
   const fontScanner = new FontScanner()
   // v1.1.0 应用自更新：落点 userData/updates；进度广播全部窗口（quit 走 app.quit 正常路径
   // ——before-quit 杀 PTY 树释放文件锁后更新器才动手，见 app-updater.ts 头注）
@@ -1499,6 +1505,7 @@ export function createAppContext(options: AppContextOptions = {}): AppContext {
     setTaskSkipPermissions,
     setTaskProvider,
     probeProviderModels: probeProviderModelsById,
+    probeProviderModelsDraft,
     pickDirectory,
     importTasksFromSessions,
     appSettings,
@@ -2444,6 +2451,37 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
   // v1.7.0 provider 跨作用域复制（用户指令：远程 provider 支持本地和远程共享）：
   // 读源注册表 → 剥 id（目标侧重分配防冲突）→ 写目标。source/target 的 kind：
   // 'local' | 'remote'（remote 时 id=connectionId）。
+
+  // v2.2.5（用户需求）：新增 provider 的模型探测用**当前输入参数**（不先保存）——
+  // 本地作用域经 createModelsProbe；远程作用域经 VM curl（probeRemoteModels，同对象入参）
+  ipcMain.handle(IpcChannels.ProvidersProbeDraft, async (_e, draft: unknown, scopeCid: unknown) => {
+    if (typeof draft !== 'object' || draft === null) {
+      return { ok: false, error: translate(mainLanguage(), 'provider.errShape') }
+    }
+    const d = draft as Record<string, unknown>
+    const baseUrl = typeof d['baseUrl'] === 'string' ? d['baseUrl'].trim() : ''
+    const apiKey = typeof d['apiKey'] === 'string' ? d['apiKey'].trim() : ''
+    if (baseUrl === '' || apiKey === '') {
+      return { ok: false, error: translate(mainLanguage(), 'settings.providerProbeNeedParams') }
+    }
+    const format = d['format'] === 'openai' ? 'openai' : 'anthropic'
+    const apiKeyType = d['apiKeyType'] === 'api_key' ? 'api_key' : 'auth_token'
+    const proxyUrl = typeof d['proxyUrl'] === 'string' ? d['proxyUrl'].trim() : ''
+    const temp: ProviderConfig = {
+      id: '__draft__',
+      name: 'draft',
+      format,
+      baseUrl,
+      apiKey,
+      apiKeyType,
+      models: [],
+      ...(proxyUrl !== '' ? { proxyUrl } : {})
+    }
+    if (typeof scopeCid === 'string' && scopeCid !== '') {
+      return probeRemoteModels(ctx.connection, scopeCid, temp)
+    }
+    return ctx.probeProviderModelsDraft(temp)
+  })
   ipcMain.handle(
     IpcChannels.ProvidersCopy,
     async (

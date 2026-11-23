@@ -100,6 +100,8 @@ const HANDLE = {
   GitCommitDetail: 'cwb:git:commit',
   GitCommitFileDiff: 'cwb:git:commit-file-diff',
   GitAction: 'cwb:git:action',
+  /** v2.2.5 草稿模型探测（新增 provider 用当前输入参数，不落盘） */
+  ProvidersProbeDraft: 'cwb:providers:probe-draft',
   FilesPickUpload: 'cwb:files:pick-upload',
   FilesReadText: 'cwb:files:read-text',
   FilesWriteText: 'cwb:files:write-text',

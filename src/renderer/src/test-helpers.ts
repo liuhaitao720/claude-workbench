@@ -310,6 +310,7 @@ export function installCwbMock(
     removeProvider: vi.fn(async () => {}),
     setDefaultProvider: vi.fn(async () => {}),
     probeProviderModels: vi.fn(async (_id: string) => ({ ok: true, models: ['glm-4.6'] })),
+    probeProviderModelsDraft: vi.fn(async () => ({ ok: true, models: ['glm-4.6'] })),
     setTaskProvider: vi.fn(async (_taskId: string, opts: { providerId?: string; model?: string }) =>
       makeTask({ providerId: opts.providerId, model: opts.model })
     ),

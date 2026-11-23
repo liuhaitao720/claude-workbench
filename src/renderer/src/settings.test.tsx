@@ -456,7 +456,8 @@ describe('模型服务（v1.4 providers）', () => {
   it('v1.4 模型探测：成功合并预设列表（去重保序）；失败行内提示', async () => {
     const api = await renderApp()
     vi.mocked(api.listProviders).mockResolvedValue({ providers: [glm] })
-    vi.mocked(api.probeProviderModels).mockResolvedValue({ ok: true, models: ['glm-4.6', 'glm-4.7'] })
+    // v2.2.5：探测改走草稿通道（当前表单参数）
+    vi.mocked(api.probeProviderModelsDraft).mockResolvedValue({ ok: true, models: ['glm-4.6', 'glm-4.7'] })
     const s = await openSettings()
     gotoSection(s, '模型服务')
     fireEvent.click(
@@ -465,15 +466,43 @@ describe('模型服务（v1.4 providers）', () => {
 
     fireEvent.click(await s.findByRole('button', { name: '探测模型' }))
     expect(await s.findByText('探测到 2 个模型')).toBeDefined()
+    // 草稿参数=表单现值（端点/Key/格式/鉴权形态）
+    expect(vi.mocked(api.probeProviderModelsDraft).mock.calls[0]![0]).toMatchObject({
+      baseUrl: 'https://open.bigmodel.cn/api/anthropic'
+    })
     const rowNames = s
       .getAllByLabelText('模型名')
       .map((el: HTMLElement) => (el as HTMLInputElement).value)
     expect(rowNames).toEqual(['glm-4.6', 'glm-4.5-air', 'glm-4.7']) // 已有行不动 + 新增追加
 
     // 失败 → 行内错误
-    vi.mocked(api.probeProviderModels).mockResolvedValue({ ok: false, error: 'HTTP 401' })
+    vi.mocked(api.probeProviderModelsDraft).mockResolvedValue({ ok: false, error: 'HTTP 401' })
     fireEvent.click(s.getByRole('button', { name: '探测模型' }))
     expect(await s.findByText('探测失败：HTTP 401')).toBeDefined()
+  })
+
+  it('v2.2.5 新增 provider：不保存直接用当前输入参数探测（缺参数禁用+提示）', async () => {
+    const api = await renderApp()
+    vi.mocked(api.listProviders).mockResolvedValue({ providers: [] })
+    vi.mocked(api.probeProviderModelsDraft).mockResolvedValue({ ok: true, models: ['m-1'] })
+    const s = await openSettings()
+    gotoSection(s, '模型服务')
+    fireEvent.click(s.getByRole('button', { name: '新增 provider' }))
+    // 初始缺参数 → 探测按钮禁用（title 提示）
+    const probeBtn = s.getByRole('button', { name: '探测模型' }) as HTMLButtonElement
+    expect(probeBtn.disabled).toBe(true)
+    expect(s.getByTitle('请先填写端点地址与 API Key 再探测')).toBeDefined()
+    // 填参 → 探测可用 → 草稿探测（未保存，不带 id）
+    fireEvent.change(s.getByLabelText('API 端点'), { target: { value: 'https://gw.example/api' } })
+    fireEvent.change(s.getByLabelText('API Key'), { target: { value: 'sk-draft-123' } })
+    await waitFor(() => expect((s.getByRole('button', { name: '探测模型' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(s.getByRole('button', { name: '探测模型' }))
+    expect(await s.findByText('探测到 1 个模型')).toBeDefined()
+    expect(api.probeProviderModelsDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ baseUrl: 'https://gw.example/api', apiKey: 'sk-draft-123', format: 'anthropic' }),
+      undefined
+    )
+    expect(api.saveProvider).not.toHaveBeenCalled() // 全程未保存
   })
 
   it('v1.4.1 档位映射：从预设模型行下拉选择（含 1M 标注）；保存 payload 带 slotModels', async () => {

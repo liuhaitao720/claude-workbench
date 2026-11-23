@@ -713,14 +713,34 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     setProviderFormMode('json')
   }
 
-  /** v1.4 模型列表探测：按已保存档案请求 {baseUrl}/v1/models，结果合并进预设模型（去重保序） */
+  /**
+   * v1.4 模型列表探测：请求 {baseUrl}/v1/models，结果合并进预设模型（去重保序）。
+   * v2.2.5（用户需求 2026-11-23）：**用当前表单输入参数探测**——新增 provider 不必
+   * 先保存（草稿经 ProvidersProbeDraft 通道；远程作用域经 VM curl 同源探测）。
+   * 已保存档案语义不变（参数即表单现值，改后探测同样即时生效）。
+   */
   const probeModels = async (): Promise<void> => {
-    if (providerForm === null || providerForm.id === '') return
+    if (providerForm === null) return
+    const baseUrl = providerForm.baseUrl.trim()
+    const apiKey = providerForm.apiKey.trim()
+    if (baseUrl === '' || apiKey === '') {
+      setProviderError(t('settings.providerProbeNeedParams'))
+      return
+    }
     setProviderProbing(true)
     setProviderError('')
     setProviderMsg('')
     try {
-      const r = await window.cwb.probeProviderModels(providerForm.id, scopeCid)
+      const r = await window.cwb.probeProviderModelsDraft(
+        {
+          baseUrl,
+          apiKey,
+          apiKeyType: providerForm.apiKeyType,
+          format: providerForm.format,
+          ...(providerForm.proxyUrl.trim() !== '' ? { proxyUrl: providerForm.proxyUrl.trim() } : {})
+        },
+        scopeCid
+      )
       if (!r.ok) {
         setProviderError(t('settings.providerProbeFailed', { error: r.error ?? '' }))
         return
@@ -1405,10 +1425,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                           <button
                             type="button"
                             className="btn small"
-                            disabled={providerProbing || providerForm.id === ''}
+                            disabled={
+                              providerProbing ||
+                              providerForm.baseUrl.trim() === '' ||
+                              providerForm.apiKey.trim() === ''
+                            }
                             title={
-                              providerForm.id === ''
-                                ? t('settings.providerProbeNeedSave')
+                              providerForm.baseUrl.trim() === '' || providerForm.apiKey.trim() === ''
+                                ? t('settings.providerProbeNeedParams')
                                 : undefined
                             }
                             onClick={() => void probeModels()}

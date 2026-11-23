@@ -250,6 +250,8 @@ const api: CWBApi = {
   gitCommitFileDiff: (projectId, hash, path) =>
     ipcRenderer.invoke(IpcChannels.GitCommitFileDiff, projectId, hash, path),
   gitAction: (projectId, action) => ipcRenderer.invoke(IpcChannels.GitAction, projectId, action),
+  probeProviderModelsDraft: (draft, scopeCid) =>
+    ipcRenderer.invoke(IpcChannels.ProvidersProbeDraft, draft, scopeCid),
   /** v2.0.1 小文本双击本机打开（<10MB 白名单扩展；main 下载临时目录+系统打开） */
   readRemoteTextFile: (cid, remotePath) =>
     ipcRenderer.invoke(IpcChannels.FilesReadText, cid, remotePath),

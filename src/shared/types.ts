@@ -979,6 +979,20 @@ export interface CWBApi {
     path: string
   ): Promise<{ ok: true; detail: DiffFileDetail } | { ok: false; error: string }>
   gitAction(projectId: string, action: GitActionPayload): Promise<{ ok: boolean; error?: string }>
+  /**
+   * v2.2.5（用户需求 2026-11-23）：**用当前表单参数探测模型**（新增 provider 不必先
+   * 保存）——draft 字段与 ProviderConfig 同口径；scopeCid 给定时经 VM 探测（远程作用域）。
+   */
+  probeProviderModelsDraft(
+    draft: {
+      baseUrl: string
+      apiKey: string
+      apiKeyType?: 'auth_token' | 'api_key'
+      format?: 'anthropic' | 'openai'
+      proxyUrl?: string
+    },
+    scopeCid?: string
+  ): Promise<{ ok: boolean; models?: string[]; error?: string }>
   /** 小文本文件双击本机打开（文本扩展白名单 + <10MB；返回本机临时路径） */
   /**
    * v2.1.7 双击编辑（用户确认设计）：读远端文本（≤5MB；二进制拒绝）。
