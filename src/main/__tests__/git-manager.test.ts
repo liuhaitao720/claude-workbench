@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   branchesArgs,
+  commitDetailArgs,
+  commitNumstatArgs,
+  commitFileDiffArgs,
   cherryPickArgs,
   createBranchArgs,
   deleteBranchArgs,
@@ -171,6 +174,16 @@ describe('v2.2.5 命令构造（模式旗标）', () => {
     expect(stashPopArgs(1)).toEqual(['stash', 'pop', 'stash@{1}'])
     expect(stashPopArgs(1, true)).toEqual(['stash', 'apply', 'stash@{1}'])
     expect(stashDropArgs(0)).toEqual(['stash', 'drop', 'stash@{0}'])
+  })
+  it('v2.2.5 修复：提交详情命令带 -m --first-parent（merge 提交才有文件清单）', () => {
+    for (const args of [commitDetailArgs('a1b2c3d'), commitNumstatArgs('a1b2c3d'), commitFileDiffArgs('a1b2c3d', 'a.txt')]) {
+      expect(args).toContain('-m')
+      expect(args).toContain('--first-parent')
+    }
+  })
+  it('v2.2.5 修复：消息解析剔除 name-status 行（merge -m 多段清单不混入正文）', () => {
+    const out = 'H1\x1fAlice\x1f2026-01-01T00:00:00+08:00\x1f标题\n\nM\tsrc/a.ts\n\nA\tb.txt'
+    expect(parseCommitDetail(out).message).toBe('标题')
   })
   it('其余：cherry-pick / 远程增改删 / branches / log 形状', () => {
     expect(cherryPickArgs('a1b2c3d')).toEqual(['cherry-pick', 'a1b2c3d'])

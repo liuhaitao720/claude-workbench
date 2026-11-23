@@ -269,6 +269,8 @@ function GitHistory(props: GitHistoryProps) {
   const [sel, setSel] = useState<string | null>(null)
   const [detail, setDetail] = useState<{ hash: string; message: string; author: string; date: string; files: GitCommitFileInfo[] } | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  /** v2.2.5：详情加载失败显性化（此前静默空面板——用户无从得知原因） */
+  const [detailError, setDetailError] = useState('')
   const [fileDiff, setFileDiff] = useState<{ hash: string; path: string; detail: DiffFileDetail } | null>(null)
   const [ctxBranch, setCtxBranch] = useState<{ x: number; y: number; name: string; isRemote: boolean } | null>(null)
   const [ctxCommit, setCtxCommit] = useState<{ x: number; y: number; hash: string } | null>(null)
@@ -307,10 +309,18 @@ function GitHistory(props: GitHistoryProps) {
     void window.cwb
       .gitCommitDetail(projectId, sel)
       .then((r) => {
-        if (r.ok) setDetail({ hash: sel, message: r.message, author: r.author, date: r.date, files: r.files })
-        else setDetail({ hash: sel, message: '', author: '', date: '', files: [] })
+        if (r.ok) {
+          setDetailError('')
+          setDetail({ hash: sel, message: r.message, author: r.author, date: r.date, files: r.files })
+        } else {
+          setDetailError(r.error)
+          setDetail({ hash: sel, message: '', author: '', date: '', files: [] })
+        }
       })
-      .catch(() => setDetail({ hash: sel, message: '', author: '', date: '', files: [] }))
+      .catch((e: unknown) => {
+        setDetailError(errMsg(e))
+        setDetail({ hash: sel, message: '', author: '', date: '', files: [] })
+      })
       .finally(() => setDetailLoading(false))
   }, [sel, projectId])
 
@@ -494,6 +504,11 @@ function GitHistory(props: GitHistoryProps) {
               </div>
             </div>
             <div className="git-detail-files">
+              {detailError !== '' && (
+                <p className="inline-error" role="alert" data-testid="git-detail-error">
+                  {detailError}
+                </p>
+              )}
               {detailLoading && <p className="muted git-hint">{t('common.loading')}</p>}
               {!detailLoading && detail.files.length === 0 && <p className="muted git-hint">{t('git.noFiles')}</p>}
               {detail.files.map((f) => (

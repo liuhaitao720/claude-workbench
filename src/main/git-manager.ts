@@ -96,17 +96,19 @@ export function logArgs(limit: number): string[] {
 
 /** 提交详情（消息全文 + 变更文件状态行） */
 export function commitDetailArgs(hash: string): string[] {
-  return ['show', '--pretty=format:%H%x1f%an%x1f%ad%x1f%B', '--name-status', '--no-color', hash]
+  // v2.2.5 修复（用户实测 merge 提交无文件清单）：-m --first-parent——合并提交显示
+  // 相对第一父的变更（git show 默认对 merge 不输出 name-status）；普通提交无影响
+  return ['show', '-m', '--first-parent', '--pretty=format:%H%x1f%an%x1f%ad%x1f%B', '--name-status', '--no-color', hash]
 }
 
 /** 提交详情（±行数——numstat 与 name-status 按路径对齐） */
 export function commitNumstatArgs(hash: string): string[] {
-  return ['show', '--pretty=format:', '--numstat', '--no-color', hash]
+  return ['show', '-m', '--first-parent', '--pretty=format:', '--numstat', '--no-color', hash]
 }
 
 /** 单文件在指定提交的 diff 文本（复用 parseUnifiedDiff 渲染） */
 export function commitFileDiffArgs(hash: string, path: string): string[] {
-  return ['show', '--no-color', '-U3', '--pretty=format:', hash, '--', path]
+  return ['show', '-m', '--first-parent', '--no-color', '-U3', '--pretty=format:', hash, '--', path]
 }
 
 export function stashListArgs(): string[] {
@@ -195,6 +197,8 @@ export function parseCommitDetail(out: string): { message: string; author: strin
       inBody = true
       continue
     }
+    // name-status 行不属消息正文（merge -m 输出每段都会带清单——全部剔除）
+    if (/^[ACDMRTUX]\d*\t/.test(line)) continue
     if (inBody) msgLines.push(line)
   }
   return { author, date, message: msgLines.join('\n').trim() }
