@@ -405,6 +405,7 @@ export function installCwbMock(
     mkdirRemote: vi.fn(async () => undefined),
     renameRemote: vi.fn(async () => undefined),
     deleteRemote: vi.fn(async () => undefined),
+    compressRemote: vi.fn(async () => undefined),
     readRemoteTextFile: vi.fn(async () => ({ ok: true as const, content: 'hello\n', size: 6, mtimeMs: 1_700_000_000_000 })),
     writeRemoteTextFile: vi.fn(async () => ({ ok: true as const, mtimeMs: 1_700_000_000_001 })),
     clearFinishedTransfers: vi.fn(async () => undefined),

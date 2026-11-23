@@ -220,6 +220,93 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
     expect(api.deleteRemote).toHaveBeenCalledWith('c1', '/home/dev/b.md', false)
   })
 
+  it('v2.2.4 多选压缩：Ctrl 选 2 行 → 工具栏📦 → 弹窗（默认名/清单/标签）→ 确认 → compressRemote + 刷新', async () => {
+    const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
+    vi.mocked(api.listRemoteFiles).mockResolvedValue({
+      ok: true,
+      path: '/home/dev',
+      entries: [
+        { name: 'a.txt', isDir: false, size: 10, mtimeMs: 0 },
+        { name: 'docs', isDir: true, size: 0, mtimeMs: 0 }
+      ]
+    })
+    render(<App />)
+    const panel = await openPanel(api)
+    const row = (n: string) => panel.querySelector(`[data-file-name="${n}"]`) as HTMLElement
+    fireEvent.click(row('a.txt'))
+    fireEvent.click(row('docs'), { ctrlKey: true })
+    const btn = await waitFor(() => {
+      const b = within(panel).getByTestId('btn-compress-selected') as HTMLButtonElement
+      expect(b.disabled).toBe(false)
+      return b
+    })
+    expect(btn.textContent).toContain('2')
+    fireEvent.click(btn)
+    // 弹窗：标题/目标清单/可见 label/默认名（archive-…tar.gz）
+    const input = await screen.findByTestId('compress-name-input') as HTMLInputElement
+    const dlg = screen.getByRole('dialog', { name: '压缩为 tar.gz' })
+    expect(within(dlg).getByText('压缩文件名')).toBeDefined() // 可见 label（非 placeholder-only）
+    expect(within(dlg).getByText('a.txt')).toBeDefined()
+    expect(within(dlg).getByText('docs')).toBeDefined()
+    expect(input.value).toMatch(/^archive-\d{8}-\d{4}\.tar\.gz$/)
+    fireEvent.click(screen.getByTestId('compress-confirm'))
+    await waitFor(() =>
+      expect(api.compressRemote).toHaveBeenCalledWith('c1', '/home/dev', input.value, ['a.txt', 'docs'])
+    )
+    // 成功后：弹窗关 + 目录刷新
+    await waitFor(() => expect(screen.queryByTestId('compress-name-input')).toBeNull())
+    await waitFor(() => expect(api.listRemoteFiles).toHaveBeenLastCalledWith('c1', '/home/dev'))
+  })
+
+  it('v2.2.4 行右键：压缩…（单行 → 默认基名.tar.gz）+ Esc 取消不发 IPC；下载/重命名/删除项齐', async () => {
+    const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
+    vi.mocked(api.listRemoteFiles).mockResolvedValue({
+      ok: true,
+      path: '/home/dev',
+      entries: [{ name: 'docs', isDir: true, size: 0, mtimeMs: 0 }]
+    })
+    render(<App />)
+    const panel = await openPanel(api)
+    const row = panel.querySelector('[data-file-name="docs"]') as HTMLElement
+    fireEvent.contextMenu(row)
+    // 菜单（Portal 挂 body）：压缩/重命名/删除齐（目录无下载项）
+    const item = await screen.findByText('压缩…')
+    fireEvent.click(item)
+    const input = (await screen.findByTestId('compress-name-input')) as HTMLInputElement
+    expect(input.value).toBe('docs.tar.gz') // 单选默认=基名
+    // Escape 关闭——不发 IPC
+    fireEvent.keyDown(input, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByTestId('compress-name-input')).toBeNull())
+    expect(api.compressRemote).not.toHaveBeenCalled()
+  })
+
+  it('v2.2.4 校验/碰撞就近报错：空名 → inline-error 不发 IPC；远端已存在 → 错误留在弹窗', async () => {
+    const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
+    vi.mocked(api.listRemoteFiles).mockResolvedValue({
+      ok: true,
+      path: '/home/dev',
+      entries: [{ name: 'x.txt', isDir: false, size: 5, mtimeMs: 0 }]
+    })
+    render(<App />)
+    const panel = await openPanel(api)
+    fireEvent.click(panel.querySelector('[data-file-name="x.txt"]') as HTMLElement)
+    fireEvent.click(within(panel).getByTestId('btn-compress-selected'))
+    const input = (await screen.findByTestId('compress-name-input')) as HTMLInputElement
+    // a) 清空名称 → 就近错误，不发 IPC
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.click(screen.getByTestId('compress-confirm'))
+    await waitFor(() => expect(screen.getByTestId('compress-error').textContent).toContain('名称不能为空'))
+    expect(api.compressRemote).not.toHaveBeenCalled()
+    // b) 远端碰撞（main 抛 i18n key）→ 弹窗留错误不关
+    vi.mocked(api.compressRemote).mockRejectedValueOnce(new Error('files.compressErrExists'))
+    fireEvent.change(input, { target: { value: 'x.txt.tar.gz' } })
+    fireEvent.click(screen.getByTestId('compress-confirm'))
+    await waitFor(() =>
+      expect(screen.getByTestId('compress-error').textContent).toContain('同名文件已存在')
+    )
+    expect(screen.getByTestId('compress-name-input')).toBeDefined() // 弹窗仍在
+  })
+
   it('Shift+click 范围选择：点第 1 行后 Shift 点第 3 行 → 三行全选中', async () => {
     const api = installCwbMock({ projects: [pRemote], tasks: [tRun], connections: [conn] })
     vi.mocked(api.listRemoteFiles).mockResolvedValue({

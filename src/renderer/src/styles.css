@@ -2756,6 +2756,8 @@ button {
 .files-conflict-title { font-size: 13.5px; font-weight: 600; margin: 0; }
 .files-conflict-hint { font-size: 11.5px; margin: 0; }
 .files-conflict-files { display: flex; flex-direction: column; gap: 2px; margin: 0; max-height: 120px; overflow-y: auto; }
+/* v2.2.4 压缩弹窗：可见 label（非 placeholder-only）+ 输入框全宽 */
+.files-compress-label { font-size: 11.5px; color: var(--text-2); margin: 0; }
 .files-conflict-file { font-family: ui-monospace,Consolas,monospace; font-size: 11.5px; color: var(--text-2); background: var(--bg-input); border: 1px solid var(--border-2); border-radius: 4px; padding: 2px 8px; }
 .files-conflict-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-top: 4px; }
 

@@ -83,6 +83,7 @@ import { testConnectionRecord } from './ssh/test-connection'
 import { ConnectionError } from './ssh/errors'
 import { RealSftpSession, browseRemoteDir } from './ssh/manager'
 import { ensureServer } from './server-installer'
+import { buildExistsCommand, buildTarCommand, compressEntriesError, compressNameError } from '../shared/remote-compress'
 
 /** main→renderer 推送：广播到全部窗口 */
 function broadcast(channel: string, payload: unknown): void {
@@ -1599,6 +1600,37 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     await (await ctx.connection.sftp(c)).unlinkFile!(path)
   })
 
+  // v2.2.4 文件面板压缩（用户需求 2026-11-23）：选中项 → tar.gz。校验/命令构造
+  // 在 remote-compress.ts（纯逻辑单测）；此处只做执行编排。碰撞预检→tar→printf
+  // 回执，失败 stderr 上抛（弹窗内就近显示）。
+  ipcMain.handle(
+    IpcChannels.FilesCompress,
+    async (_e, cid: unknown, dir: unknown, name: unknown, entries: unknown) => {
+      const c = asCid(cid)
+      const dirOk = typeof dir === 'string' && dir.startsWith('/') ? dir : undefined
+      const entriesOk = Array.isArray(entries)
+        ? entries.filter((x): x is string => typeof x === 'string')
+        : undefined
+      if (c === undefined || dirOk === undefined || typeof name !== 'string' || entriesOk === undefined) {
+        throw new Error('files: invalid compress args')
+      }
+      const trimmed = name.trim()
+      const nameErr = compressNameError(trimmed)
+      if (nameErr !== null) throw new Error(`files: ${nameErr}`)
+      const entriesErr = compressEntriesError(entriesOk)
+      if (entriesErr !== null) throw new Error(`files: ${entriesErr}`)
+      // 碰撞预检：不覆盖既有文件（错误回弹窗就近显示）
+      const probe = await ctx.connection.exec(c, buildExistsCommand(dirOk, trimmed))
+      if (probe.stdout.includes('exists')) {
+        throw new Error('files.compressErrExists')
+      }
+      const r = await ctx.connection.exec(c, buildTarCommand(dirOk, trimmed, entriesOk))
+      if (r.code !== 0 || !r.stdout.includes('compressed')) {
+        throw new Error(r.stderr.trim() !== '' ? r.stderr.trim() : `remote compress failed (exit ${r.code})`)
+      }
+    }
+  )
+
   // v2.0.1（用户指令，参考 FinalShell）：小文本文件双击本机打开——下载到临时
   // 目录（ssh-workbench-peek/，同名带序防叠）+ shell.openPath 系统默认程序。
   // 文本判定=扩展名白名单（10MB 上限在 renderer 预判，main 侧再守一道）。
@@ -2346,6 +2378,10 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       }
       throw err
     }
+    // v2.2.4（用户实测 2026-11-23）：纯 SSH 连接（kind='ssh'）跳过 server 健康检查——
+    // 纯 SSH=裸 shell+SFTP 面板，不依赖 cwb-server；此前无分流，连未装 server 的机器
+    // 必弹安装确认窗（S4 早于 v2.1.0 纯 SSH 落地，互不知晓）
+    if (connectionsStore.get(id)?.kind === 'ssh') return
     // S4 健康检查（SSH 已通前提下）：不可达 → needInstall token 错误（见上方注释）
     await ctx.remotePty.ensureConnected(id)
     // v2.2.0：连接就绪立即播报桌面在场（server 据此判定手机可否代答）

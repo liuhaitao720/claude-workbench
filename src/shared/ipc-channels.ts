@@ -92,6 +92,8 @@ const HANDLE = {
   FilesMkdir: 'cwb:files:mkdir',
   FilesRename: 'cwb:files:rename',
   FilesDelete: 'cwb:files:delete',
+  /** v2.2.4 文件面板选中项压缩（tar.gz；碰撞预检+确认弹窗在 renderer） */
+  FilesCompress: 'cwb:files:compress',
   FilesPickUpload: 'cwb:files:pick-upload',
   FilesReadText: 'cwb:files:read-text',
   FilesWriteText: 'cwb:files:write-text',

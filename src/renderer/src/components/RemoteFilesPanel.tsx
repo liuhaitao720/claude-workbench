@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 import type { RemoteFileEntry, TransferItem } from '../../../shared/types'
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
+import { SidebarMenu } from './SidebarMenu'
+import { compressNameError, defaultCompressName } from '../../../shared/remote-compress'
 
 /**
  * v2.0 远程文件面板（用户确认原型 design/remote-files-2.0.html——FinalShell 式）：
@@ -10,6 +12,8 @@ import { useI18n } from '../i18n'
  * - 面包屑导航/双击进目录/上级/后退/刷新/新建目录
  * - 上传双入口：工具栏（文件/目录）+ 拖拽（DataTransfer→webUtils 路径，A3）
  * - 行操作：下载/重命名/删除（目录=VM trash 可找回）/复制路径
+ * - v2.2.4 压缩（用户需求 2026-11-23）：行右键菜单（压缩/下载/重命名/删除）+
+ *   工具栏「压缩选中」→ 确认弹窗（输入压缩文件名，带默认值；碰撞就近报错）
  * - 冲突弹窗三选（覆盖/跳过/保留两者）——批量级一次裁决
  * - 传输条：进度/速度/取消/失败重试（onTransfersProgress 节流推送）
  */
@@ -114,6 +118,16 @@ export function RemoteFilesPanel({ connectionId }: { connectionId: string }) {
   }
   const [renaming, setRenaming] = useState<{ from: string; value: string } | null>(null)
   const [conflict, setConflict] = useState<{ files: string[]; apply: (policy: 'overwrite' | 'skip' | 'rename') => void } | null>(null)
+  /**
+   * v2.2.4 压缩弹窗（单槽：null=关）：entries=目标相对名；value=文件名输入（开窗
+   * 即默认值——单选基名/多选 archive-时刻戳）；busy=远端执行中（确认钮禁用）；
+   * error=校验/碰撞/远端错误，就近显示在输入框下（role=alert）
+   */
+  const [compress, setCompress] = useState<{ entries: string[]; value: string; busy: boolean; error: string } | null>(null)
+  /** v2.2.4 行右键菜单（FinalShell 式：压缩/下载/重命名/删除） */
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; name: string } | null>(null)
+  /** SidebarMenu 定位锚占位（anchor 提供时 triggerRef 不参与定位——TerminalPanel 同式） */
+  const nullBtnRef = useRef<HTMLButtonElement>(null)
   /** v2.1.7 双击直接编辑（单槽）+ 轻提示（保存成功/二进制拒绝） */
   const [editor, setEditor] = useState<EditorState | null>(null)
   /** 脏态关闭二次确认（editor 置 null 即关——先过这里） */
@@ -449,6 +463,42 @@ useEffect(() => {
     }
   }
 
+  // ── v2.2.4 压缩（用户需求 2026-11-23）──────────────────────────────
+  /** 开窗（默认名：单选=基名.tar.gz / 多选=archive-时刻戳.tar.gz） */
+  const openCompress = (targets: string[]): void => {
+    if (targets.length === 0) return
+    setCompress({ entries: targets, value: defaultCompressName(targets), busy: false, error: '' })
+  }
+
+  /** 右键/工具栏目标：行在选区内且多选 → 整个选区；否则仅该行 */
+  const compressTargetsFor = (name: string): string[] => {
+    if (selected.has(name) && selected.size > 1) return [...selected]
+    return [name]
+  }
+
+  const submitCompress = async (): Promise<void> => {
+    if (compress === null || compress.busy) return
+    const name = compress.value.trim()
+    const key = compressNameError(name)
+    if (key !== null) {
+      setCompress({ ...compress, error: t(key) })
+      return
+    }
+    setCompress({ ...compress, busy: true, error: '' })
+    try {
+      await window.cwb.compressRemote(connectionId, st.path, name, compress.entries)
+      setCompress(null)
+      setSelected(new Set())
+      load(st.path, false)
+    } catch (err) {
+      // 碰撞 key 翻译后就近显示；其余（远端 stderr 等）原样透出
+      const msg = errMsg(err)
+      setCompress((s) =>
+        s === null ? s : { ...s, busy: false, error: msg === 'files.compressErrExists' ? t('files.compressErrExists') : msg }
+      )
+    }
+  }
+
   return (
     <>
     <div
@@ -512,6 +562,17 @@ useEffect(() => {
           onClick={() => void removeSelected()}
         >
           🗑 {selected.size > 0 ? `(${selected.size})` : ''}
+        </button>
+        {/* v2.2.4 压缩选中（tar.gz）：多选/框选后的批量入口；单行走右键菜单 */}
+        <button
+          type="button"
+          className="btn small"
+          disabled={selected.size === 0}
+          title={t('files.compressSelected')}
+          data-testid="btn-compress-selected"
+          onClick={() => openCompress([...selected])}
+        >
+          📦 {selected.size > 0 ? `(${selected.size})` : ''}
         </button>
         {/* v2.1.7 传输记录（FinalShell 式）：右上角按钮 + 弹出面板（底部内嵌条移除） */}
         <TransfersButton connectionId={connectionId} connName={connName} />
@@ -589,6 +650,13 @@ useEffect(() => {
               // v2.1.7（用户确认设计）：双击=弹窗直接编辑（仅下方文件面板此入口）；
               // ≥5MB 维持走下载（含传输记录）
               openEditor(f)
+            }}
+            onContextMenu={(e) => {
+              // v2.2.4 行右键菜单（FinalShell 式）：不在选区内 → 收敛单选该行
+              // （菜单操作与可见选中一致）；在选区内 → 菜单的压缩作用于整个选区
+              e.preventDefault()
+              if (!selected.has(f.name)) setSelected(new Set([f.name]))
+              setCtxMenu({ x: e.clientX, y: e.clientY, name: f.name })
             }}
           >
             <span className="files-ico">{f.isDir ? '📁' : fileIcon(f.name)}</span>
@@ -714,6 +782,91 @@ useEffect(() => {
         )
       })()}
       </div>
+      {/* v2.2.4 行右键菜单（FinalShell 式）：压缩/下载/重命名/删除 */}
+      {ctxMenu !== null && (() => {
+        const row = st.entries.find((f) => f.name === ctxMenu.name)
+        if (row === undefined) return null
+        const targets = compressTargetsFor(ctxMenu.name)
+        return (
+          <SidebarMenu
+            triggerRef={nullBtnRef}
+            anchor={{ x: ctxMenu.x, y: ctxMenu.y }}
+            onClose={() => setCtxMenu(null)}
+            items={[
+              {
+                label: targets.length > 1 ? `${t('files.compress')}（${targets.length} 项）` : t('files.compress'),
+                onClick: () => openCompress(targets)
+              },
+              ...(!row.isDir
+                ? [{ label: t('files.download'), onClick: () => download(row) }]
+                : []),
+              { label: t('common.edit'), onClick: () => setRenaming({ from: row.name, value: row.name }) },
+              {
+                label: t('common.remove'),
+                danger: true,
+                onClick: () => void remove(row)
+              }
+            ]}
+          />
+        )
+      })()}
+      {/* v2.2.4 压缩确认弹窗（复用 conflict 卡片样式；错误就近 role=alert） */}
+      {compress !== null && (
+        <div className="files-conflict" role="dialog" aria-label={t('files.compressTitle')}>
+          <div className="files-conflict-card">
+            <p className="files-conflict-title">{t('files.compressTitle')}</p>
+            <p className="muted files-conflict-hint">
+              {t('files.compressHint', { n: String(compress.entries.length), dir: st.path })}
+            </p>
+            <div className="files-conflict-files">
+              {compress.entries.slice(0, 5).map((f) => (
+                <span key={f} className="files-conflict-file">
+                  {f}
+                </span>
+              ))}
+              {compress.entries.length > 5 && <span className="muted">+{compress.entries.length - 5}</span>}
+            </div>
+            <label className="files-compress-label" htmlFor="files-compress-name">
+              {t('files.compressName')}
+            </label>
+            <input
+              id="files-compress-name"
+              className="files-rename-input"
+              data-testid="compress-name-input"
+              spellCheck={false}
+              autoFocus
+              value={compress.value}
+              disabled={compress.busy}
+              onChange={(e) =>
+                setCompress((s) => (s === null ? s : { ...s, value: e.target.value, error: '' }))
+              }
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void submitCompress()
+                if (e.key === 'Escape' && !compress.busy) setCompress(null)
+              }}
+            />
+            {compress.error !== '' && (
+              <p className="inline-error" role="alert" data-testid="compress-error">
+                {compress.error}
+              </p>
+            )}
+            <div className="files-conflict-actions">
+              <button type="button" className="btn" disabled={compress.busy} onClick={() => setCompress(null)}>
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                disabled={compress.busy}
+                data-testid="compress-confirm"
+                onClick={() => void submitCompress()}
+              >
+                {compress.busy ? t('files.compressBusy') : t('files.compressConfirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* v2.1.7 双击直接编辑弹窗（单槽）+ 脏态/冲突确认 + 轻提示 */}
       {editor !== null && (
         <RemoteTextEditor

@@ -877,6 +877,12 @@ export interface CWBApi {
   renameRemote(cid: string, from: string, to: string): Promise<void>
   /** 删除（v2.0.1 用户指令：直接删除不进回收站）：文件=unlink；目录=递归 rm -rf */
   deleteRemote(cid: string, path: string, isDir: boolean): Promise<void>
+  /**
+   * v2.2.4 压缩：dir 内选中条目打 tar.gz（<name>，相对 dir）。碰撞（name 已存在）
+   * 抛错——确认弹窗内就近显示；成功后调用方刷新目录。纯 SSH 与开发连接同链
+   * （connection.exec，不依赖 cwb-server）。
+   */
+  compressRemote(cid: string, dir: string, name: string, entries: string[]): Promise<void>
   /** 小文本文件双击本机打开（文本扩展白名单 + <10MB；返回本机临时路径） */
   /**
    * v2.1.7 双击编辑（用户确认设计）：读远端文本（≤5MB；二进制拒绝）。
