@@ -126,7 +126,7 @@ describe('审查流（store + TabBar 虚拟 tab）', () => {
     expect(screen.getByText('not a git repository')).toBeDefined()
   })
 
-  it('任务结束提示（ReviewHint 事件）→ toast [审查] 打开对应 cwd', async () => {
+  it('任务结束提示（ReviewHint 事件）→ toast [Git] 打开对应 cwd（v2.2.5 标签统一）', async () => {
     const mock = await renderApp()
     // initListeners 订阅的回调在 mock 内部：经 onReviewHint mock 触发
     const registered = vi.mocked(mock.onReviewHint).mock.calls[0]?.[0]
@@ -141,7 +141,7 @@ describe('审查流（store + TabBar 虚拟 tab）', () => {
     await waitFor(() => expect(screen.getByTestId('review-hint-toast')).toBeDefined())
     expect(screen.getByTestId('review-hint-toast').textContent).toContain('RepoA')
 
-    fireEvent.click(within(screen.getByTestId('review-hint-toast')).getByText('审查'))
+    fireEvent.click(within(screen.getByTestId('review-hint-toast')).getByText('Git'))
     await waitFor(() => expect(useAppStore.getState().reviewState?.cwd).toBe('D:\\repo-a\\.cwb-worktrees\\wt-1'))
     expect(useAppStore.getState().reviewHint).toBeNull()
   })
@@ -189,12 +189,12 @@ describe('DiffReview 组件交互', () => {
 })
 
 describe('v2.0.3 审查竖条入口（常驻可见）', () => {
-  it('git 项目 + active 任务 → 竖条「审查改动」可见；点击直达项目与 worktree 目录；非 git 无按钮', async () => {
+  it('git 项目 + active 任务 → 竖条「Git」可见（v2.2.5 标签统一）；点击直达项目与 worktree 目录；非 git 无按钮', async () => {
     await renderApp()
     const wtTask = makeTask({ id: 'tw', projectId: 'p1', name: 'worktree 活', cwd: 'D:\\repo-a', worktreePath: 'D:\\repo-a\\.cwb-worktrees\\tw' })
     useAppStore.setState((s) => ({ tasks: [...s.tasks, wtTask], openTaskIds: [...s.openTaskIds, 'tw'], activeTaskId: 'tw' }))
     const rail = await screen.findByTestId('btn-review-rail')
-    expect(rail.textContent).toContain('审查改动')
+    expect(rail.textContent).toContain('Git')
     fireEvent.click(rail)
     await waitFor(() => {
       expect(useAppStore.getState().reviewState?.projectId).toBe('p1')

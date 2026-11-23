@@ -282,6 +282,9 @@ function GitHistory(props: GitHistoryProps) {
         if (r.ok) {
           setCommits(r.commits)
           setLogError('')
+          // v2.2.5（用户实测反馈：右栏要立即可见）——进入即自动选中首个提交，
+          // 详情/变更文件/diff 入口不再藏 behind 空提示；刷新保留原选中
+          setSel((prev) => prev ?? r.commits[0]?.hash ?? null)
         } else setLogError(r.error)
       })
       .catch((err: unknown) => setLogError(errMsg(err)))
