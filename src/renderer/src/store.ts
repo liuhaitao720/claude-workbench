@@ -506,11 +506,17 @@ interface AppState {
   // ── v2.0.2 git diff 审查（主区审查模式）─────────────────────────────
   /** 审查视图（null=未开；TabBar 虚拟「审查」tab 的数据源） */
   reviewState: ReviewState | null
+  /** v2.2.5 Git 管理面板（虚拟 tab 单槽：projectId 绑定项目；数据在组件内自取） */
+  gitPanel: { projectId: string } | null
+  gitActive: boolean
   /** 审查视图是否处于前台（false=终端可见；tab 切换经 setActive 隐式落 false） */
   reviewActive: boolean
   /** 任务结束审查提示（main ReviewHint 推送；toast 消费，点开或超时清除） */
   reviewHint: ReviewHintEvent | null
   /** 打开/激活审查（同目标幂等激活；异目标重拉清单）。cwd 缺省=项目根 */
+  openGitPanel: (projectId: string) => void
+  activateGit: () => void
+  closeGitPanel: () => void
   openReview: (projectId: string, cwd?: string) => Promise<void>
   /** 关闭审查（虚拟 tab 移除；下次打开重新拉快照） */
   closeReview: () => void
@@ -836,7 +842,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         activityMap,
         connectionStates,
         uiSettings: { ...s.uiSettings, serverNodesCollapsed: nodesCollapsed },
-        ...(reviewGone ? { reviewState: null, reviewActive: false } : {}),
+        ...(reviewGone ? { reviewState: null, reviewActive: false, gitActive: false } : {}),
         sshOpenCids,
         sshDeadCids,
         // v2.1.6：删的是当前台且还有别的台 → 切到剩余台（tab 语义）；无剩余才退出视图
@@ -931,6 +937,26 @@ export const useAppStore = create<AppState>()((set, get) => ({
     return { ok: true, project }
   },
 
+  // ── v2.2.5 Git 管理（虚拟 tab 单槽——数据加载在 GitPanel 组件内）──────
+  openGitPanel: (projectId) => {
+    set({
+      gitPanel: { projectId },
+      gitActive: true,
+      reviewActive: false,
+      sshActive: false
+    })
+  },
+
+  activateGit: () => {
+    if (get().gitPanel !== null) {
+      set({ gitActive: true, reviewActive: false, sshActive: false })
+    }
+  },
+
+  closeGitPanel: () => {
+    set({ gitPanel: null, gitActive: false })
+  },
+
   // ── v2.0.2 git diff 审查（主区审查模式）─────────────────────────────
   openReview: async (projectId, cwd) => {
     const project = get().projects.find((p) => p.id === projectId)
@@ -939,7 +965,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const cur = get().reviewState
     // 同目标幂等激活（不清状态——滚动位置/选中文件在组件里原样）
     if (cur !== null && cur.projectId === projectId && cur.cwd === target) {
-      set({ reviewActive: true })
+      set({ reviewActive: true, gitActive: false })
       return
     }
     const seq = ++reviewSeq
@@ -976,11 +1002,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   closeReview: () => {
     reviewSeq++
-    set({ reviewState: null, reviewActive: false })
+    set({ reviewState: null, reviewActive: false,
+      gitActive: false })
   },
 
   activateReview: () => {
-    if (get().reviewState !== null) set({ reviewActive: true, sshActive: false })
+    if (get().reviewState !== null) set({ reviewActive: true, sshActive: false,
+      gitActive: false })
   },
 
   selectReviewFile: async (path) => {
@@ -1097,6 +1125,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         set({
           sshActive: true,
           reviewActive: false,
+      gitActive: false,
           sshSessionDead: false,
           sshDeadCids: get().sshDeadCids.filter((c) => c !== connectionId)
         })
@@ -1127,7 +1156,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         get().setSshFollowDir(connectionId, wantDir, 'explicit')
         injectSshBootstrapWhenReady(connectionId, wantDir)
       }
-      set({ sshActive: true, reviewActive: false })
+      set({ sshActive: true, reviewActive: false,
+      gitActive: false })
       return
     }
     // v2.1.5：切换=换到该连接自己的台——已在运行则直接恢复（不重开、不关旧台）
@@ -1137,6 +1167,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         sshConsoleCid: connectionId,
         sshActive: true,
         reviewActive: false,
+      gitActive: false,
         sshSessionDead: get().sshDeadCids.includes(connectionId)
       })
       if (wantDir !== undefined) {
@@ -1152,6 +1183,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       sshConsoleCid: connectionId,
       sshActive: true,
       reviewActive: false,
+      gitActive: false,
       sshSessionDead: false,
       sshOpenCids: [...opened, connectionId]
     })
@@ -1205,7 +1237,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   activateSshConsole: () => {
     // v2.1.2：cid 可为 null（SSH 视图空态——无连接时的前台 tab）
-    set({ sshActive: true, reviewActive: false })
+    set({ sshActive: true, reviewActive: false,
+      gitActive: false })
   },
 
   activateSshConsoleCid: (connectionId) => {
@@ -1215,6 +1248,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       sshConsoleCid: connectionId,
       sshActive: true,
       reviewActive: false,
+      gitActive: false,
       sshSessionDead: s.sshDeadCids.includes(connectionId)
     })
   },
@@ -1242,7 +1276,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   openSshView: () => {
-    set({ sshActive: true, reviewActive: false })
+    set({ sshActive: true, reviewActive: false,
+      gitActive: false })
   },
 
   setSshFollowDir: (connectionId, path, source = 'osc') => {
@@ -1366,7 +1401,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const openTaskIds = s.openTaskIds.filter((tid) => tasks.some((t) => t.id === tid))
       const activityMap = { ...s.activityMap }
       for (const t of s.tasks) if (t.projectId === id) delete activityMap[t.id]
-      // v2.0.2：审查目标项目被删 → 审查视图一并关闭
+      // v2.0.2：审查目标项目被删 → 审查视图一并关闭；v2.2.5：Git 面板同理
+      const gitGone = s.gitPanel !== null && s.gitPanel.projectId === id
       const reviewGone = s.reviewState?.projectId === id
       return {
         projects,
@@ -1378,7 +1414,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
           s.activeTaskId && openTaskIds.includes(s.activeTaskId)
             ? s.activeTaskId
             : (openTaskIds[openTaskIds.length - 1] ?? null),
-        ...(reviewGone ? { reviewState: null, reviewActive: false } : {})
+        ...(reviewGone ? { reviewState: null, reviewActive: false, gitActive: false } : {}),
+        ...(gitGone ? { gitPanel: null } : {})
       }
     })
   },
@@ -1404,7 +1441,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
       tasks: upsertTask(s.tasks, task),
       openTaskIds: s.openTaskIds.includes(task.id) ? s.openTaskIds : [...s.openTaskIds, task.id],
       activeTaskId: task.id,
-      reviewActive: false, // v2.0.2：新建任务即切到终端
+      reviewActive: false,
+      gitActive: false, // v2.0.2：新建任务即切到终端
       sshActive: false // v2.1.0：三方互斥
     }))
   },
@@ -1491,7 +1529,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   settingsScope: 'local',
   settingsEditConnectionId: null,
   reviewState: null,
+  gitPanel: null,
   reviewActive: false,
+  gitActive: false,
   reviewHint: null,
   answerPendings: [],
   answerStates: {},
@@ -1521,6 +1561,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // v2.0.2：开/切任务 tab = 用户回终端——审查视图退后台（不销毁，虚拟 tab 留存）
       // v2.1.0：SSH 控制台同语义（三方互斥互切）
       reviewActive: false,
+      gitActive: false,
       sshActive: false
     })),
 
@@ -1546,7 +1587,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   closeTab: (taskId) => closeTabIn(set, taskId),
 
-  setActive: (taskId) => set({ activeTaskId: taskId, reviewActive: false, sshActive: false }),
+  setActive: (taskId) => set({ activeTaskId: taskId, reviewActive: false,
+      gitActive: false, sshActive: false }),
 
   applyTaskUpdate: (t) => {
     const before = get()

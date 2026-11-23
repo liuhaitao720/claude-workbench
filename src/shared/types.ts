@@ -647,6 +647,83 @@ export interface RemoveTaskOptions {
   deleteWorktree: boolean
 }
 
+export interface GitBranchInfo {
+  name: string
+  /** refs/remotes/ 下的分支 */
+  isRemote: boolean
+  upstream?: string
+  ahead?: number
+  behind?: number
+  short: string
+}
+
+export interface GitCommitInfo {
+  /** git --graph 的 ASCII 前缀（渲染层逐字符画：* 点 / | 竖线 / \ / 斜线） */
+  graph: string
+  hash: string
+  short: string
+  author: string
+  /** ISO（--date=iso8601-strict） */
+  date: string
+  subject: string
+  /** %D 装饰（HEAD, origin/main, tag: v1…）原样 */
+  refs?: string
+}
+
+export type GitFileStatus = 'A' | 'M' | 'D' | 'R' | 'T' | 'C'
+
+export interface GitCommitFileInfo {
+  path: string
+  /** R=改名时的原路径 */
+  oldPath?: string
+  status: GitFileStatus
+  add?: number
+  del?: number
+}
+
+export interface GitStashInfo {
+  index: number
+  short: string
+  message: string
+}
+
+export interface GitRemoteInfo {
+  name: string
+  fetchUrl: string
+  pushUrl?: string
+}
+
+export interface GitRepoStatus {
+  current: string
+  detached?: string
+  branches: GitBranchInfo[]
+  remotes: GitRemoteInfo[]
+  stashes: GitStashInfo[]
+  /** 工作区变更文件数（porcelain 行数） */
+  wcCount: number
+}
+
+
+export type GitMergeMode = 'default' | 'ff-only' | 'no-ff'
+export type GitPullMode = 'default' | 'rebase' | 'ff-only'
+
+/** Git 动作统一载荷（gitAction IPC；危险模式（-D/-f/push/drop/remove）确认窗在 renderer） */
+export type GitActionPayload =
+  | { op: 'switch'; branch: string }
+  | { op: 'switchTrack'; local: string; remoteRef: string }
+  | { op: 'createBranch'; name: string; base?: string }
+  | { op: 'merge'; branch: string; mode: GitMergeMode }
+  | { op: 'pull'; mode: GitPullMode }
+  | { op: 'push'; force?: boolean; remote?: string; branch?: string; setUpstream?: boolean }
+  | { op: 'deleteBranch'; branch: string; force?: boolean }
+  | { op: 'cherryPick'; hash: string }
+  | { op: 'stashPush'; message?: string }
+  | { op: 'stashPop'; index: number; apply?: boolean }
+  | { op: 'stashDrop'; index: number }
+  | { op: 'remoteAdd'; name: string; url: string }
+  | { op: 'remoteSetUrl'; name: string; url: string }
+  | { op: 'remoteRemove'; name: string }
+
 export interface StopTaskOptions {
   /**
    * true=静默停止（关任务窗口引发）：跳过「已停止」终态推送（本地与 server 两侧）。
@@ -883,6 +960,25 @@ export interface CWBApi {
    * （connection.exec，不依赖 cwb-server）。
    */
   compressRemote(cid: string, dir: string, name: string, entries: string[]): Promise<void>
+  // ── v2.2.5 Git 管理（本地/远程项目同链；结果 {ok} | {ok:false,error}）──
+  gitStatus(projectId: string): Promise<{ ok: true; status: GitRepoStatus } | { ok: false; error: string }>
+  gitLog(projectId: string, limit?: number): Promise<
+    { ok: true; commits: GitCommitInfo[] } | { ok: false; error: string }
+  >
+  gitCommitDetail(
+    projectId: string,
+    hash: string
+  ): Promise<
+    | { ok: true; message: string; author: string; date: string; files: GitCommitFileInfo[] }
+    | { ok: false; error: string }
+  >
+  /** 单文件在某提交的 diff（DiffFileDetail——审查视图同款渲染） */
+  gitCommitFileDiff(
+    projectId: string,
+    hash: string,
+    path: string
+  ): Promise<{ ok: true; detail: DiffFileDetail } | { ok: false; error: string }>
+  gitAction(projectId: string, action: GitActionPayload): Promise<{ ok: boolean; error?: string }>
   /** 小文本文件双击本机打开（文本扩展白名单 + <10MB；返回本机临时路径） */
   /**
    * v2.1.7 双击编辑（用户确认设计）：读远端文本（≤5MB；二进制拒绝）。

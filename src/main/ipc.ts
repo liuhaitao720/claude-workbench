@@ -26,7 +26,33 @@ import type {
   TaskActivityEvent,
   TaskRecord
 } from '../shared/types'
-import { getDiffFile, getDiffList, localGitRunner, remoteGitRunner } from './git-diff'
+import { diffDetailOf, getDiffFile, getDiffList, localGitRunner, remoteGitRunner, type GitRunner } from './git-diff'
+import {
+  cherryPickArgs,
+  createBranchArgs,
+  deleteBranchArgs,
+  gitCommitDetail,
+  gitCurrentBranch,
+  gitLog,
+  gitRepoStatus,
+  commitFileDiffArgs,
+  isSafeHash,
+  isSafeRef,
+  isSafeRemoteName,
+  isSafeRemoteUrl,
+  mergeArgs,
+  pullArgs,
+  pushArgs,
+  remoteAddArgs,
+  remoteRemoveArgs,
+  remoteSetUrlArgs,
+  stashDropArgs,
+  stashPopArgs,
+  stashPushArgs,
+  switchArgs,
+  switchTrackArgs
+} from './git-manager'
+import type { GitActionPayload } from '../shared/types'
 import type { SshShellSession } from './ssh/connection-manager'
 import { checkClaudeUpdate, fetchClaudeChangelog, getClaudeVersionInfo, installClaudeCli } from './claude-version'
 import { AppUpdater } from './app-updater'
@@ -1630,6 +1656,142 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       }
     }
   )
+
+  // ── v2.2.5 Git 管理（IDEA Git 工具窗式；git 自带命令；本地/远程同源 GitRunner）──
+  /** 项目 → GitRunner（远程项目经 connection.exec，cwd=项目目录；非 git 项目 null） */
+  const gitRunnerFor = (projectId: string): { runner: GitRunner; dir: string } | null => {
+    const project = projects.get(projectId)
+    if (project === undefined || project.isGit !== true) return null
+    const runner =
+      project.connectionId !== undefined && project.connectionId !== ''
+        ? remoteGitRunner(project.dir, (cmd) => ctx.connection.exec(project.connectionId!, cmd))
+        : localGitRunner(project.dir)
+    return { runner, dir: project.dir }
+  }
+  const gitErr = (err: unknown): { ok: false; error: string } => ({
+    ok: false,
+    error: err instanceof Error ? err.message : String(err)
+  })
+
+  ipcMain.handle(IpcChannels.GitStatus, async (_e, projectId: unknown) => {
+    const g = typeof projectId === 'string' ? gitRunnerFor(projectId) : null
+    if (g === null) return { ok: false, error: 'git: project not found or not a git repo' }
+    try {
+      const current = await gitCurrentBranch(g.runner)
+      return { ok: true, status: await gitRepoStatus(g.runner, current) }
+    } catch (err) {
+      return gitErr(err)
+    }
+  })
+
+  ipcMain.handle(IpcChannels.GitLog, async (_e, projectId: unknown, limit: unknown) => {
+    const g = typeof projectId === 'string' ? gitRunnerFor(projectId) : null
+    if (g === null) return { ok: false, error: 'git: project not found or not a git repo' }
+    const n =
+      typeof limit === 'number' && Number.isInteger(limit) && limit >= 10 && limit <= 1000 ? limit : 200
+    try {
+      return { ok: true, commits: await gitLog(g.runner, n) }
+    } catch (err) {
+      return gitErr(err)
+    }
+  })
+
+  ipcMain.handle(IpcChannels.GitCommitDetail, async (_e, projectId: unknown, hash: unknown) => {
+    const g = typeof projectId === 'string' ? gitRunnerFor(projectId) : null
+    if (g === null) return { ok: false, error: 'git: project not found or not a git repo' }
+    if (typeof hash !== 'string' || !isSafeHash(hash)) return { ok: false, error: 'git: invalid hash' }
+    try {
+      return { ok: true, ...(await gitCommitDetail(g.runner, hash)) }
+    } catch (err) {
+      return gitErr(err)
+    }
+  })
+
+  ipcMain.handle(IpcChannels.GitCommitFileDiff, async (_e, projectId: unknown, hash: unknown, path: unknown) => {
+    const g = typeof projectId === 'string' ? gitRunnerFor(projectId) : null
+    if (g === null) return { ok: false, error: 'git: project not found or not a git repo' }
+    if (typeof hash !== 'string' || !isSafeHash(hash) || typeof path !== 'string' || path === '') {
+      return { ok: false, error: 'git: invalid commit-file-diff args' }
+    }
+    try {
+      const out = await g.runner.run(commitFileDiffArgs(hash, path))
+      return { ok: true, detail: diffDetailOf(path, 'M', out) }
+    } catch (err) {
+      return gitErr(err)
+    }
+  })
+
+  /** 动作统一分发：逐 op 白名单校验（ref/hash/名称/URL）→ args → 执行 */
+  ipcMain.handle(IpcChannels.GitAction, async (_e, projectId: unknown, action: unknown) => {
+    const g = typeof projectId === 'string' ? gitRunnerFor(projectId) : null
+    if (g === null) return { ok: false, error: 'git: project not found or not a git repo' }
+    if (typeof action !== 'object' || action === null) return { ok: false, error: 'git: invalid action' }
+    const a = action as GitActionPayload
+    let args: string[] | null = null
+    switch (a.op) {
+      case 'switch':
+        if (isSafeRef(a.branch)) args = switchArgs(a.branch)
+        break
+      case 'switchTrack':
+        if (isSafeRef(a.local) && isSafeRef(a.remoteRef)) args = switchTrackArgs(a.local, a.remoteRef)
+        break
+      case 'createBranch':
+        if (isSafeRef(a.name) && (a.base === undefined || a.base === '' || isSafeRef(a.base))) {
+          args = createBranchArgs(a.name, a.base)
+        }
+        break
+      case 'merge':
+        if (isSafeRef(a.branch)) args = mergeArgs(a.branch, a.mode)
+        break
+      case 'pull':
+        args = pullArgs(a.mode)
+        break
+      case 'push':
+        if (
+          (a.remote === undefined || isSafeRef(a.remote)) &&
+          (a.branch === undefined || isSafeRef(a.branch))
+        ) {
+          args = pushArgs({
+            force: a.force === true,
+            remote: a.remote,
+            branch: a.branch,
+            setUpstream: a.setUpstream === true
+          })
+        }
+        break
+      case 'deleteBranch':
+        if (isSafeRef(a.branch)) args = deleteBranchArgs(a.branch, a.force === true)
+        break
+      case 'cherryPick':
+        if (isSafeHash(a.hash)) args = cherryPickArgs(a.hash)
+        break
+      case 'stashPush':
+        args = stashPushArgs(a.message)
+        break
+      case 'stashPop':
+        if (Number.isInteger(a.index) && a.index >= 0) args = stashPopArgs(a.index, a.apply === true)
+        break
+      case 'stashDrop':
+        if (Number.isInteger(a.index) && a.index >= 0) args = stashDropArgs(a.index)
+        break
+      case 'remoteAdd':
+        if (isSafeRemoteName(a.name) && isSafeRemoteUrl(a.url)) args = remoteAddArgs(a.name, a.url)
+        break
+      case 'remoteSetUrl':
+        if (isSafeRemoteName(a.name) && isSafeRemoteUrl(a.url)) args = remoteSetUrlArgs(a.name, a.url)
+        break
+      case 'remoteRemove':
+        if (isSafeRemoteName(a.name)) args = remoteRemoveArgs(a.name)
+        break
+    }
+    if (args === null) return { ok: false, error: `git: invalid action args (${(a as { op: string }).op})` }
+    try {
+      await g.runner.run(args)
+      return { ok: true }
+    } catch (err) {
+      return gitErr(err)
+    }
+  })
 
   // v2.0.1（用户指令，参考 FinalShell）：小文本文件双击本机打开——下载到临时
   // 目录（ssh-workbench-peek/，同名带序防叠）+ shell.openPath 系统默认程序。

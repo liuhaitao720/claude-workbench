@@ -2,6 +2,19 @@
 
 SSH Workbench 版本更新说明（新版本在前；应用内「设置 → 应用更新」读取本文件展示）。v1.5.0 前产品名为 Claude Workbench。
 
+## 2.2.5
+
+> Git 工作台（IDEA Git 工具窗式）：分支管理 + 多分支 graph 修改记录 + cherry-pick/stash/远程管理——**审查窗口并入，git 全用自带命令**
+
+- **Git 工作台**（用户需求 2026-11-23，界面参考 IDEA）：项目菜单「Git 管理…」→ 主区「⑂ Git」虚拟 tab。**顶栏**：工作区|历史模式切换、当前分支+↑↓ 徽记、Stash/远程/⟳/拉取/推送
+- **分支管理**（左栏，右键菜单）：检出（远程分支=建跟踪分支）/ 新建（可指定基点）/ 合并（**--ff-only / --no-ff 可选**）/ 删除（-d/-D 确认）/ 拉取（**--rebase / --ff-only 可选**）/ 推送（**-f 弹窗确认+二次确认**）
+- **修改记录**（中栏）：**多分支 graph 时间线**（git --graph 拓扑逐字符渲染——分叉/合并曲线原样）；搜索（提交/作者/hash）；点击提交 → 详情（右栏）：完整消息+hash 复制+变更文件（M/A/D 着色+±行数，双击看该提交 diff）
+- **cherry-pick**（提交右键，确认后落到当前分支）与 **Stash**（列表/暂存带消息/恢复 pop|apply/删除）
+- **远程仓库 URL 管理**：列表+新增/改名/删除（remote add|set-url|remove）
+- **审查窗口并入**（用户指令）：原 diff 审查窗口移除——工作区变更成为 Git 工作台的「工作区」模式（DiffReview 原样嵌入；全部既有入口不变）
+- **实现**：全部 git 自带命令（for-each-ref/log --graph/show/switch/merge/pull/push/stash/remote），本地项目 exec、远程项目 SSH exec 同源 GitRunner；ref/hash/名称/URL 白名单校验防注入
+- cwb-server 保持 0.2.2（纯客户端侧）
+
 ## 2.2.4
 
 > 文件面板压缩（tar.gz）+ 修复：纯 SSH 连接误弹「安装服务端」——纯 SSH 从此零 server 依赖

@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Git 分支与修改记录管理 — 设计原型（IDEA Git 工具窗式）</title>
+<style>
+:root{
+  --bg-app:#1e1f24; --bg-panel:#191a1f; --bg-dialog:#23242b; --bg-input:#14151a;
+  --bg-hover:#23242b; --bg-sel:#2b2d36; --text-max:#fff; --text-1:#ececf1; --text-2:#d7d7db;
+  --text-3:#9a9ca6; --text-4:#9496a0; --border-1:#33353d; --border-2:#26272e; --border-3:#3a3c45;
+  --accent:#3d76b3; --accent-bg:#2f5f8f; --ok:#6ad08c; --ok-bg:#1f3d2b; --ok-border:#2c5a3d;
+  --warn-text:#e3c66b; --warn-bg:#3a2f16; --danger-text:#f0b0b0; --danger-bg:#4a2222;
+  --btn-danger-bg:#6e2b2b; --btn-danger-border:#8f3a3a; --shadow-lg:0 12px 40px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg-app);font:13px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--text-1);display:flex;flex-direction:column;align-items:center;padding:22px 14px;gap:14px;min-height:100vh}
+.note{color:var(--text-3);font-size:12px;max-width:1180px}
+.note b{color:var(--text-2)}
+.btn{background:var(--bg-input);border:1px solid var(--border-3);border-radius:6px;color:var(--text-2);padding:4px 10px;font-size:12px;cursor:pointer}
+.btn:hover{color:var(--text-1);border-color:var(--accent)}
+.btn.primary{background:var(--accent-bg);border-color:var(--accent);color:#fff}
+.btn.danger{background:var(--btn-danger-bg);border-color:var(--btn-danger-border);color:var(--danger-text)}
+
+/* ── 舞台：主工作区 + Git 虚拟 tab ── */
+.stage{width:1180px;max-width:100%;height:760px;background:var(--bg-panel);border:1px solid var(--border-1);border-radius:10px;box-shadow:var(--shadow-lg);display:flex;flex-direction:column;overflow:hidden}
+.tabbar{display:flex;gap:2px;background:var(--bg-app);border-bottom:1px solid var(--border-2);padding:4px 8px 0;align-items:center}
+.tab{padding:5px 14px;border-radius:6px 6px 0 0;color:var(--text-3);font-size:12px;background:none;border:1px solid transparent;cursor:pointer}
+.tab.active{background:var(--bg-panel);color:var(--text-1);border-color:var(--border-2)}
+.tab .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin-right:5px}
+
+/* ── Git 面板顶栏（IDEA Git 工具窗头部：分支选择器 + 操作）── */
+.git-head{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border-2)}
+.git-head b{font-size:13px}
+.repo{font-size:11px;color:var(--text-3)}
+.branch-btn{display:inline-flex;align-items:center;gap:6px;background:var(--bg-input);border:1px solid var(--border-3);border-radius:6px;padding:3px 10px;color:var(--text-1);font-size:12px;cursor:pointer}
+.branch-btn:hover{border-color:var(--accent)}
+.branch-btn .tree{color:var(--accent);font-style:normal}
+.badge{font-size:10px;border-radius:8px;padding:0 6px;line-height:1.6}
+.badge.ahead{background:var(--ok-bg);border:1px solid var(--ok-border);color:var(--ok)}
+.badge.behind{background:var(--warn-bg);border:1px solid #5a4a1a;color:var(--warn-text)}
+.spacer{flex:1}
+
+/* ── 三栏：分支 | 提交时间线 | 提交详情（IDEA Git 布局）── */
+.git-body{flex:1;display:flex;min-height:0}
+.branches{width:250px;min-width:250px;border-right:1px solid var(--border-1);display:flex;flex-direction:column;background:var(--bg-panel)}
+.branches-head{display:flex;align-items:center;gap:6px;padding:7px 10px;color:var(--text-3);font-size:11px;border-bottom:1px solid var(--border-2)}
+.branch-list{flex:1;overflow-y:auto;padding:4px 0}
+.branch-group{padding:5px 10px 3px;color:var(--text-4);font-size:10.5px;letter-spacing:.05em}
+.branch-row{display:flex;align-items:center;gap:6px;padding:4px 10px 4px 14px;cursor:pointer;font-size:12.5px;color:var(--text-2)}
+.branch-row:hover{background:var(--bg-hover)}
+.branch-row.current{background:var(--bg-sel);color:var(--text-max);box-shadow:inset 3px 0 0 var(--accent)}
+.branch-row .cur{color:var(--ok);font-size:10px}
+.branch-row .name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.branch-row .menu{opacity:0;color:var(--text-4);cursor:pointer;padding:0 4px}
+.branch-row:hover .menu{opacity:1}
+
+/* log 时间线（IDEA log：graph 竖线 + hash + message + author/time）*/
+.log{flex:1;display:flex;flex-direction:column;min-width:0}
+.log-head{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--border-2)}
+.log-filter{flex:1;max-width:280px;background:var(--bg-input);border:1px solid var(--border-3);border-radius:6px;color:var(--text-3);font-size:12px;padding:3px 8px}
+.log-list{flex:1;overflow-y:auto;padding:2px 0}
+.wc-card{margin:6px 12px;border:1px solid var(--ok-border);background:var(--ok-bg);border-radius:8px;padding:6px 10px;display:flex;align-items:center;gap:8px;cursor:pointer}
+.wc-card:hover{border-color:var(--ok)}
+.wc-card .t{color:var(--text-1);font-size:12.5px}
+.wc-card .n{color:var(--ok);font-size:11px}
+.commit-row{display:flex;align-items:baseline;gap:8px;padding:4px 12px 4px 18px;cursor:pointer;position:relative;font-size:12.5px}
+.commit-row::before{content:'';position:absolute;left:9px;top:0;bottom:0;width:1px;background:var(--border-3)}
+.commit-row:first-child::before{top:50%}
+.commit-row:last-child::before{bottom:50%}
+.commit-row::after{content:'';position:absolute;left:6px;top:50%;transform:translateY(-50%);width:7px;height:7px;border-radius:50%;background:var(--bg-panel);border:2px solid var(--accent)}
+.commit-row:hover{background:var(--bg-hover)}
+.commit-row.sel{background:var(--bg-sel)}
+.commit-row.sel::after{background:var(--accent)}
+.commit-row .hash{font-family:ui-monospace,Consolas,monospace;color:var(--accent);font-size:12px}
+.commit-row .msg{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-1)}
+.commit-row .meta{color:var(--text-4);font-size:11px;flex:none}
+.commit-row .tag{font-size:10px;color:var(--warn-text);border:1px solid #5a4a1a;border-radius:8px;padding:0 5px;flex:none}
+
+/* 提交详情（IDEA commit details）*/
+.detail{width:380px;min-width:380px;border-left:1px solid var(--border-1);display:flex;flex-direction:column;background:var(--bg-panel)}
+.detail-head{padding:8px 12px;border-bottom:1px solid var(--border-2);display:flex;flex-direction:column;gap:3px}
+.detail-msg{color:var(--text-1);font-size:12.5px;line-height:1.5}
+.detail-hash{display:flex;align-items:center;gap:6px;color:var(--text-3);font-size:11px}
+.detail-hash code{font-family:ui-monospace,Consolas,monospace;color:var(--text-2)}
+.file-list{flex:1;overflow-y:auto;padding:4px 0}
+.file-row{display:flex;align-items:center;gap:8px;padding:4px 12px;font-size:12px;cursor:pointer;color:var(--text-2)}
+.file-row:hover{background:var(--bg-hover);color:var(--text-1)}
+.file-row .st{font-family:ui-monospace,Consolas,monospace;font-size:11px;width:14px;text-align:center}
+.st.M{color:var(--warn-text)} .st.A{color:var(--ok)} .st.D{color:var(--danger-text)}
+.file-row .path{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,Consolas,monospace;font-size:11.5px}
+.file-row .num{color:var(--text-4);font-size:11px;font-family:ui-monospace,Consolas,monospace}
+.num .add{color:var(--ok)} .num .del{color:var(--danger-text)}
+
+/* 右键菜单（分支行 · IDEA branches popup 语义）*/
+.ctx{position:fixed;z-index:50;background:var(--bg-dialog);border:1px solid var(--border-3);border-radius:8px;box-shadow:var(--shadow-lg);padding:4px;width:190px}
+.ctx-item{display:block;width:100%;text-align:left;background:none;border:none;color:var(--text-2);font-size:12.5px;padding:6px 10px;border-radius:5px;cursor:pointer}
+.ctx-item:hover{background:var(--bg-hover);color:var(--text-1)}
+.ctx-item.danger{color:var(--danger-text)}
+.ctx-sep{height:1px;background:var(--border-2);margin:4px 6px}
+.ctx .k{float:right;color:var(--text-4);font-size:11px}
+
+/* 标注 */
+.anno{position:fixed;pointer-events:none;z-index:60}
+.anno .box{background:#0f3a5c;border:1px solid var(--accent);border-radius:6px;color:#cfe3f5;font-size:11px;padding:6px 10px;max-width:230px;line-height:1.5}
+.legend{display:flex;gap:10px;flex-wrap:wrap;width:1180px;max-width:100%;color:var(--text-4);font-size:11px}
+</style>
+</head>
+<body>
+
+<p class="note"><b>Git 分支与修改记录管理 — 设计原型（v1，IDEA Git 工具窗式三栏）</b><br>
+入口：项目树项目菜单「Git 管理…」→ 主区虚拟 tab「Git」（同审查模式单槽先例）。本地项目直连本机 git，远程项目经 SSH exec——<b>全部功能用 git 自带命令</b>（for-each-ref / log / show / switch / merge / pull / push）。下方蓝框为交互标注。</p>
+
+<div class="stage">
+  <div class="tabbar">
+    <div class="tab"><span class="dot"></span>跑着</div>
+    <div class="tab active">⑂ Git · claude-workbench</div>
+    <div class="tab">+ 新建任务</div>
+  </div>
+
+  <!-- Git 面板顶栏：当前分支 + ahead/behind + 刷新/拉取/推送（IDEA：Update/Push）-->
+  <div class="git-head">
+    <b>Git</b>
+    <span class="repo">⌂ claude-workbench · /mnt/src/executable/claude-workbench</span>
+    <span style="flex:1"></span>
+    <button class="branch-btn"><span class="tree">⑂</span> feature/push-answer-mobile <span class="badge ahead">↑2</span></button>
+    <button class="btn" title="git stash 列表/暂存/恢复">◫ Stash (2)</button>
+    <button class="btn" title="远程仓库 URL 管理">⚙ 远程</button>
+    <button class="btn" title="刷新">⟳</button>
+    <button class="btn" title="git pull（可选 --rebase / --ff-only）">⇩ 拉取</button>
+    <button class="btn" title="git push（可选 -f，弹窗确认）">⇪ 推送</button>
+  </div>
+
+  <div class="git-body">
+    <!-- 左栏：分支（IDEA branches popup 常驻化）-->
+    <div class="branches">
+      <div class="branches-head">
+        <span style="flex:1">分支</span>
+        <button class="btn" style="padding:1px 8px;font-size:11px">＋ 新建</button>
+      </div>
+      <div class="branch-list">
+        <div class="branch-group">本地</div>
+        <div class="branch-row current"><span class="cur">●</span><span class="name">feature/push-answer-mobile</span><span class="menu">⋯</span></div>
+        <div class="branch-row"><span class="name">main</span><span class="badge behind">↓3</span><span class="menu">⋯</span></div>
+        <div class="branch-row"><span class="name">release/v2.1</span><span class="menu">⋯</span></div>
+        <div class="branch-group">远程 · origin</div>
+        <div class="branch-row"><span class="name">origin/feature/push-answer-mobile</span><span class="menu">⋯</span></div>
+        <div class="branch-row"><span class="name">origin/main</span><span class="menu">⋯</span></div>
+      </div>
+    </div>
+
+    <!-- 中栏：修改记录时间线（IDEA log）-->
+    <div class="log">
+      <div class="log-head">
+        <input class="log-filter" placeholder="搜索提交信息 / 作者…">
+        <span class="repo">feature/push-answer-mobile · 最近 200 条</span>
+      </div>
+      <div class="log-list">
+        <!-- 工作区变更（IDEA Local Changes——点击进入现有 diff 审查视图）-->
+        <div class="wc-card">
+          <span class="t">⚙ 工作区未提交变更</span><span class="n">5 个文件</span>
+          <span style="flex:1"></span><span class="repo">点击查看 diff →</span>
+        </div>
+        <div class="commit-row sel" style="padding-left:34px">
+          <span class="g-lane" style="position:absolute;left:18px;top:0;bottom:0;width:1px;background:var(--accent)"></span>
+          <span class="g-lane" style="position:absolute;left:29px;top:0;bottom:0;width:1px;background:#7a5ba6"></span>
+          <span style="position:absolute;left:15px;top:50%;transform:translateY(-50%);width:8px;height:8px;border-radius:50%;background:var(--accent);border:2px solid var(--bg-panel)"></span>
+          <span class="hash">550badc</span><span class="tag">HEAD</span>
+          <span class="msg">fix(term+files): v2.2.4 追加——Ctrl+V 双贴根治 + 文件面板选择交互</span>
+          <span class="meta">Haitao LIU · 今天 14:32</span>
+        </div>
+        <div class="commit-row" style="padding-left:34px">
+          <span class="g-lane" style="position:absolute;left:18px;top:0;bottom:0;width:1px;background:var(--accent)"></span>
+          <span class="g-lane" style="position:absolute;left:29px;top:0;bottom:0;width:1px;background:#7a5ba6"></span>
+          <span style="position:absolute;left:15px;top:50%;transform:translateY(-50%);width:8px;height:8px;border-radius:50%;border:2px solid var(--accent);background:var(--bg-panel)"></span>
+          <span class="hash">c7d9c32</span>
+          <span class="msg">docs(release): v2.2.4 发布说明入库</span>
+          <span class="meta">Haitao LIU · 今天 14:10</span>
+        </div>
+        <div class="commit-row">
+          <span class="hash">fb8bf61</span>
+          <span class="msg">release: v2.2.4——文件面板压缩（tar.gz）+ 纯 SSH 连接零 server 依赖</span>
+          <span class="meta">Haitao LIU · 今天 13:55</span>
+        </div>
+        <div class="commit-row" style="padding-left:34px">
+          <span class="g-lane" style="position:absolute;left:18px;top:0;bottom:0;width:1px;background:var(--accent)"></span>
+          <span class="g-lane" style="position:absolute;left:29px;top:0;bottom:50%;width:1px;background:#7a5ba6"></span>
+          <span style="position:absolute;left:26px;top:50%;transform:translateY(-50%) rotate(45deg);width:8px;height:1.5px;background:#7a5ba6"></span>
+          <span style="position:absolute;left:15px;top:50%;transform:translateY(-50%);width:8px;height:8px;border-radius:50%;border:2px solid #7a5ba6;background:var(--bg-panel)"></span>
+          <span class="hash">ff161b2</span>
+          <span class="msg">ci(release): runner 装 wine——NSIS 经 wine 跑 signtool</span>
+          <span class="meta">Claude · 昨天 19:21</span>
+        </div>
+        <div class="commit-row">
+          <span class="hash">7609e3e</span>
+          <span class="msg">ci(release): 外送步骤 shell 显式 {0} 禁 -e + 双通道</span>
+          <span class="meta">Claude · 昨天 18:47</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右栏：提交详情（IDEA commit details + 变更文件 → diff）-->
+    <div class="detail">
+      <div class="detail-head">
+        <span class="detail-msg">fix(term+files): v2.2.4 追加——Ctrl+V 双贴根治 + 文件面板选择交互（FinalShell 式）</span>
+        <span class="detail-hash">
+          <code>550badc…</code><button class="btn" style="padding:0 6px;font-size:11px">复制</button>
+          <span>· Haitao LIU · 2026-11-23 14:32</span>
+        </span>
+      </div>
+      <div class="file-list">
+        <div class="file-row"><span class="st M">M</span><span class="path">src/renderer/src/components/TerminalPanel.tsx</span><span class="num"><span class="add">+12</span> <span class="del">-4</span></span></div>
+        <div class="file-row"><span class="st M">M</span><span class="path">src/renderer/src/components/SshConsoleView.tsx</span><span class="num"><span class="add">+11</span> <span class="del">-3</span></span></div>
+        <div class="file-row"><span class="st M">M</span><span class="path">src/renderer/src/styles.css</span><span class="num"><span class="add">+38</span> <span class="del">-9</span></span></div>
+        <div class="file-row"><span class="st M">M</span><span class="path">CHANGELOG.md</span><span class="num"><span class="add">+6</span> <span class="del">-1</span></span></div>
+        <div class="file-row"><span class="st M">M</span><span class="path">docs/release-v2.2.4.md</span><span class="num"><span class="add">+9</span></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 分支行右键菜单（标注交互；IDEA branches popup 项集）-->
+<div class="ctx" style="left:calc(50% - 590px + 60px);top:calc(50% - 380px + 300px)">
+  <button class="ctx-item">检出 checkout<span class="k">git switch</span></button>
+  <button class="ctx-item">从此处新建分支…<span class="k">switch -c</span></button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-item">合并到当前分支…<span class="k">git merge</span></button>
+  <button class="ctx-item">拉取 pull<span class="k">--ff-only</span></button>
+  <button class="ctx-item">推送 push</button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-item danger">删除分支…<span class="k">branch -d</span></button>
+</div>
+
+<!-- 提交行右键（IDEA log 菜单子集）-->
+<div class="ctx" style="left:calc(50% + 60px);top:calc(50% - 380px + 410px)">
+  <button class="ctx-item">Cherry-pick 到当前分支…<span class="k">git cherry-pick</span></button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-item">复制短 hash</button>
+  <button class="ctx-item">复制完整 hash</button>
+</div>
+
+<div class="anno" style="left:calc(50% + 40px);top:calc(50% - 380px + 96px)">
+  <div class="box">顶栏 = IDEA Git 工具窗头：当前分支 + ahead/behind 徽记 + ⟳刷新 / 拉取 / 推送（对应 IDEA Update Project / Push）。危险操作（合并/删除/推送）均先弹确认窗。</div>
+</div>
+<div class="anno" style="left:calc(50% + 240px);top:calc(50% - 380px + 330px)">
+  <div class="box">时间线 = IDEA log：graph 竖线 + 短 hash + 主题 + 作者/相对时间；顶部「工作区未提交变更」卡点击直达现有 diff 审查视图（引擎复用 getDiffList）。点击提交 → 右侧详情；双击文件 → 该文件的 git show diff。</div>
+</div>
+
+<div class="legend">
+  <span>① 范围：分支管理（检出/新建/合并 --ff-only|--no-ff/删除）· 多分支 graph 时间线 · cherry-pick · stash（列表/暂存/恢复）· 拉取（--rebase|--ff-only 可选）· 推送（-f 弹窗确认）· 远程 URL 管理（增/改/删）· 工作区变更直达 diff</span>
+  <span>② 拉取/合并/推送均带模式选择弹窗；危险操作（合并/删除/-f 推送）一律确认窗</span>
+  <span>③ 命令全走 git 自带 porcelain（本地 exec / 远程 SSH exec 同源 GitRunner）</span>
+</div>
+
+</body>
+</html>

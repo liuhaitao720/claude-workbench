@@ -391,9 +391,14 @@ function ProjectNode({
     ...(project.isGit
       ? [
           {
-            // v2.0.2 主区审查模式：git 项目常驻入口（打开/激活审查虚拟 tab）
+            // v2.0.2 主区审查模式：git 项目常驻入口（v2.2.5 起并入 Git 工作台工作区模式）
             label: t('review.openMenu'),
             onClick: () => void useAppStore.getState().openReview(project.id)
+          },
+          {
+            // v2.2.5 Git 管理：分支/历史/Stash/远程（IDEA Git 工具窗式）
+            label: t('tree.gitManager'),
+            onClick: () => useAppStore.getState().openGitPanel(project.id)
           }
         ]
       : []),

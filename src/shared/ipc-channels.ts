@@ -94,6 +94,12 @@ const HANDLE = {
   FilesDelete: 'cwb:files:delete',
   /** v2.2.4 文件面板选中项压缩（tar.gz；碰撞预检+确认弹窗在 renderer） */
   FilesCompress: 'cwb:files:compress',
+  // ── v2.2.5 Git 分支与修改记录管理（IDEA Git 工具窗式；git 自带命令）──
+  GitStatus: 'cwb:git:status',
+  GitLog: 'cwb:git:log',
+  GitCommitDetail: 'cwb:git:commit',
+  GitCommitFileDiff: 'cwb:git:commit-file-diff',
+  GitAction: 'cwb:git:action',
   FilesPickUpload: 'cwb:files:pick-upload',
   FilesReadText: 'cwb:files:read-text',
   FilesWriteText: 'cwb:files:write-text',

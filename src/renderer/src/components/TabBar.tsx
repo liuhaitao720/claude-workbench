@@ -25,6 +25,10 @@ export function TabBar() {
   const reviewActive = useAppStore((s) => s.reviewActive)
   const activateReview = useAppStore((s) => s.activateReview)
   const closeReview = useAppStore((s) => s.closeReview)
+  // v2.2.5 Git tab（合并审查 tab）
+  const gitPanel = useAppStore((s) => s.gitPanel)
+  const gitActive = useAppStore((s) => s.gitActive)
+  const activateGit = useAppStore((s) => s.activateGit)
   const projects = useAppStore((s) => s.projects)
   // v2.1.0 SSH 纯终端虚拟 tab；v2.1.6：**每台（连接）一个 tab**（不再折叠成单 tab）
   const sshConsoleCid = useAppStore((s) => s.sshConsoleCid)
@@ -116,41 +120,54 @@ export function TabBar() {
           </button>
         </div>
       ))}
-      {/* v2.0.2 审查虚拟 tab：diff 图标(菱形◆) + 项目名 + 改动数角标；
-          与任务 tab 同排，roving tabindex 链尾——键盘 ←→ 可达 */}
-      {reviewState !== null && (
-        <div
-          role="tab"
-          aria-selected={reviewActive && !sshActive}
-          className={reviewActive && !sshActive ? 'tab review-tab active' : 'tab review-tab'}
-          data-testid="review-tab"
-          tabIndex={reviewActive || (openTasks.length === 0 && sshConsoleCid === null) ? 0 : -1}
-          onClick={() => activateReview()}
-          onKeyDown={(e) => onTabKeyDown(e, openTasks.length)}
-          title={reviewState.cwd}
-        >
-          <span className="review-tab-icon" aria-hidden="true">
-            ◆
-          </span>
-          <span className="tab-name">
-            {tr('review.tabLabel', { name: projects.find((p) => p.id === reviewState.projectId)?.name ?? '' })}
-          </span>
-          <span className="review-tab-count" aria-label={tr('review.tabCountAria', { count: reviewState.files.length })}>
-            {reviewState.files.length}
-          </span>
-          <button
-            type="button"
-            className="tab-close"
-            title={tr('review.close')}
-            onClick={(e) => {
-              e.stopPropagation()
-              closeReview()
+      {/* v2.2.5 Git 虚拟 tab（合并原审查 tab——用户指令：审查窗口移除并入 Git 面板）：
+          工作区模式=变更文件数角标；点击=工作区模式（无 reviewState 则进历史）；
+          × 同时关 reviewState 与 gitPanel。 */}
+      {(reviewState !== null || gitPanel !== null) && (() => {
+        const pid = gitPanel?.projectId ?? reviewState?.projectId ?? ''
+        const tabActive = (reviewActive || gitActive) && !sshActive
+        const wcCount = reviewState !== null && reviewState.projectId === pid ? reviewState.files.length : 0
+        return (
+          <div
+            role="tab"
+            aria-selected={tabActive}
+            className={tabActive ? 'tab review-tab active' : 'tab review-tab'}
+            data-testid="git-tab"
+            tabIndex={tabActive || (openTasks.length === 0 && sshConsoleCid === null) ? 0 : -1}
+            onClick={() => {
+              if (reviewState !== null && reviewState.projectId === pid) activateReview()
+              else if (gitPanel !== null) activateGit()
+              else if (pid !== '') void useAppStore.getState().openGitPanel(pid)
             }}
+            onKeyDown={(e) => onTabKeyDown(e, openTasks.length)}
+            title={projects.find((p) => p.id === pid)?.dir ?? ''}
           >
-            ×
-          </button>
-        </div>
-      )}
+            <span className="review-tab-icon" aria-hidden="true">
+              ⑂
+            </span>
+            <span className="tab-name">
+              {tr('git.tabLabel', { name: projects.find((p) => p.id === pid)?.name ?? '' })}
+            </span>
+            {wcCount > 0 && (
+              <span className="review-tab-count" aria-label={tr('review.tabCountAria', { count: wcCount })}>
+                {wcCount}
+              </span>
+            )}
+            <button
+              type="button"
+              className="tab-close"
+              title={tr('review.close')}
+              onClick={(e) => {
+                e.stopPropagation()
+                closeReview()
+                useAppStore.getState().closeGitPanel()
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )
+      })()}
       {/* v2.1.6 SSH 终端 tab：**每台（连接）一个**——▣ 图标 + 连接名，点击切台
           （不重开 shell），× 只关该台；关的是当前台由 store 切换/退出视图。
           v2.1.2 空态保留：零台但 SSH 视图前台（cid=null）时渲染单个占位 tab。 */}

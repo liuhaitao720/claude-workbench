@@ -72,7 +72,7 @@ describe('审查流（store + TabBar 虚拟 tab）', () => {
     expect(useAppStore.getState().reviewActive).toBe(true)
 
     // 虚拟 tab 出现（◆ + 项目名 + 改动数角标）
-    const reviewTab = screen.getByTestId('review-tab')
+    const reviewTab = screen.getByTestId('git-tab')
     expect(reviewTab.getAttribute('aria-selected')).toBe('true')
     expect(reviewTab.textContent).toContain('RepoA')
     expect(reviewTab.textContent).toContain('3')
@@ -86,10 +86,10 @@ describe('审查流（store + TabBar 虚拟 tab）', () => {
     fireEvent.click(screen.getByRole('tab', { name: /任务一/ }))
     await waitFor(() => expect(useAppStore.getState().reviewActive).toBe(false))
     expect(useAppStore.getState().reviewState).not.toBeNull()
-    expect(screen.getByTestId('review-tab').getAttribute('aria-selected')).toBe('false')
+    expect(screen.getByTestId('git-tab').getAttribute('aria-selected')).toBe('false')
 
     // 点审查 tab → 回审查（状态留存：选中文件不变）
-    fireEvent.click(screen.getByTestId('review-tab'))
+    fireEvent.click(screen.getByTestId('git-tab'))
     await waitFor(() => expect(useAppStore.getState().reviewActive).toBe(true))
     expect(useAppStore.getState().reviewState?.selectedPath).toBe('src/a.ts')
   })
@@ -99,9 +99,9 @@ describe('审查流（store + TabBar 虚拟 tab）', () => {
     await useAppStore.getState().openReview('p1')
     await waitFor(() => expect(useAppStore.getState().reviewState?.files).toHaveLength(3))
 
-    fireEvent.click(within(screen.getByTestId('review-tab')).getByText('×'))
+    fireEvent.click(within(screen.getByTestId('git-tab')).getByText('×'))
     await waitFor(() => expect(useAppStore.getState().reviewState).toBeNull())
-    expect(screen.queryByTestId('review-tab')).toBeNull()
+    expect(screen.queryByTestId('git-tab')).toBeNull()
     expect(mock.listDiff).toHaveBeenCalledTimes(1)
 
     // 重开 = 重新拉快照
