@@ -2814,12 +2814,21 @@ button {
 .files-rail-toggle { writing-mode: vertical-lr; padding: 10px 4px; background: var(--bg-sel); border: 1px solid var(--border-3); border-left: none; border-radius: 6px 0 0 6px; color: var(--text-2); cursor: pointer; font-size: 12px; letter-spacing: .2em; align-self: flex-start; margin-top: 44px; }
 .files-rail-toggle:hover { color: var(--text-1); }
 
-/* v2.0.1（用户实测）：文件面板鼠标形状始终箭头——行/面包屑/竖条不再手型，按钮亦统一 */
+/* v2.0.1（用户实测）：文件面板鼠标形状始终箭头——行/面包屑/竖条不再手型，按钮亦统一。
+   v2.2.4（用户指令 2026-11-23）修复：本规则声明体在某次合并中丢失，5 个选择器被
+   卷进下方 .scope-chips 规则（行变 flex、箭头失效成 I-beam）——恢复独立规则；并加
+   行 user-select:none——Shift 多选不再出现半截文字高亮（复制/改名走状态条名称输入框） */
 .files-panel,
 .files-panel .files-row,
 .files-panel .crumb button,
 .files-panel button,
-.files-rail-toggle,
+.files-rail-toggle {
+  cursor: default;
+}
+.files-panel .files-row {
+  user-select: none;
+}
+
 /* ── v2.0.1 侧栏作用域 chips（用户确认原型 design/sidebar-scope-v2.html） ── */
 .scope-chips {
   display: flex;
@@ -2853,12 +2862,31 @@ button {
 .sb-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dot-gray); flex: none; }
 .sb-chip-dot[data-state='connected'] { background: var(--ok-dot); }
 
-/* v2.0.1 文件行多选选中态 */
-.files-row.sel { background: var(--bg-sel); }
-.files-row.sel .files-name { color: var(--text-max); }
+/* v2.0.1 文件行多选选中态；v2.2.4（用户指令）：底色改 accent 浸染+左缘条——
+   与普通行/hover 的差异更明显（FinalShell 式高对比选中） */
+.files-row.sel {
+  background: var(--accent-bg);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.files-row.sel:hover { background: var(--accent-bg); }
+.files-row.sel .files-name { color: #fff; }
+.files-row.sel .files-size, .files-row.sel .files-mtime { color: rgba(255, 255, 255, 0.75); }
 
 .files-statusbar { display: flex; gap: 12px; align-items: center; padding: 5px 12px; border-top: 1px solid var(--border-2); font-size: 11px; color: var(--text-3); margin: 0; overflow: hidden; white-space: nowrap; }
 .files-statusbar .mono { font-family: ui-monospace,Consolas,monospace; color: var(--text-2); }
+/* v2.2.4（用户指令，FinalShell 式）：选中项名称输入框——可选中复制名称，回车改名 */
+.files-statusbar-name {
+  flex: 0 1 240px;
+  min-width: 60px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  color: var(--text-1);
+  font-size: 11px;
+  font-family: ui-monospace,Consolas,monospace;
+  padding: 2px 6px;
+}
+.files-statusbar-name:focus { border-color: var(--accent); outline: none; }
 
 /* v2.0.1 框选橡皮筋（列表容器相对定位） */
 .files-list { position: relative; }

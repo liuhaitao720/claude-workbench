@@ -266,6 +266,12 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
           (ev.ctrlKey && !ev.altKey && !ev.metaKey && ev.key.toLowerCase() === 'v') ||
           (ev.shiftKey && !ev.ctrlKey && !ev.altKey && ev.key === 'Insert')
         ) {
+          // v2.2.4（用户实测 Ctrl+V 重复粘贴）：必须同步 preventDefault——return false
+          // 只拦 xterm 自身处理，浏览器默认动作仍会把原生 paste 事件送进 xterm 隐藏
+          // textarea，与下面的显式 t.paste() 叠成双份（Electron 升级后原生粘贴恢复
+          // 可用才浮现；右键粘贴不走 keydown，故无此问题）。preventDefault 须同步
+          // 调用（异步 readText 回来再调无效——默认动作已发生）
+          ev.preventDefault()
           void navigator.clipboard
             .readText()
             .then((text) => {

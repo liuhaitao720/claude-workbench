@@ -423,9 +423,17 @@ describe('v2.0 远程文件面板（L2.5 装配）', () => {
     expect(row.querySelector('.files-mtime')?.textContent).toMatch(/11-12|09:30/)
     fireEvent.click(row)
     const bar = await screen.findByTestId('files-statusbar')
-    expect(bar.textContent).toContain('deploy.md')
+    // v2.2.4：名称在状态条输入框（value）——可复制/回车改名
+    const nameInput = within(bar).getByTestId('sel-name-input') as HTMLInputElement
+    expect(nameInput.value).toBe('deploy.md')
     expect(bar.textContent).toContain('214.0 KB')
     expect(bar.textContent).toMatch(/2026/)
+    // 回车改名走 renameRemote（改值→Enter）；Esc 还原
+    fireEvent.change(nameInput, { target: { value: 'deploy2.md' } })
+    fireEvent.keyDown(nameInput, { key: 'Enter' })
+    await waitFor(() =>
+      expect(api.renameRemote).toHaveBeenCalledWith('c1', '/home/dev/deploy.md', '/home/dev/deploy2.md')
+    )
   })
 
   it('v2.1.1 远程项目菜单「在 SSH 终端中打开」→ SSH 台开 + 文件面板定位项目目录', async () => {

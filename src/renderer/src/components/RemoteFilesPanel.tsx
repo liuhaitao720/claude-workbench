@@ -463,6 +463,36 @@ useEffect(() => {
     }
   }
 
+  /**
+   * v2.2.4（用户指令，FinalShell 式）状态条名称输入框值：单选时随选区/目录刷新
+   * 同步为该行名称（编辑只改本地值，回车才落远端；Esc 还原）
+   */
+  const [selName, setSelName] = useState('')
+  useEffect(() => {
+    const sel = st.entries.filter((f) => selected.has(f.name))
+    setSelName(sel.length === 1 ? sel[0]!.name : '')
+  }, [selected, st.entries])
+
+  /** v2.2.4 状态条名称回车=改名（同 submitRename 语义；名称输入框即改名入口） */
+  const submitSelName = async (): Promise<void> => {
+    const sel = st.entries.filter((f) => selected.has(f.name))
+    if (sel.length !== 1) return
+    const from = sel[0]!.name
+    const to = selName.trim()
+    if (to === '' || to === from) return
+    try {
+      await window.cwb.renameRemote(
+        connectionId,
+        `${st.path === '/' ? '' : st.path}/${from}`,
+        `${st.path === '/' ? '' : st.path}/${to}`
+      )
+      setSelected(new Set())
+      load(st.path, false)
+    } catch (err) {
+      setSt((s) => ({ ...s, error: errMsg(err) }))
+    }
+  }
+
   // ── v2.2.4 压缩（用户需求 2026-11-23）──────────────────────────────
   /** 开窗（默认名：单选=基名.tar.gz / 多选=archive-时刻戳.tar.gz） */
   const openCompress = (targets: string[]): void => {
@@ -767,17 +797,40 @@ useEffect(() => {
           </div>
         </div>
       )}
-      {/* v2.0.1（用户实测）：选中项全量信息条——完整时间在列宽不足时的承载位 */}
+      {/* v2.0.1 选中项信息条；v2.2.4（用户指令，FinalShell 式）：单选=名称输入框
+          （点击可选中复制名称；编辑+回车=改名，Esc 还原）；多选=计数+样例 */}
       {(() => {
-        const sel = st.entries.find((f) => selected.has(f.name))
-        if (sel === undefined) return null
+        const sel = st.entries.filter((f) => selected.has(f.name))
+        if (sel.length === 0) return null
+        if (sel.length > 1) {
+          const sample = sel.slice(0, 2).map((f) => f.name).join('、')
+          return (
+            <p className="files-statusbar" data-testid="files-statusbar">
+              <span>{t('files.selectedN', { n: String(sel.length) })}</span>
+              <span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {sample}
+                {sel.length > 2 ? ' …' : ''}
+              </span>
+            </p>
+          )
+        }
+        const f = sel[0]!
         return (
           <p className="files-statusbar" data-testid="files-statusbar">
-            <span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {sel.name}
-            </span>
-            <span>{sel.isDir ? t('files.dirLabel') : fmtSize(sel.size)}</span>
-            <span>{sel.mtimeMs > 0 ? new Date(sel.mtimeMs).toLocaleString() : ''}</span>
+            <input
+              className="files-statusbar-name"
+              data-testid="sel-name-input"
+              spellCheck={false}
+              title={t('files.selNameHint')}
+              value={selName}
+              onChange={(e) => setSelName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void submitSelName()
+                if (e.key === 'Escape') setSelName(f.name)
+              }}
+            />
+            <span>{f.isDir ? t('files.dirLabel') : fmtSize(f.size)}</span>
+            <span>{f.mtimeMs > 0 ? new Date(f.mtimeMs).toLocaleString() : ''}</span>
           </p>
         )
       })()}

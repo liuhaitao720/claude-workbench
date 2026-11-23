@@ -205,6 +205,9 @@ export const zh = {
   'files.compressErrDot': '名称不能是 . 或 ..',
   'files.compressErrEntries': '压缩目标非法',
   'files.compressErrExists': '同名文件已存在，请换名或先删除',
+  // v2.2.4 状态条名称输入框（FinalShell 式：复制名称/回车改名）
+  'files.selectedN': '已选 {n} 项',
+  'files.selNameHint': '名称：可选中复制；编辑后回车重命名（Esc 还原）',
   'files.dirLabel': '目录',
   'tree.openInFiles': '在文件面板中打开',
   'files.saveDirLabel': '保存目录',
@@ -938,6 +941,9 @@ export const en: Record<MessageKey, string> = {
   'files.compressErrDot': 'Name cannot be . or ..',
   'files.compressErrEntries': 'Invalid compress targets',
   'files.compressErrExists': 'A file with this name already exists — rename or delete it first',
+  // v2.2.4 statusbar name input
+  'files.selectedN': '{n} selected',
+  'files.selNameHint': 'Name: select to copy; edit + Enter to rename (Esc to revert)',
   'files.mkdirPrompt': 'New folder name:',
   'files.conflictTitle': 'Name conflicts',
   'files.conflictHint': '{n} upload target(s) may conflict — choose the policy for them:',

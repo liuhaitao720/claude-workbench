@@ -326,6 +326,9 @@ function SshTermPane({ cid, active }: { cid: string; active: boolean }) {
             (ev.ctrlKey && !ev.altKey && !ev.metaKey && ev.key.toLowerCase() === 'v') ||
             (ev.shiftKey && !ev.ctrlKey && !ev.altKey && ev.key === 'Insert')
           ) {
+            // v2.2.4（用户实测 Ctrl+V 重复粘贴）：同步 preventDefault 阻断浏览器默认
+            // 动作，防原生 paste 事件再进 xterm textarea 叠第二份（同 TerminalPanel 修复）
+            ev.preventDefault()
             void navigator.clipboard
               .readText()
               .then((text) => {
