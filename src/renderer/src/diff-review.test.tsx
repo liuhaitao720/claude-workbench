@@ -189,16 +189,17 @@ describe('DiffReview 组件交互', () => {
 })
 
 describe('v2.0.3 审查竖条入口（常驻可见）', () => {
-  it('git 项目 + active 任务 → 竖条「Git」可见（v2.2.5 标签统一）；点击直达项目与 worktree 目录；非 git 无按钮', async () => {
+  it('git 项目 + active 任务 → 竖条「Git」可见；点击直接开 Git 面板（历史模式=Git 管理同款）；非 git 无按钮', async () => {
     await renderApp()
     const wtTask = makeTask({ id: 'tw', projectId: 'p1', name: 'worktree 活', cwd: 'D:\\repo-a', worktreePath: 'D:\\repo-a\\.cwb-worktrees\\tw' })
     useAppStore.setState((s) => ({ tasks: [...s.tasks, wtTask], openTaskIds: [...s.openTaskIds, 'tw'], activeTaskId: 'tw' }))
     const rail = await screen.findByTestId('btn-review-rail')
     expect(rail.textContent).toContain('Git')
+    // v2.2.5（用户指令）：快捷入口与「Git 管理…」同语义——开 Git 面板而非工作区模式
     fireEvent.click(rail)
     await waitFor(() => {
-      expect(useAppStore.getState().reviewState?.projectId).toBe('p1')
-      expect(useAppStore.getState().reviewState?.cwd).toBe('D:\\repo-a\\.cwb-worktrees\\tw')
+      expect(useAppStore.getState().gitPanel?.projectId).toBe('p1')
+      expect(useAppStore.getState().gitActive).toBe(true)
     })
   })
 })

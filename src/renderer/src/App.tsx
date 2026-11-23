@@ -64,20 +64,22 @@ export function App() {
       if (e.key.toLowerCase() !== 'd') return
       if (isTypingTarget(e)) return
       const s = useAppStore.getState()
-      if (s.reviewState === null) {
+      // v2.2.5（用户指令 2026-11-23）：快捷键与右缘竖条同语义——直接开 Git 面板
+      // （与「Git 管理…」一致的历史模式；工作区改动经面板内模式切换到达）
+      if (s.gitPanel === null) {
         const pid = s.selectedProjectId ?? s.projects.find((p) => p.isGit)?.id ?? null
         if (pid !== null) {
           e.preventDefault()
-          void s.openReview(pid)
+          s.openGitPanel(pid)
         }
         return
       }
       e.preventDefault()
-      if (s.reviewActive) {
-        // 回终端：有任务切 active（setActive 落 reviewActive=false）；无任务直接收起
+      if (s.gitActive) {
+        // 回终端：有任务切 active（setActive 落 gitActive=false）；无任务直接收起
         if (s.activeTaskId !== null) s.setActive(s.activeTaskId)
-        else useAppStore.setState({ reviewActive: false })
-      } else s.activateReview()
+        else useAppStore.setState({ gitActive: false })
+      } else s.activateGit()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -199,7 +201,7 @@ export function App() {
               className="files-rail-toggle"
               title={t('review.railToggleTitle')}
               data-testid="btn-review-rail"
-              onClick={() => void useAppStore.getState().openReview(reviewEntry.projectId, reviewEntry.cwd)}
+              onClick={() => useAppStore.getState().openGitPanel(reviewEntry.projectId)}
             >
               {t('review.railToggle')}
             </button>
