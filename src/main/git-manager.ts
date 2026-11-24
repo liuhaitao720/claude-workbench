@@ -81,12 +81,16 @@ export function detachedHeadArgs(): string[] {
   return ['rev-parse', '--short', 'HEAD']
 }
 
-/** 多分支 graph 日志（--all + 当前 HEAD 在前；\x1f 字段分隔） */
-export function logArgs(limit: number): string[] {
+/**
+ * graph 日志（\x1f 字段分隔；graph ASCII 前缀原样保留）。
+ * v2.2.7（用户需求）：branch 给定=只看该分支可达提交（`git log <branch>`，
+ * 本地/远程 ref 均可）；缺省=--all 全分支混排。
+ */
+export function logArgs(limit: number, branch?: string): string[] {
   return [
     'log',
     '--graph',
-    '--all',
+    ...(branch !== undefined && branch !== '' ? [branch] : ['--all']),
     `--date=iso8601-strict`,
     `--pretty=format:%x1f%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1f%D`,
     '-n',
@@ -299,8 +303,8 @@ export async function gitRepoStatus(runner: GitRunner, current: string): Promise
   }
 }
 
-export async function gitLog(runner: GitRunner, limit = 200): Promise<GitCommitInfo[]> {
-  return parseLog(await runner.run(logArgs(limit)))
+export async function gitLog(runner: GitRunner, limit = 200, branch?: string): Promise<GitCommitInfo[]> {
+  return parseLog(await runner.run(logArgs(limit, branch)))
 }
 
 export async function gitCommitDetail(

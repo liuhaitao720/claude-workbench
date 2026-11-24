@@ -3495,3 +3495,8 @@ button {
 .git-wc-text{font-weight:600;flex:none}
 .git-wc-count{color:var(--ok);font-size:11px;flex:none}
 .git-wc-hint{margin-left:auto;font-size:11px;flex:none}
+
+/* v2.2.7 分支提交过滤 chip（log 面板头；× 清除回全分支） */
+.git-log-chip{display:inline-flex;align-items:center;gap:5px;max-width:220px;background:var(--bg-sel);border:1px solid var(--accent);border-radius:10px;padding:1px 6px 1px 8px;font-size:11px;color:var(--text-1);overflow:hidden;white-space:nowrap}
+.git-log-chip-x{border:none;background:none;color:var(--text-3);cursor:pointer;font-size:13px;line-height:1;padding:0 2px;flex:none}
+.git-log-chip-x:hover{color:var(--danger-text)}

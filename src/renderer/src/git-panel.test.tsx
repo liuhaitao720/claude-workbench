@@ -80,7 +80,7 @@ describe('v2.2.5 Git 工作台（L2.5 装配）', () => {
     const api = installCwbMock({ projects: [gitProject], tasks: [task1] })
     await openViaMenu(api)
     expect(api.gitStatus).toHaveBeenCalledWith('p1')
-    expect(api.gitLog).toHaveBeenCalledWith('p1')
+    expect(api.gitLog).toHaveBeenCalledWith('p1', undefined, undefined)
     // 分支列表：本地组当前置顶 + ahead/behind；远程组
     const frame = screen.getByTestId('git-frame')
     expect(within(frame).getByText('main')).toBeDefined()
@@ -157,6 +157,23 @@ describe('v2.2.5 Git 工作台（L2.5 装配）', () => {
       expect(api.gitAction).toHaveBeenCalledWith('p1', expect.objectContaining({ op: 'push', force: true }))
     )
     expect(confirmSpy).toHaveBeenCalled()
+  })
+
+  it('v2.2.7 分支右键「查看提交记录」→ gitLog 带分支过滤 + chip 可清除回全分支', async () => {
+    const api = installCwbMock({ projects: [gitProject], tasks: [task1] })
+    await openViaMenu(api)
+    // 本地分支 feature/x 右键 → 查看提交记录
+    const row = screen.getAllByTestId('git-branch').find((el) => el.getAttribute('data-branch') === 'feature/x')!
+    fireEvent.contextMenu(row)
+    fireEvent.click(await screen.findByText('查看提交记录'))
+    await waitFor(() => expect(api.gitLog).toHaveBeenLastCalledWith('p1', undefined, 'feature/x'))
+    // chip 显示分支名
+    const chip = await screen.findByTestId('git-log-branch-chip')
+    expect(chip.textContent).toContain('feature/x')
+    // × 清除 → 回全分支（undefined）且 chip 消失
+    fireEvent.click(chip.querySelector('button')!)
+    await waitFor(() => expect(api.gitLog).toHaveBeenLastCalledWith('p1', undefined, undefined))
+    await waitFor(() => expect(screen.queryByTestId('git-log-branch-chip')).toBeNull())
   })
 
   it('v2.2.6 工作区未提交变更卡：wcCount>0 显示（含文件数）→ 点击直达工作区模式（listDiff+DiffReview 渲染）', async () => {

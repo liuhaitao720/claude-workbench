@@ -245,7 +245,7 @@ const api: CWBApi = {
     ipcRenderer.invoke(IpcChannels.FilesCompress, cid, dir, name, entries) as Promise<void>,
   // v2.2.5 Git 管理
   gitStatus: (projectId) => ipcRenderer.invoke(IpcChannels.GitStatus, projectId),
-  gitLog: (projectId, limit) => ipcRenderer.invoke(IpcChannels.GitLog, projectId, limit),
+  gitLog: (projectId, limit, branch) => ipcRenderer.invoke(IpcChannels.GitLog, projectId, limit, branch),
   gitCommitDetail: (projectId, hash) => ipcRenderer.invoke(IpcChannels.GitCommitDetail, projectId, hash),
   gitCommitFileDiff: (projectId, hash, path) =>
     ipcRenderer.invoke(IpcChannels.GitCommitFileDiff, projectId, hash, path),

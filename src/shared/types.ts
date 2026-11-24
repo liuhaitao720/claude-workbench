@@ -962,7 +962,8 @@ export interface CWBApi {
   compressRemote(cid: string, dir: string, name: string, entries: string[]): Promise<void>
   // ── v2.2.5 Git 管理（本地/远程项目同链；结果 {ok} | {ok:false,error}）──
   gitStatus(projectId: string): Promise<{ ok: true; status: GitRepoStatus } | { ok: false; error: string }>
-  gitLog(projectId: string, limit?: number): Promise<
+  /** v2.2.7：branch 给定=只看该分支提交（本地/远程 ref 均可）；缺省=全分支 */
+  gitLog(projectId: string, limit?: number, branch?: string): Promise<
     { ok: true; commits: GitCommitInfo[] } | { ok: false; error: string }
   >
   gitCommitDetail(

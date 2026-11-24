@@ -1691,13 +1691,19 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
     }
   })
 
-  ipcMain.handle(IpcChannels.GitLog, async (_e, projectId: unknown, limit: unknown) => {
+  ipcMain.handle(IpcChannels.GitLog, async (_e, projectId: unknown, limit: unknown, branch: unknown) => {
     const g = typeof projectId === 'string' ? gitRunnerFor(projectId) : null
     if (g === null) return { ok: false, error: 'git: project not found or not a git repo' }
     const n =
       typeof limit === 'number' && Number.isInteger(limit) && limit >= 10 && limit <= 1000 ? limit : 200
+    // v2.2.7：分支过滤（白名单校验后才进命令行；undefined/空串=--all 全分支）
+    let br: string | undefined
+    if (typeof branch === 'string' && branch !== '') {
+      if (!isSafeRef(branch)) return { ok: false, error: 'git: invalid branch ref' }
+      br = branch
+    }
     try {
-      return { ok: true, commits: await gitLog(g.runner, n) }
+      return { ok: true, commits: await gitLog(g.runner, n, br) }
     } catch (err) {
       return gitErr(err)
     }

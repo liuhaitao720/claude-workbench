@@ -309,6 +309,9 @@ export const zh = {
   'git.wcCard': '工作区未提交变更',
   'git.wcCount': '{n} 个文件',
   'git.wcOpen': '点击查看 diff →',
+  // v2.2.7 分支提交过滤
+  'git.viewBranchLog': '查看提交记录',
+  'git.clearBranchFilter': '回到全部分支',
   'tree.gitManager': 'Git 管理…',
   'review.tabLabel': '审查 {name}',
   'review.tabCountAria': '共 {count} 个改动文件',
@@ -1164,6 +1167,9 @@ export const en: Record<MessageKey, string> = {
   'git.wcCard': 'Uncommitted changes',
   'git.wcCount': '{n} file(s)',
   'git.wcOpen': 'Click to view diffs →',
+  // v2.2.7 branch log filter
+  'git.viewBranchLog': 'View commits',
+  'git.clearBranchFilter': 'Back to all branches',
   'tree.gitManager': 'Git manager…',
   'review.tabLabel': 'Review {name}',
   'review.tabCountAria': '{count} changed files',

@@ -268,6 +268,8 @@ function GitHistory(props: GitHistoryProps) {
   const [logError, setLogError] = useState('')
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
+  /** v2.2.7（用户需求）：分支过滤——null=--all 全分支；分支右键「查看提交记录」设置 */
+  const [logBranch, setLogBranch] = useState<string | null>(null)
   const [sel, setSel] = useState<string | null>(null)
   const [detail, setDetail] = useState<{ hash: string; message: string; author: string; date: string; files: GitCommitFileInfo[] } | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -281,7 +283,7 @@ function GitHistory(props: GitHistoryProps) {
   const loadLog = useCallback((): void => {
     setLoading(true)
     void window.cwb
-      .gitLog(projectId)
+      .gitLog(projectId, undefined, logBranch ?? undefined)
       .then((r) => {
         if (r.ok) {
           setCommits(r.commits)
@@ -293,7 +295,7 @@ function GitHistory(props: GitHistoryProps) {
       })
       .catch((err: unknown) => setLogError(errMsg(err)))
       .finally(() => setLoading(false))
-  }, [projectId])
+  }, [projectId, logBranch])
 
   useEffect(loadLog, [loadLog])
   useEffect(() => {
@@ -339,10 +341,19 @@ function GitHistory(props: GitHistoryProps) {
     (c) => kw === '' || c.subject.toLowerCase().includes(kw) || c.author.toLowerCase().includes(kw) || c.short.includes(kw)
   )
 
-  /** 分支行菜单（IDEA branches popup 项集） */
+  /** 分支行菜单（IDEA branches popup 项集 + v2.2.7 查看提交记录） */
   const branchItems = (name: string, isRemote: boolean): Array<{ label: string; danger?: boolean; onClick: () => void }> => {
     const current = status?.current === name
-    const out: Array<{ label: string; danger?: boolean; onClick: () => void }> = []
+    const out: Array<{ label: string; danger?: boolean; onClick: () => void }> = [
+      {
+        // v2.2.7（用户需求）：中间时间线切换为该分支的提交（git log <branch>）
+        label: t('git.viewBranchLog'),
+        onClick: () => {
+          setSel(null) // 清旧选中——新日志加载后自动选首条
+          setLogBranch(name)
+        }
+      }
+    ]
     if (!current) {
       out.push({
         label: t('git.checkout'),
@@ -443,9 +454,27 @@ function GitHistory(props: GitHistoryProps) {
             onChange={(e) => setFilter(e.target.value)}
             aria-label={t('git.filterPh')}
           />
-          <span className="muted" style={{ fontSize: 11 }}>
-            {status?.current ?? ''} · {commits.length}
-          </span>
+          {logBranch !== null ? (
+            <span className="git-log-chip" data-testid="git-log-branch-chip" title={logBranch}>
+              ⑂ {logBranch}
+              <button
+                type="button"
+                className="git-log-chip-x"
+                title={t('git.clearBranchFilter')}
+                aria-label={t('git.clearBranchFilter')}
+                onClick={() => {
+                  setSel(null)
+                  setLogBranch(null)
+                }}
+              >
+                ×
+              </button>
+            </span>
+          ) : (
+            <span className="muted" style={{ fontSize: 11 }}>
+              {status?.current ?? ''} · {commits.length}
+            </span>
+          )}
         </div>
         <div className="git-log-list">
           {/* v2.2.6 原型还原：工作区未提交变更卡——点击直达工作区模式（文件修改点+diff） */}

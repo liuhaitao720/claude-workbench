@@ -193,5 +193,10 @@ describe('v2.2.5 命令构造（模式旗标）', () => {
     expect(branchesArgs()).toContain('for-each-ref')
     expect(logArgs(50)).toContain('--graph')
     expect(logArgs(50)).toContain('--all')
+    // v2.2.7 分支过滤：给定 branch 时以该 ref 替代 --all
+    const br = logArgs(50, 'feature/x')
+    expect(br).toContain('feature/x')
+    expect(br).not.toContain('--all')
+    expect(logArgs(50, '')).toContain('--all') // 空串=全分支
   })
 })
