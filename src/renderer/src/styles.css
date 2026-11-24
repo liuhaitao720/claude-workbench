@@ -3416,9 +3416,9 @@ button {
 .git-branch-cur{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--text-2);max-width:260px;overflow:hidden;white-space:nowrap}
 .git-notice{margin:0;padding:4px 12px;font-size:11.5px;color:var(--ok);background:var(--ok-bg);border-bottom:1px solid var(--ok-border)}
 .git-status-err{margin:0;padding:4px 12px}
-.git-body{flex:1;display:flex;min-height:0}
-.git-history{flex:1;display:flex;min-height:0}
-.git-branches{width:242px;min-width:242px;border-right:1px solid var(--border-1);display:flex;flex-direction:column}
+.git-body{flex:1;display:flex;min-height:0;min-width:0;overflow:hidden}
+.git-history{flex:1;display:flex;min-height:0;min-width:0;overflow:hidden}
+.git-branches{flex:0 1 242px;min-width:170px;border-right:1px solid var(--border-1);display:flex;flex-direction:column}
 .git-pane-head{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border-2);color:var(--text-3);font-size:11.5px}
 .git-branch-list{flex:1;overflow-y:auto;padding:3px 0}
 .git-branch-group{padding:5px 10px 2px;color:var(--text-4);font-size:10.5px;letter-spacing:.05em}
@@ -3434,15 +3434,15 @@ button {
 .git-commit-row{display:flex;align-items:baseline;gap:8px;padding:3px 12px;cursor:pointer;font-size:12.5px;user-select:none;min-width:0}
 .git-commit-row:hover{background:var(--bg-hover)}
 .git-commit-row.sel{background:var(--bg-sel)}
-.git-graph{font-family:ui-monospace,Consolas,monospace;font-size:11px;white-space:pre;color:var(--accent);flex:none;line-height:1.45}
+.git-graph{font-family:ui-monospace,Consolas,monospace;font-size:11px;white-space:pre;color:var(--accent);flex:none;max-width:80px;overflow:hidden;line-height:1.45}
 .git-graph .g-line{color:var(--text-4)}
 .git-graph .g-curve{color:#7a5ba6}
 .git-graph .g-dot{color:var(--accent)}
 .git-commit-hash{font-family:ui-monospace,Consolas,monospace;color:var(--accent);font-size:12px;flex:none}
 .git-ref-tag{font-size:10px;color:var(--warn-text);border:1px solid #5a4a1a;border-radius:8px;padding:0 5px;flex:none}
 .git-commit-msg{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-1)}
-.git-commit-meta{color:var(--text-4);font-size:11px;flex:none}
-.git-detail{width:360px;min-width:360px;border-left:1px solid var(--border-1);display:flex;flex-direction:column}
+.git-commit-meta{color:var(--text-4);font-size:11px;flex:0 1 auto;min-width:0;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.git-detail{flex:0 1 360px;min-width:240px;border-left:1px solid var(--border-1);display:flex;flex-direction:column}
 .git-detail-head{padding:8px 12px;border-bottom:1px solid var(--border-2);display:flex;flex-direction:column;gap:4px}
 .git-detail-msg{font-size:12.5px;line-height:1.5;white-space:pre-wrap;margin:0;color:var(--text-1)}
 .git-detail-meta{display:flex;align-items:center;gap:8px;color:var(--text-3);font-size:11px}
