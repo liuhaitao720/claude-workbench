@@ -644,8 +644,9 @@ function TaskRow({ task }: { task: TaskRecord }) {
     {
       label: t('tree.copySessionId'),
       onClick: () => {
-        // renderer 权限内（spec v0.3 约束）：jsdom/未聚焦场景无 clipboard 时静默跳过
-        void navigator.clipboard?.writeText(task.sessionId)
+        // v2.2.6：统一走 main 进程 clipboard IPC 桥（navigator.clipboard 受
+        // 权限/手势/焦点约束会静默失败——同类隐患一次清完）
+        void window.cwb.clipboardWriteText(task.sessionId).catch(() => {})
       }
     },
     { label: t('tree.delete'), danger: true, onClick: () => setDeleting(true) }

@@ -275,11 +275,11 @@ describe('任务行操作（S6-B：⋯ 溢出菜单 + 单行化）', () => {
 
   it('复制 sessionId → navigator.clipboard.writeText(sessionId)', async () => {
     await renderWithProject(gitProject, [wtTask])
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    // v2.2.6：复制走 main 进程 clipboard IPC 桥
+    vi.mocked(window.cwb.clipboardWriteText).mockClear()
     openTaskMenu('tw')
     fireEvent.click(screen.getByRole('menuitem', { name: '复制 sessionId' }))
-    expect(writeText).toHaveBeenCalledWith('tw') // makeTask 契约 sessionId===id
+    expect(window.cwb.clipboardWriteText).toHaveBeenCalledWith('tw') // makeTask 契约 sessionId===id
   })
 })
 
