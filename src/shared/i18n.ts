@@ -305,6 +305,10 @@ export const zh = {
   'git.busy': 'git 执行中…',
   'git.actionFailed': '执行失败（见提示）',
   'git.actionOk': '✓ 已执行',
+  // v2.2.6 工作区未提交变更卡（历史模式入口）
+  'git.wcCard': '工作区未提交变更',
+  'git.wcCount': '{n} 个文件',
+  'git.wcOpen': '点击查看 diff →',
   'tree.gitManager': 'Git 管理…',
   'review.tabLabel': '审查 {name}',
   'review.tabCountAria': '共 {count} 个改动文件',
@@ -1156,6 +1160,10 @@ export const en: Record<MessageKey, string> = {
   'git.busy': 'git running…',
   'git.actionFailed': 'Action failed (see notice)',
   'git.actionOk': '✓ Done',
+  // v2.2.6 worktree card
+  'git.wcCard': 'Uncommitted changes',
+  'git.wcCount': '{n} file(s)',
+  'git.wcOpen': 'Click to view diffs →',
   'tree.gitManager': 'Git manager…',
   'review.tabLabel': 'Review {name}',
   'review.tabCountAria': '{count} changed files',

@@ -159,6 +159,24 @@ describe('v2.2.5 Git 工作台（L2.5 装配）', () => {
     expect(confirmSpy).toHaveBeenCalled()
   })
 
+  it('v2.2.6 工作区未提交变更卡：wcCount>0 显示（含文件数）→ 点击直达工作区模式（listDiff+DiffReview 渲染）', async () => {
+    const api = installCwbMock({ projects: [gitProject], tasks: [task1] })
+    vi.mocked(api.listDiff).mockResolvedValue({
+      base: 'HEAD' as const,
+      files: [{ path: 'src/a.ts', status: 'M' as const, add: 3, del: 1 }]
+    })
+    await openViaMenu(api)
+    // statusFixture wcCount=2 → 卡片渲染含文件数
+    const card = await screen.findByTestId('git-wc-card')
+    expect(card.textContent).toContain('工作区未提交变更')
+    expect(card.textContent).toContain('2 个文件')
+    fireEvent.click(card)
+    // 直达工作区模式：openReview → listDiff → DiffReview 文件列表渲染
+    await waitFor(() => expect(api.listDiff).toHaveBeenCalledWith('p1', '/home/dev/repo-a'))
+    await waitFor(() => expect(screen.getByText('src/a.ts')).toBeDefined())
+    expect(screen.getByTestId('git-frame')).toBeDefined()
+  })
+
   it('Stash 面板：push 带消息 → {op:stashPush,message}；远程管理：添加 origin2 → {op:remoteAdd}', async () => {
     const api = installCwbMock({ projects: [gitProject], tasks: [task1] })
     await openViaMenu(api)

@@ -3487,3 +3487,11 @@ button {
 .git-hunk .dl-hunk{color:var(--accent)}
 .git-hunk .dl-ctx{color:var(--text-3)}
 .git-busy{position:absolute;bottom:8px;right:14px;margin:0;font-size:11px;color:var(--text-4)}
+
+/* v2.2.6 工作区未提交变更卡（原型还原）：历史模式顶部的显眼入口 */
+.git-wc-card{display:flex;align-items:center;gap:8px;width:calc(100% - 24px);margin:6px 12px;padding:6px 10px;border:1px solid var(--ok-border);background:var(--ok-bg);border-radius:8px;cursor:pointer;text-align:left;font-size:12.5px;color:var(--text-1)}
+.git-wc-card:hover{border-color:var(--ok)}
+.git-wc-icon{color:var(--ok);flex:none}
+.git-wc-text{font-weight:600;flex:none}
+.git-wc-count{color:var(--ok);font-size:11px;flex:none}
+.git-wc-hint{margin-left:auto;font-size:11px;flex:none}

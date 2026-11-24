@@ -230,7 +230,7 @@ export function GitFrame() {
         {mode === 'worktree' ? (
           <DiffReview />
         ) : (
-          <GitHistory projectId={projectId} status={status} statusError={statusError} busy={busy} runAction={runAction} openDialog={setDialog} localOf={localOf} />
+          <GitHistory projectId={projectId} status={status} statusError={statusError} busy={busy} runAction={runAction} openDialog={setDialog} localOf={localOf} onOpenWorktree={() => switchMode('worktree')} />
         )}
       </div>
       {dialog !== null && (
@@ -257,11 +257,13 @@ interface GitHistoryProps {
   runAction: (a: GitActionPayload) => Promise<boolean>
   openDialog: (d: DialogState) => void
   localOf: (remoteName: string) => string
+  /** v2.2.6（用户实测：历史模式缺未提交变更入口）：点击工作区卡片 → 切工作区模式 */
+  onOpenWorktree: () => void
 }
 
 function GitHistory(props: GitHistoryProps) {
   const t = useI18n()
-  const { projectId, status, statusError, busy, runAction, openDialog, localOf } = props
+  const { projectId, status, statusError, busy, runAction, openDialog, localOf, onOpenWorktree } = props
   const [commits, setCommits] = useState<GitCommitInfo[]>([])
   const [logError, setLogError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -446,6 +448,15 @@ function GitHistory(props: GitHistoryProps) {
           </span>
         </div>
         <div className="git-log-list">
+          {/* v2.2.6 原型还原：工作区未提交变更卡——点击直达工作区模式（文件修改点+diff） */}
+          {status !== null && status.wcCount > 0 && (
+            <button type="button" className="git-wc-card" data-testid="git-wc-card" onClick={onOpenWorktree}>
+              <span className="git-wc-icon" aria-hidden="true">⚙</span>
+              <span className="git-wc-text">{t('git.wcCard')}</span>
+              <span className="git-wc-count">{t('git.wcCount', { n: String(status.wcCount) })}</span>
+              <span className="muted git-wc-hint">{t('git.wcOpen')}</span>
+            </button>
+          )}
           {loading && <p className="muted git-hint">{t('common.loading')}</p>}
           {!loading && logError !== '' && <p className="inline-error">{logError}</p>}
           {!loading && logError === '' && shown.length === 0 && <p className="muted git-hint">{t('git.emptyLog')}</p>}
