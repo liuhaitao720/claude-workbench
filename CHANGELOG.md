@@ -9,8 +9,9 @@ SSH Workbench 版本更新说明（新版本在前；应用内「设置 → 应�
 - **修复：终端粘贴失效**（用户实测：右键粘贴与 Ctrl+V 均无反应）——粘贴/复制路径
   依赖的 `navigator.clipboard.readText()` 受权限/瞬时手势/焦点约束会**静默
   reject**（`.catch` 吞掉），且 v2.2.4 的 `preventDefault`（修双贴）移除了原生
-  paste 兜底后彻底失灵。改走 **Electron 原生 clipboard 模块**（preload 桥
-  `clipboardReadText/WriteText`，无上述约束）：SSH 终端与开发终端的 Ctrl+V/
+  paste 兜底后彻底失灵。改走 **main 进程 Electron clipboard**（IPC 桥
+  `clipboardReadText/WriteText`——主进程无权限/手势/焦点约束，沙箱 preload
+  白名单也没有 clipboard 模块，故走 IPC）：SSH 终端与开发终端的 Ctrl+V/
   Shift+Insert、右键智能粘贴、Shift+右键菜单粘贴、全部复制路径，以及 Git 面板
   hash 复制
 - **未提交变更入口**（用户实测反馈：历史模式缺此功能）：log 时间线顶部渲染

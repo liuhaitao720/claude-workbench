@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, net, session, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { existsSync, mkdirSync } from 'node:fs'
@@ -1797,6 +1797,25 @@ export function registerIpcHandlers(ctx: AppContext = createAppContext()): AppCo
       return { ok: true }
     } catch (err) {
       return gitErr(err)
+    }
+  })
+
+  // v2.2.6 剪贴板桥（用户实测终端粘贴全灭的根治）：main 进程 Electron clipboard——
+  // 无 renderer navigator.clipboard 的权限/瞬时手势/焦点约束，也不受沙箱 preload
+  // API 白名单限制（clipboard 不在白名单内，首版 preload 直连方案调用即抛）。
+  ipcMain.handle(IpcChannels.ClipboardRead, async () => {
+    try {
+      return await clipboard.readText()
+    } catch {
+      return ''
+    }
+  })
+  ipcMain.handle(IpcChannels.ClipboardWrite, async (_e, text: unknown) => {
+    if (typeof text !== 'string' || text === '') return
+    try {
+      await clipboard.writeText(text)
+    } catch {
+      /* 剪贴板不可用静默（复制是旁路，不阻塞交互） */
     }
   })
 

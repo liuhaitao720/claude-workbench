@@ -100,6 +100,9 @@ const HANDLE = {
   GitCommitDetail: 'cwb:git:commit',
   GitCommitFileDiff: 'cwb:git:commit-file-diff',
   GitAction: 'cwb:git:action',
+  /** v2.2.6 剪贴板（main 进程 Electron clipboard——沙箱 preload 无此 API，renderer 的 navigator.clipboard 受权限/手势/焦点约束） */
+  ClipboardRead: 'cwb:clipboard:read',
+  ClipboardWrite: 'cwb:clipboard:write',
   /** v2.2.5 草稿模型探测（新增 provider 用当前输入参数，不落盘） */
   ProvidersProbeDraft: 'cwb:providers:probe-draft',
   FilesPickUpload: 'cwb:files:pick-upload',

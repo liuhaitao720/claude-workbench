@@ -1,4 +1,4 @@
-import { clipboard, contextBridge, ipcRenderer , webUtils } from 'electron'
+import { contextBridge, ipcRenderer , webUtils } from 'electron'
 import type {
   AppChangelogEntry,
   AppSettings,
@@ -251,12 +251,13 @@ const api: CWBApi = {
     ipcRenderer.invoke(IpcChannels.GitCommitFileDiff, projectId, hash, path),
   gitAction: (projectId, action) => ipcRenderer.invoke(IpcChannels.GitAction, projectId, action),
   /**
-   * v2.2.6（用户实测右键+Ctrl+V 粘贴双双失效）：Electron 原生 clipboard 同步桥——
-   * navigator.clipboard.readText 受权限/瞬时手势/焦点约束会静默 reject（终端粘贴
-   * 路径的 .catch 全吞），改用 clipboard 模块（同步、无约束、Electron 官方通道）。
+   * v2.2.6（用户实测右键+Ctrl+V 粘贴双双失效）：剪贴板经 main 进程 Electron
+   * clipboard（IPC）——renderer 的 navigator.clipboard 受权限/瞬时手势/焦点约束
+   * 会静默 reject；沙箱 preload 的 API 白名单又没有 clipboard 模块（首版桥接
+   * 直接 import 导致调用即抛、粘贴全灭）。main 进程 clipboard 无任何约束。
    */
-  clipboardReadText: () => clipboard.readText(),
-  clipboardWriteText: (text) => clipboard.writeText(text),
+  clipboardReadText: () => ipcRenderer.invoke(IpcChannels.ClipboardRead) as Promise<string>,
+  clipboardWriteText: (text) => ipcRenderer.invoke(IpcChannels.ClipboardWrite, text) as Promise<void>,
   probeProviderModelsDraft: (draft, scopeCid) =>
     ipcRenderer.invoke(IpcChannels.ProvidersProbeDraft, draft, scopeCid),
   /** v2.0.1 小文本双击本机打开（<10MB 白名单扩展；main 下载临时目录+系统打开） */
