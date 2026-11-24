@@ -272,14 +272,14 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
           // 可用才浮现；右键粘贴不走 keydown，故无此问题）。preventDefault 须同步
           // 调用（异步 readText 回来再调无效——默认动作已发生）
           ev.preventDefault()
-          void navigator.clipboard
-            .readText()
+          // v2.2.6：Electron 原生 clipboard——navigator.clipboard 的 readText 受
+          // 权限/手势/焦点约束静默 reject 致粘贴失灵；Electron 通道无此约束
+          void window.cwb
+            .clipboardReadText()
             .then((text) => {
               if (text !== '') t.paste(text)
             })
-            .catch(() => {
-              // 剪贴板权限被拒/不可用——退回原生 paste 事件路径（xterm textarea 或可触发）
-            })
+            .catch(() => {})
           return false
         }
         // 复制：Ctrl+Shift+C / Ctrl+Insert / Ctrl+C（有选中时）
@@ -290,7 +290,7 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
         if (isCopyKey) {
           const sel = t.getSelection()
           if (sel !== '') {
-            void navigator.clipboard.writeText(sel).catch(() => {})
+            void window.cwb.clipboardWriteText(sel).catch(() => {})
             return false
           }
           return true // 无选中（Ctrl+Insert 空选）放行
@@ -539,21 +539,19 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
         if (!e.shiftKey) {
           if (term && term.hasSelection()) {
             const sel = term.getSelection()
-            if (sel !== '') void navigator.clipboard.writeText(sel).catch(() => {})
+            if (sel !== '') void window.cwb.clipboardWriteText(sel).catch(() => {})
             term.clearSelection()
             term.focus()
             return
           }
           term?.focus()
-          void navigator.clipboard
-            .readText()
+          void window.cwb
+            .clipboardReadText()
             .then((text) => {
               // 双重防护：tab 已关（缓存无此实例）不粘贴，防 disposed terminal 抛错
               if (text !== '' && terminalCache.get(task.id) === term) term?.paste(text)
             })
-            .catch(() => {
-              // 剪贴板权限被拒——仅聚焦（原生 paste 事件路径或可触发）
-            })
+            .catch(() => {})
           return
         }
         setCtxMenu({ x: e.clientX, y: e.clientY, sel: term?.getSelection() ?? '' })
@@ -589,10 +587,7 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
               ? [
                   {
                     label: tr('term.copy'),
-                    onClick: () =>
-                      void navigator.clipboard
-                        .writeText(ctxMenu.sel)
-                        .catch(() => {})
+                    onClick: () => void window.cwb.clipboardWriteText(ctxMenu.sel).catch(() => {})
                   }
                 ]
               : []),
@@ -600,14 +595,15 @@ function TerminalView({ task, active }: { task: TaskRecord; active: boolean }) {
               label: tr('term.paste'),
               // v1.0.8：与 Ctrl+V 同路——term.paste() 走 xterm 粘贴通道（括号粘贴/换行归一化）；
               // v1.0.9：粘贴后焦点还终端（菜单点击会 steal focus，光标需回位）
-              onClick: () =>
-                void navigator.clipboard
-                  .readText()
+              onClick: () => {
+                void window.cwb
+                  .clipboardReadText()
                   .then((text) => {
                     if (text !== '') terminalCache.get(task.id)?.paste(text)
                   })
                   .catch(() => {})
                   .finally(() => terminalCache.get(task.id)?.focus())
+              }
             },
             {
               label: tr('term.selectAll'),

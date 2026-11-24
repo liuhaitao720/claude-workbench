@@ -505,7 +505,7 @@ function GitHistory(props: GitHistoryProps) {
                 <button
                   type="button"
                   className="btn small"
-                  onClick={() => void navigator.clipboard.writeText(detail.hash).catch(() => {})}
+                  onClick={() => void window.cwb.clipboardWriteText(detail.hash).catch(() => {})}
                 >
                   {t('git.copyHash')}
                 </button>
@@ -565,8 +565,8 @@ function GitHistory(props: GitHistoryProps) {
                 }
               }
             },
-            { label: t('git.copyShortHash'), onClick: () => void navigator.clipboard.writeText(ctxCommit.hash.slice(0, 8)).catch(() => {}) },
-            { label: t('git.copyHash'), onClick: () => void navigator.clipboard.writeText(ctxCommit.hash).catch(() => {}) }
+            { label: t('git.copyShortHash'), onClick: () => void window.cwb.clipboardWriteText(ctxCommit.hash.slice(0, 8)).catch(() => {}) },
+            { label: t('git.copyHash'), onClick: () => void window.cwb.clipboardWriteText(ctxCommit.hash).catch(() => {}) }
           ]}
         />
       )}

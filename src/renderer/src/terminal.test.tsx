@@ -311,10 +311,9 @@ describe('v1.0.8 Shift+Enter 换行 / IME 组合缓冲 / 面板搜索', () => {
 
 describe('v1.0.2 粘贴/复制（菜单移除后原生加速键不可靠——显式剪贴板路径）', () => {
   it('粘贴键（Ctrl+V/Ctrl+Shift+V/Shift+Insert）读剪贴板写 PTY', async () => {
-    installCwbMock({ projects: [project], tasks: [task] })
-    const readText = vi.fn(async () => 'pasted-text')
-    const writeText = vi.fn(async () => {})
-    Object.assign(navigator, { clipboard: { readText, writeText } })
+    const api = installCwbMock({ projects: [project], tasks: [task] })
+    // v2.2.6：粘贴改走 Electron 原生 clipboard 桥（window.cwb.clipboardReadText）
+    vi.mocked(api.clipboardReadText).mockResolvedValue('pasted-text')
     render(<App />)
     await waitFor(() =>
       expect(document.querySelector('li[data-task-id="t-term"]')).toBeDefined()
@@ -332,16 +331,14 @@ describe('v1.0.2 粘贴/复制（菜单移除后原生加速键不可靠——�
     act(() => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true }))
     })
-    await waitFor(() => expect(readText).toHaveBeenCalled())
+    await waitFor(() => expect(api.clipboardReadText).toHaveBeenCalled())
     await waitFor(() => expect(window.cwb.ptyWrite).toHaveBeenCalledWith('t-term', 'pasted-text'))
-    void writeText
     void host
   })
 
   it('Ctrl+C 无选中 → 放行（xterm 发 ^C 中断，不读剪贴板）', async () => {
-    installCwbMock({ projects: [project], tasks: [task] })
-    const readText = vi.fn(async () => 'x')
-    Object.assign(navigator, { clipboard: { readText } })
+    const api = installCwbMock({ projects: [project], tasks: [task] })
+    vi.mocked(api.clipboardReadText).mockResolvedValue('x')
     render(<App />)
     await waitFor(() =>
       expect(document.querySelector('li[data-task-id="t-term"]')).toBeDefined()
@@ -357,7 +354,7 @@ describe('v1.0.2 粘贴/复制（菜单移除后原生加速键不可靠——�
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true }))
     })
     await new Promise((r) => setTimeout(r, 100))
-    expect(readText).not.toHaveBeenCalled() // 无选中不触发复制路径
+    expect(api.clipboardReadText).not.toHaveBeenCalled() // 无选中不触发复制路径
   })
 })
 
@@ -370,14 +367,13 @@ describe('v1.0.9 右键智能动作（Windows Terminal 默认语义：无选中=
   }
 
   it('无选中右键 → 直接粘贴（readText→term.paste→ptyWrite），不弹菜单', async () => {
-    installCwbMock({ projects: [project], tasks: [task] })
-    const readText = vi.fn(async () => 'right-click-paste')
-    Object.assign(navigator, { clipboard: { readText, writeText: vi.fn(async () => {}) } })
+    const api = installCwbMock({ projects: [project], tasks: [task] })
+    vi.mocked(api.clipboardReadText).mockResolvedValue('right-click-paste')
     openTerm()
     await waitFor(() => expect(terminalCache.get('t-term')).toBeDefined())
     const host = document.querySelector('.term-host-active') as HTMLElement
     fireEvent.contextMenu(host)
-    await waitFor(() => expect(readText).toHaveBeenCalled())
+    await waitFor(() => expect(api.clipboardReadText).toHaveBeenCalled())
     await waitFor(() =>
       expect(window.cwb.ptyWrite).toHaveBeenCalledWith('t-term', 'right-click-paste')
     )
@@ -385,9 +381,8 @@ describe('v1.0.9 右键智能动作（Windows Terminal 默认语义：无选中=
   })
 
   it('有选中右键 → 直接复制+清选中+聚焦；Shift+右键才出完整菜单', async () => {
-    installCwbMock({ projects: [project], tasks: [task] })
-    const writeText = vi.fn(async () => {})
-    Object.assign(navigator, { clipboard: { readText: vi.fn(async () => ''), writeText } })
+    const api = installCwbMock({ projects: [project], tasks: [task] })
+    vi.mocked(api.clipboardReadText).mockResolvedValue('')
     openTerm()
     await waitFor(() => expect(terminalCache.get('t-term')).toBeDefined())
     const term = terminalCache.get('t-term')!
@@ -398,7 +393,7 @@ describe('v1.0.9 右键智能动作（Windows Terminal 默认语义：无选中=
     const host = document.querySelector('.term-host-active') as HTMLElement
     fireEvent.contextMenu(host)
     await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('hello-sel'))
+      expect(api.clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining('hello-sel'))
     )
     expect(term.hasSelection()).toBe(false) // 复制后清选中——下一次右键即粘贴
     expect(screen.queryByRole('menu')).toBeNull()
@@ -411,10 +406,8 @@ describe('v1.0.9 右键智能动作（Windows Terminal 默认语义：无选中=
   })
 
   it('Shift+右键菜单：「粘贴」读剪贴板写 PTY 并回焦终端（光标回位）；「清屏」调 term.clear', async () => {
-    installCwbMock({ projects: [project], tasks: [task] })
-    Object.assign(navigator, {
-      clipboard: { readText: vi.fn(async () => 'menu-paste'), writeText: vi.fn(async () => {}) }
-    })
+    const api = installCwbMock({ projects: [project], tasks: [task] })
+    vi.mocked(api.clipboardReadText).mockResolvedValue('menu-paste')
     openTerm()
     await waitFor(() => expect(terminalCache.get('t-term')).toBeDefined())
     const term = terminalCache.get('t-term')!

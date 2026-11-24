@@ -4,11 +4,18 @@ SSH Workbench 版本更新说明（新版本在前；应用内「设置 → 应�
 
 ## 2.2.6
 
-> Git 工作台补齐：历史模式顶部「工作区未提交变更」卡直达代码审查（文件修改点 + diff）
+> 修复：SSH/开发终端右键与 Ctrl+V 粘贴双双失效（Electron 原生 clipboard 桥）+ Git 工作台补「工作区未提交变更」入口
 
+- **修复：终端粘贴失效**（用户实测：右键粘贴与 Ctrl+V 均无反应）——粘贴/复制路径
+  依赖的 `navigator.clipboard.readText()` 受权限/瞬时手势/焦点约束会**静默
+  reject**（`.catch` 吞掉），且 v2.2.4 的 `preventDefault`（修双贴）移除了原生
+  paste 兜底后彻底失灵。改走 **Electron 原生 clipboard 模块**（preload 桥
+  `clipboardReadText/WriteText`，无上述约束）：SSH 终端与开发终端的 Ctrl+V/
+  Shift+Insert、右键智能粘贴、Shift+右键菜单粘贴、全部复制路径，以及 Git 面板
+  hash 复制
 - **未提交变更入口**（用户实测反馈：历史模式缺此功能）：log 时间线顶部渲染
   工作区变更卡（⚙ + 文件数），点击直达**工作区模式**——即原代码审查的完整
-  能力：变更文件列表（M/A/D/U 状态 + ±行数）、单文件 diff（hunk 跳转、未跟踪
+  能力：变更文件列表（M/A/D/R/U 状态 + ±行数）、单文件 diff（hunk 跳转、未跟踪
   占位）、文件双击展开。顶栏「工作区 | 历史」模式切换随时往返
 - 卡片计数随 git 状态刷新（动作执行后/⟳ 自动重载）
 - cwb-server 保持 0.2.2

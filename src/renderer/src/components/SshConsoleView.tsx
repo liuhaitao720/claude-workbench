@@ -166,14 +166,16 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
           if (!e.shiftKey) {
             if (term !== undefined && term.hasSelection()) {
               const sel = term.getSelection()
-              if (sel !== '') void navigator.clipboard.writeText(sel).catch(() => {})
+              if (sel !== '') void window.cwb.clipboardWriteText(sel).catch(() => {})
               term.clearSelection()
               term.focus()
               return
             }
             term?.focus()
-            void navigator.clipboard
-              .readText()
+            // v2.2.6：Electron 原生 clipboard——navigator.clipboard 的 readText 受
+            // 权限/手势/焦点约束静默 reject（.catch 吞掉）致粘贴失灵；Electron 通道无此约束
+            void window.cwb
+              .clipboardReadText()
               .then((text) => {
                 if (text !== '' && sshTermCache.get(connectionId) === term) term?.paste(text)
               })
@@ -209,21 +211,21 @@ export function SshConsoleView({ connectionId }: { connectionId: string }) {
               ? [
                   {
                     label: t('term.copy'),
-                    onClick: () =>
-                      void navigator.clipboard.writeText(ctxMenu.sel).catch(() => {})
+                    onClick: () => void window.cwb.clipboardWriteText(ctxMenu.sel).catch(() => {})
                   }
                 ]
               : []),
             {
               label: t('term.paste'),
-              onClick: () =>
-                void navigator.clipboard
-                  .readText()
+              onClick: () => {
+                void window.cwb
+                  .clipboardReadText()
                   .then((text) => {
                     if (text !== '') sshTermCache.get(connectionId)?.paste(text)
                   })
                   .catch(() => {})
                   .finally(() => sshTermCache.get(connectionId)?.focus())
+              }
             },
             {
               label: t('term.selectAll'),
@@ -329,8 +331,8 @@ function SshTermPane({ cid, active }: { cid: string; active: boolean }) {
             // v2.2.4（用户实测 Ctrl+V 重复粘贴）：同步 preventDefault 阻断浏览器默认
             // 动作，防原生 paste 事件再进 xterm textarea 叠第二份（同 TerminalPanel 修复）
             ev.preventDefault()
-            void navigator.clipboard
-              .readText()
+            void window.cwb
+              .clipboardReadText()
               .then((text) => {
                 if (text !== '' && sshTermCache.get(cid) === t) t.paste(text)
               })
@@ -344,7 +346,7 @@ function SshTermPane({ cid, active }: { cid: string; active: boolean }) {
           if (isCopyKey) {
             const sel = t.getSelection()
             if (sel !== '') {
-              void navigator.clipboard.writeText(sel).catch(() => {})
+              void window.cwb.clipboardWriteText(sel).catch(() => {})
               return false
             }
             return true

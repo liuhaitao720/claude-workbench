@@ -983,6 +983,13 @@ export interface CWBApi {
    * v2.2.5（用户需求 2026-11-23）：**用当前表单参数探测模型**（新增 provider 不必先
    * 保存）——draft 字段与 ProviderConfig 同口径；scopeCid 给定时经 VM 探测（远程作用域）。
    */
+  /**
+   * v2.2.6 Electron 原生 clipboard 桥（终端粘贴/复制与 hash 复制）——Electron 44
+   * clipboard 为 Promise API，但**无 navigator.clipboard 的权限/瞬时手势/焦点约束**
+   * （后者会静默 reject 致粘贴失灵），见 preload 注释。
+   */
+  clipboardReadText(): Promise<string>
+  clipboardWriteText(text: string): Promise<void>
   probeProviderModelsDraft(
     draft: {
       baseUrl: string
